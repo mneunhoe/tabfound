@@ -1,0 +1,48 @@
+Package: tabfound
+Title: Tabular Foundation Models in Pure R Torch
+Version: 0.0.0.9000
+Authors@R:
+    person("Marcel", "Neunhoeffer",
+           email = "marcel@marcel-neunhoeffer.com",
+           role  = c("aut", "cre"))
+Description: Inference-only R implementations of open-weight tabular
+    foundation models on top of the 'torch' package, with no Python
+    runtime dependency at predict time. A backend registry lets a single
+    user-facing API ('tabular_classifier()' / 'tabular_regressor()')
+    serve architecturally different models. Ships a TabPFN v2 backend
+    (Prior-Labs) verified bit-exact against the reference Python
+    implementation, and shared building blocks (attention variants,
+    RMSNorm, RoPE, set-transformer blocks, quantile/power/SVD
+    preprocessing, ensembling) for adding further backends such as
+    Google's TabFM and TabICL.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends:
+    R (>= 4.1.0)
+Imports:
+    torch,
+    cli,
+    stats,
+    utils
+Suggests:
+    Amelia,
+    hardhat,
+    hfhub,
+    mice,
+    safetensors,
+    jsonlite,
+    digest,
+    ps,
+    synthpop,
+    testthat (>= 3.0.0),
+    tibble,
+    withr,
+    knitr,
+    quarto,
+    rmarkdown
+Config/testthat/edition: 3
+VignetteBuilder: quarto
+URL: https://github.com/mneunhoe/tabfound
+BugReports: https://github.com/mneunhoe/tabfound/issues

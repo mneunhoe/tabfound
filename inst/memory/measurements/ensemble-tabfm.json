@@ -1,0 +1,88 @@
+{
+  "backend": "tabfm",
+  "model_id": "tabfm-1.0.0-classifier",
+  "point": {
+    "n_context": 800,
+    "n_query": 500,
+    "n_features": 32
+  },
+  "measured_on": "2026-08-11",
+  "machine_total_bytes": 51539607552,
+  "weights_bytes": 6557888408,
+  "ensemble_log2_factor": 2.08686671357098,
+  "ensemble_cap": 4.5059648217636,
+  "points": [
+    {
+      "n_context": 800,
+      "n_query": 500,
+      "n_features": 32,
+      "status": "ok",
+      "peak_bytes": 16616128512,
+      "loaded_bytes": 9529311232,
+      "elapsed_sec": 4.6931,
+      "method": "rss-sampling",
+      "samples": 696,
+      "n_estimators": 1
+    },
+    {
+      "n_context": 800,
+      "n_query": 500,
+      "n_features": 32,
+      "status": "ok",
+      "peak_bytes": 24029249536,
+      "loaded_bytes": 9542385664,
+      "elapsed_sec": 9.5793,
+      "method": "rss-sampling",
+      "samples": 972,
+      "n_estimators": 2
+    },
+    {
+      "n_context": 800,
+      "n_query": 500,
+      "n_features": 32,
+      "status": "ok",
+      "peak_bytes": 24134352896,
+      "loaded_bytes": 9533915136,
+      "elapsed_sec": 18.8437,
+      "method": "rss-sampling",
+      "samples": 1482,
+      "n_estimators": 4
+    },
+    {
+      "n_context": 800,
+      "n_query": 500,
+      "n_features": 32,
+      "status": "ok",
+      "peak_bytes": 26402537472,
+      "loaded_bytes": 9491890176,
+      "elapsed_sec": 37.9957,
+      "method": "rss-sampling",
+      "samples": 2538,
+      "n_estimators": 8
+    },
+    {
+      "n_context": 800,
+      "n_query": 500,
+      "n_features": 32,
+      "status": "ok",
+      "peak_bytes": 26038960128,
+      "loaded_bytes": 9516007424,
+      "elapsed_sec": 89.7313,
+      "method": "rss-sampling",
+      "samples": 5153,
+      "n_estimators": 16
+    },
+    {
+      "n_context": 800,
+      "n_query": 500,
+      "n_features": 32,
+      "status": "ok",
+      "peak_bytes": 25795297280,
+      "loaded_bytes": 9522184192,
+      "elapsed_sec": 179.1046,
+      "method": "rss-sampling",
+      "samples": 9857,
+      "n_estimators": 32
+    }
+  ]
+}

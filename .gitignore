@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.DS_Store
+.venvs/
+ckpts/
+inst/parity/results/
+.claude
+planning/

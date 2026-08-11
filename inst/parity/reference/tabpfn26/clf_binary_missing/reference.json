@@ -1,0 +1,22 @@
+{
+  "fixture": "clf_binary_missing",
+  "task": "classification",
+  "tabpfn_version": "8.2.0",
+  "torch_version": "2.13.0",
+  "ckpt": "clf26.ckpt",
+  "architecture": "tabpfn_v2_6",
+  "head": "classifier",
+  "n_out": 10,
+  "n_classes": 2,
+  "n_bar_bins": null,
+  "softmax_temperature": 0.9,
+  "quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "n_train": 80,
+  "n_test": 40,
+  "n_features": 6,
+  "save_peak_memory_factor": 8
+}

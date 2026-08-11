@@ -1,0 +1,22 @@
+{
+  "fixture": "clf_tiny",
+  "task": "classification",
+  "torch_version": "2.13.0",
+  "n_train": 48,
+  "n_test": 12,
+  "config": {
+    "dim": 512,
+    "dim_output": 10,
+    "n_layers": 12,
+    "n_heads": 4,
+    "task": "CLASSIFICATION"
+  },
+  "stages": [
+    "mitra_embedded",
+    "mitra_encoded",
+    "mitra_logits",
+    "mitra_quantile"
+  ],
+  "y_scaler": null,
+  "n_classes": 3
+}

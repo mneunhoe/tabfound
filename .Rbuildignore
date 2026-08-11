@@ -1,0 +1,13 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.venvs$
+^\.git$
+^\.claude$
+^inst/parity/reference$
+^inst/parity/results$
+^inst/simulation/results$
+^README\.md$
+^ckpts$
+^\.DS_Store$
+^HANDOFF_.*\.md$
+^\planning$

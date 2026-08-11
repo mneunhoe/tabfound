@@ -1,0 +1,450 @@
+---
+title: "Synthetic data with tabfound"
+author: "Marcel Neunhoeffer"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    df-print: kable
+vignette: >
+  %\VignetteIndexEntry{Synthetic data with tabfound}
+  %\VignetteEngine{quarto::html}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r}
+#| label: setup
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## The same models, a different contract
+
+Multiple imputation and synthetic data generation are both fully
+conditional specification. They differ all the way down, but the two
+rows that carry the weight are *context* and *query*:
+
+| | imputation (`tabfound_impute()`) | synthesis (`tabfound_syn()`) |
+|---|---|---|
+| cells targeted | the missing ones | every row of every variable |
+| conditioning set | all other variables | only variables already visited |
+| iteration | `maxit` sweeps toward a stationary distribution | one ordered pass |
+| context ("fit") | the current completed data, refit each sweep | the **original** data, fit once per variable |
+| query | the current completed covariates | the **synthetic** covariates from earlier in the pass |
+| combination rules | Rubin | Reiter / Raab–Nowok–Dibben |
+
+Synthesis factorises the joint as
+p(x₁)·p(x₂|x₁)·p(x₃|x₁,x₂)·…, fits each conditional on real data and
+draws at synthetic covariates. The first variable is a bootstrap of the
+real marginal.
+
+Two consequences follow, and both matter:
+
+* **It is cheaper.** Cost drops from *m* × sweeps × *p* model fits to *p*.
+  And because a "fit" here is only conditioning on a context, with
+  `proper = FALSE` that context is identical across all *m* syntheses —
+  so all *m* share one fit and one forward pass over a stacked query. A
+  tree has to be regrown per synthesis; this does not.
+* **It is statistically riskier.** Imputation hides two things synthesis
+  exposes: the sampler's support behaviour, and the absence of parameter
+  uncertainty in row-independent draws. Both get their own section below.
+
+::: {.callout-note}
+The code here is not evaluated when the vignette is built. Every output
+shown was produced by running the code exactly as written, against
+TabPFN v2.5 on CPU; see [Reproducing this](#reproducing-this).
+:::
+
+## A first pass
+
+```{r}
+#| eval: false
+library(tabfound)
+
+mods <- tabfound_models(classifier = "tabpfn-v2.5-classifier",
+                        regressor  = "tabpfn-v2.5-regressor")
+
+sds <- tabfound_syn(iris, m = 5, models = mods, seed = 20260807)
+sds
+```
+
+```
+tabfound synthetic data
+* 5 synthetic data sets of 150 rows from 150
+* 5 variables synthesised: Sepal.Length, Sepal.Width, Petal.Length,
+  Petal.Width, and Species
+* draw mode: "predictive"
+* proper: TRUE
+i `as_synds()` for the synthpop toolchain (`compare()`, `utility.gen()`,
+  `lm.synds()`).
+```
+
+```{r}
+#| eval: false
+head(sds$syn[[1]], 5)
+```
+
+```
+  Sepal.Length Sepal.Width Petal.Length Petal.Width    Species
+1          5.5    2.615422     4.525384    1.200430 versicolor
+2          6.4    2.716248     5.331699    1.573342  virginica
+3          6.1    2.789541     3.974613    1.278386 versicolor
+4          6.9    3.206068     5.481702    2.237269  virginica
+5          7.0    3.202926     4.986701    1.721479 versicolor
+```
+
+Two things are visible in that output. `Sepal.Length` holds values with
+one decimal — real observed values, because it comes first in the visit
+sequence and has nothing to condition on, so it is a bootstrap of its own
+marginal. Everything after it carries many decimals: those are genuinely
+new numbers off a continuous predictive distribution. `method` records
+which is which:
+
+```{r}
+#| eval: false
+sds$method
+#> Sepal.Length  Sepal.Width Petal.Length  Petal.Width       Species
+#>     "sample" "regression" "regression" "regression" "classification"
+```
+
+Does it keep the structure?
+
+```{r}
+#| eval: false
+colMeans(iris[1:4])
+#> Sepal.Length  Sepal.Width Petal.Length  Petal.Width
+#>         5.84         3.06         3.76         1.20
+# averaged over the 5 syntheses: 5.92  3.03  3.87  1.23
+
+cor(iris$Petal.Length, iris$Petal.Width)          #> 0.963
+# averaged over the 5 syntheses:                  #> 0.955
+
+table(iris$Species)                               #> 50 50 50
+# averaged over the 5 syntheses:                  #> 44.2 54.4 51.4
+```
+
+And inference, through synthpop's synthetic-data variance estimator:
+
+```{r}
+#| eval: false
+library(synthpop)
+summary(lm.synds(Petal.Width ~ Petal.Length + Species, as_synds(sds)))
+```
+
+```
+Fit to synthetic data set with 5 syntheses. Inference to coefficients
+and standard errors that would be obtained from the original data.
+
+Combined estimates:
+                  xpct(Beta) xpct(se.Beta) xpct(z) Pr(>|xpct(z)|)
+(Intercept)        -0.041713      0.057936 -0.7200         0.4715
+Petal.Length        0.200035      0.035042  5.7085      1.140e-08 ***
+Speciesversicolor   0.525878      0.104337  5.0402      4.651e-07 ***
+Speciesvirginica    0.919677      0.152033  6.0492      1.456e-09 ***
+```
+
+against the real data's `0.230`, `0.435`, `0.838`. Same signs, same
+significance pattern, coefficients within about one standard error —
+which is roughly what a single-pass synthesiser on 150 rows should be
+expected to deliver, and no more.
+
+## The sampler is the main design axis
+
+`synthpop::syn.cart()` draws a leaf, then a donor uniformly from that
+leaf's members. TabPFN's regressor is structurally the same two stages —
+softmax the bucket logits, pick a bucket, draw uniformly inside it — with
+bucket weights in place of leaf membership counts.
+
+The difference propagates everywhere: **CART's support is the observed
+values; TabPFN's is the continuum.** `draw_mode` is how far from CART
+you want to be, and it is the utility/disclosure trade-off itself, so it
+belongs in the write-up rather than in a default nobody reads.
+
+```{r}
+#| eval: false
+for (dm in c("predictive", "pmm", "rank")) {
+  s  <- tabfound_syn(iris, m = 5, models = mods, draw_mode = dm, seed = 20260807)
+  sy <- as_synds(s)
+  cat(dm,
+      "S_pMSE",  mean(utility.gen(sy, iris)$S_pMSE),
+      "repU",    mean(colMeans(replicated.uniques(sy, iris)$repU.rm)),
+      "novel",   mean(sapply(s$syn, \(d) mean(!(d$Petal.Length %in% iris$Petal.Length)))),
+      "\n")
+}
+```
+
+| mode | `S_pMSE` | replicated uniques | novel `Petal.Length` values |
+|---|---:|---:|---:|
+| `predictive` | 4.40 | 0.00% | 98.1% |
+| `pmm` | 1.76 | 3.33% | 0.0% |
+| `rank` | 1.64 | 6.53% | 0.0% |
+| `synthpop::syn.cart` | 1.46 | 6.53% | 0.0% |
+
+That table is the whole argument in miniature. `predictive` produces
+almost entirely novel values and replicates no unique record — and pays
+for it with a propensity score that separates real from synthetic much
+more easily (`S_pMSE` of 1 is what an indistinguishable synthesis
+scores). `pmm` and `rank` return real donors, which buys back utility and
+buys back replication risk in the same move; `rank` reproduces the
+marginal exactly, so part of its fidelity is by construction rather than
+by merit. `syn.cart` is the incumbent and is right there with them.
+
+::: {.callout-warning}
+One dataset, one seed, `n = 150`. This is an illustration of what the
+axis *is*, not a benchmark. A frontier worth citing needs several data
+sets, several seeds, and a disclosure battery — `replicated.uniques()`
+is the weakest of the available measures, not the strongest.
+:::
+
+Categorical variables need no such choice: a softmax over the levels plus
+one draw per row already *is* the exact analogue of drawing from a leaf's
+class proportions.
+
+`clamp` interacts with this and is worth knowing about. It holds
+`predictive` draws inside the observed range by flooring and capping
+them, which piles the excess mass onto the observed minimum and maximum.
+That is a boundary artefact, not a modelled point mass — if a variable
+has a real spike at its minimum, say so with `cont_na` (below) rather
+than letting `clamp` manufacture one.
+
+## Properness
+
+These models draw each query row independently given a fixed context.
+There is no shared drawn θ across rows, so between-synthesis variance
+reflects predictive noise and carries **no parameter uncertainty**. That
+is the same defect that makes an imputer improper under Rubin's rules —
+and for synthesis it is not a robustness check but a validity
+requirement, because the Reiter and Raab–Nowok–Dibben estimators that
+`lm.synds()` implements assume the mechanism propagates it.
+
+`proper = TRUE` bootstraps the context rows once per synthesis, which is
+exactly synthpop's definition of properness. It is the default here, and
+it is the one place `tabfound_syn()` deliberately disagrees with
+`synthpop::syn()`.
+
+You can see it do its job:
+
+```{r}
+#| eval: false
+for (p in c(FALSE, TRUE)) {
+  s <- tabfound_syn(iris, m = 10, models = mods, proper = p, seed = 11)
+  b <- sapply(s$syn, \(d) coef(lm(Petal.Width ~ Petal.Length, d))[["Petal.Length"]])
+  cat("proper =", p, " mean", mean(b), " sd", sd(b), "\n")
+}
+#> proper = FALSE  mean 0.4108  sd 0.0091
+#> proper = TRUE   mean 0.4046  sd 0.0141
+#> (real data: 0.4158)
+```
+
+Both centre on the real slope. The bootstrap widens the spread across
+syntheses by about half again — that added spread *is* the parameter
+uncertainty, and it is what the variance estimator is expecting to find.
+Turning it off costs one fit per variable instead of *m*, so `FALSE` is
+the fast setting, not the safe one.
+
+::: {.callout-important}
+Whether coverage is actually nominal under the bootstrap is an open
+question, not something this vignette answers. The honest experiment is
+a calibration study on data-generating processes with known truth,
+reporting confidence-interval coverage for a battery of analysis models
+under improper and bootstrapped contexts at several *m*. Until that
+exists, treat `lm.synds()` intervals from this synthesiser as
+provisional.
+:::
+
+## Missing and special values
+
+`NA` is a value to reproduce, not a hole to fill. For a categorical
+variable it becomes a level the classifier draws like any other. For a
+continuous variable it is modelled in two parts — a categorical model for
+*which* special value (or "a real number"), then the regressor for the
+real numbers — because a bar distribution cannot put mass on a point.
+
+```{r}
+#| eval: false
+aq  <- airquality[1:100, ]
+s   <- tabfound_syn(aq, m = 5, models = mods, seed = 5)
+colMeans(is.na(aq))
+#>   Ozone Solar.R    Wind    Temp   Month     Day
+#>   0.310   0.070   0.000   0.000   0.000   0.000
+# averaged over the 5 syntheses:
+#>   0.328   0.076   0.000   0.000   0.000   0.000
+```
+
+`cont_na` extends the same machinery to any other point mass — a
+zero-inflated income variable, a bottom-coded score:
+
+```{r}
+#| eval: false
+sds <- tabfound_syn(d, m = 5, models = mods, cont_na = list(income = 0))
+```
+
+Without it the spike is treated as a region of a continuous distribution
+and gets smeared across its neighbourhood.
+
+## Controlling the pass
+
+**Visit sequence.** With no iteration to wash it out, the order is not a
+detail: it decides which conditionals are modelled and which are only
+implied. Quantify its effect rather than assuming it away.
+
+```{r}
+#| eval: false
+tabfound_syn(iris, models = mods,
+             visit_sequence = c("Species", "Petal.Length", "Petal.Width",
+                                "Sepal.Length", "Sepal.Width"))
+```
+
+**Predictors.** A 0/1 matrix in mice's `predictorMatrix` layout.
+Entries naming a variable that has not been generated yet are dropped
+with a warning rather than silently honoured — a single ordered pass can
+only condition on what already exists.
+
+**Methods.** `"regression"`, `"classification"`, `"sample"` (bootstrap
+the marginal, no model) or `""` (not synthesised — the real column is
+carried through, and is still available to condition on). Useful for a
+key you want left alone:
+
+```{r}
+#| eval: false
+tabfound_syn(d, models = mods, method = c(id = ""))
+```
+
+**Size.** `k` sets the rows per synthetic data set independently of the
+input, so 150 rows of `iris` can produce 1000:
+
+```{r}
+#| eval: false
+big <- tabfound_syn(iris, m = 1, k = 1000, models = mods, seed = 6)
+table(big$syn[[1]]$Species)
+#> 275 364 361
+```
+
+Note that `k != nrow(data)` changes which variance estimator applies
+downstream.
+
+## Letting synthpop drive instead
+
+`synthpop::syn()` dispatches on method name, so `method = "tabfound"`
+hands it the visit sequence and calls in here per variable. That buys
+synthpop's `rules`/`rvalues` constraints, its `cont.na` handling,
+`k != n`, and — since the object is a native `synds` — everything
+downstream with no conversion at all.
+
+```{r}
+#| eval: false
+options(tabfound.models = mods)
+sds <- synthpop::syn(iris, method = "tabfound", m = 2, seed = 20260807)
+sds$method
+#> Sepal.Length  Sepal.Width Petal.Length  Petal.Width      Species
+#>     "sample"   "tabfound"   "tabfound"   "tabfound"   "tabfound"
+```
+
+```
+  Sepal.Length Sepal.Width Petal.Length Petal.Width    Species
+1          6.4    2.787100     5.585445   2.2793370  virginica
+2          5.2    2.511311     3.262038   0.8982476 versicolor
+3          5.9    2.720448     5.147052   1.7012309  virginica
+```
+
+`syn()` refuses any `...` argument that is not named for one of *its own*
+methods, so `syn(..., tabfound.draw_mode = "pmm")` cannot work. Tuning
+goes through an option instead:
+
+```{r}
+#| eval: false
+options(tabfound.syn = list(draw_mode = "pmm", donors = 3))
+s <- synthpop::syn(iris, method = "tabfound", m = 1, proper = TRUE)
+all(s$syn$Sepal.Width %in% iris$Sepal.Width)
+#> TRUE
+```
+
+Recognised entries are `models`, `draw`, `draw_mode`, `donors`,
+`smoothing`, `clamp` and `quantile_grid`. An unrecognised one is an error
+rather than a silent no-op.
+
+Two differences from `tabfound_syn()` are worth knowing. synthpop hands
+over its own frames, so factor predictors arrive as ordinal codes taken
+from the *context's* levels — the query is recoded against them here,
+because coding the two independently would make the synthetic covariates
+address different categories than the model was fitted on. And `proper`
+follows synthpop's default of `FALSE` rather than this package's `TRUE`.
+
+## Evaluating what came out
+
+`tabfound_syn()` results go straight into synthpop's generics, and
+`as_synds()` covers the rest:
+
+```{r}
+#| eval: false
+compare(sds, iris)                              # distributional fidelity
+utility.gen(sds, iris)                          # propensity-score pMSE
+utility.tab(sds, iris, vars = "Species")        # tabular utility
+disclosure(sds, iris,                           # attribute disclosure
+           keys = c("Sepal.Length", "Sepal.Width"), target = "Species")
+
+sy <- as_synds(sds)                             # for the non-generic ones
+replicated.uniques(sy, iris)
+sdc(sy, iris, rm.replicated.uniques = TRUE)
+#> no. of replicated uniques removed from each synthetic data set:
+#> 0, 0, 0, 0, 0
+summary(glm.synds(I(Species == "virginica") ~ Sepal.Width + Sepal.Length,
+                  sy, family = binomial))
+```
+
+```
+Combined estimates:
+             xpct(Beta) xpct(se.Beta) xpct(z) Pr(>|xpct(z)|)
+(Intercept)   -18.73145       4.03426 -4.6431      3.432e-06 ***
+Sepal.Width    -0.47331       0.74865 -0.6322         0.5272
+Sepal.Length    3.20019       0.57998  5.5178      3.433e-08 ***
+```
+
+A battery worth running before releasing anything: propensity-score
+`utility.gen()`, one- and two-way `utility.tab()`, confidence-interval
+overlap across a fixed set of analysis models through `lm.synds()` /
+`glm.synds()`, marginal and pairwise-correlation recovery, and at least
+one three-way interaction — single-pass synthesis is precisely where
+higher-order structure degrades. Baselines: `syn.cart` smoothed and
+unsmoothed, `syn.norm`, `syn.normrank`.
+
+## Scope
+
+::: {.callout-important}
+The context **is** the real data at generation time. This is a fully
+conditional synthesiser, not a disclosure-control method, and no
+differential-privacy claim is available from it.
+:::
+
+Sharp conditionals produce records close to real ones; the `pmm` and
+`rank` modes produce records built *from* real values. Measure
+replication and attribute disclosure on your own data and report the
+frontier — do not infer privacy from the fact that the values are
+synthetic.
+
+Two further limits: high-cardinality factors and wide tables run into the
+backends' own ceilings rather than anything this code imposes, and there
+is no reference implementation to be verified against, so the parity
+harness has nothing to say about any of it. Like `tabfound_impute()`,
+this is a use of the fitted models, not a claim about them.
+
+## Reproducing this {#reproducing-this}
+
+```{r}
+#| eval: false
+library(tabfound)
+download_model("tabpfn-v2.5-classifier")
+download_model("tabpfn-v2.5-regressor")
+install.packages("synthpop")
+```
+
+Outputs above are single-threaded CPU on macOS/arm64, R 4.5.2, `torch`
+0.16.3, `synthpop` 1.9.1, TabPFN v2.5.
+
+## See also
+
+* `vignette("tabfound")` — the models, the API, and everything else
+* `vignette("multiple-imputation", "tabfound")` — the same predictive
+  distributions pointed at the missing cells instead of every cell
+* `?tabfound_syn`, `?as_synds`, `?syn.tabfound`, `?tabfound_synthetic`

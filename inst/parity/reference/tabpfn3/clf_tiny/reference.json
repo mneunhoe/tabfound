@@ -1,0 +1,22 @@
+{
+  "fixture": "clf_tiny",
+  "task": "classification",
+  "tabpfn_version": "8.2.0",
+  "torch_version": "2.13.0",
+  "ckpt": "tabpfn-v3-classifier-v3_default.ckpt",
+  "architecture": "tabpfn_v3",
+  "head": "classifier",
+  "n_out": 160,
+  "n_classes": 3,
+  "n_bar_bins": null,
+  "softmax_temperature": 0.9,
+  "quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "n_train": 48,
+  "n_test": 12,
+  "n_features": 4,
+  "save_peak_memory_factor": 8
+}

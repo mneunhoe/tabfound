@@ -1,0 +1,14 @@
+{
+  "quantile_n_quantiles": 4,
+  "quantile_const_n_quantiles": 8,
+  "quantile_extrap_n_quantiles": 8,
+  "quantile_extrap_ratio": 1.0,
+  "svd_n_components": 1,
+  "fingerprint_salt": 160,
+  "yeojohnson_lambda": 0.11947650934318108,
+  "_versions": {
+    "tabpfn": "8.2.0",
+    "sklearn": "1.9.0",
+    "numpy": "2.5.1"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "fixture": "reg_iris",
+  "task": "regression",
+  "torch_version": "2.13.0",
+  "n_train": 100,
+  "n_test": 50,
+  "config": {
+    "dim": 512,
+    "dim_output": 1,
+    "n_layers": 12,
+    "n_heads": 4,
+    "task": "REGRESSION"
+  },
+  "stages": [
+    "mitra_embedded",
+    "mitra_encoded",
+    "mitra_logits",
+    "mitra_quantile"
+  ],
+  "y_scaler": {
+    "min": 4.300000190734863,
+    "range": 3.5999999046325684
+  }
+}

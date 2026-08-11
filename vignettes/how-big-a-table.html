@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Marcel Neunhoeffer">
+<meta name="dcterms.date" content="2026-08-11">
+
+<title>How big a table can each model handle?</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="how-big-a-table_files/libs/clipboard/clipboard.min.js"></script>
+<script src="how-big-a-table_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="how-big-a-table_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="how-big-a-table_files/libs/quarto-html/popper.min.js"></script>
+<script src="how-big-a-table_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="how-big-a-table_files/libs/quarto-html/anchor.min.js"></script>
+<link href="how-big-a-table_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="how-big-a-table_files/libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="how-big-a-table_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="how-big-a-table_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="how-big-a-table_files/libs/bootstrap/bootstrap-917079515d91bccb85b543faf8aa8bb6.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+  <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#available-memory-not-installed-memory" id="toc-available-memory-not-installed-memory" class="nav-link active" data-scroll-target="#available-memory-not-installed-memory">Available memory, not installed memory</a></li>
+  <li><a href="#the-headline-numbers" id="toc-the-headline-numbers" class="nav-link" data-scroll-target="#the-headline-numbers">The headline numbers</a></li>
+  <li><a href="#columns-cost-as-much-as-rows" id="toc-columns-cost-as-much-as-rows" class="nav-link" data-scroll-target="#columns-cost-as-much-as-rows">Columns cost as much as rows</a></li>
+  <li><a href="#rows-you-predict-are-rows-too" id="toc-rows-you-predict-are-rows-too" class="nav-link" data-scroll-target="#rows-you-predict-are-rows-too">Rows you predict are rows too</a></li>
+  <li><a href="#what-the-knobs-buy" id="toc-what-the-knobs-buy" class="nav-link" data-scroll-target="#what-the-knobs-buy">What the knobs buy</a></li>
+  <li><a href="#memory-is-often-not-what-stops-you" id="toc-memory-is-often-not-what-stops-you" class="nav-link" data-scroll-target="#memory-is-often-not-what-stops-you">Memory is often not what stops you</a></li>
+  <li><a href="#choosing" id="toc-choosing" class="nav-link" data-scroll-target="#choosing">Choosing</a></li>
+  <li><a href="#checking-your-own-case" id="toc-checking-your-own-case" class="nav-link" data-scroll-target="#checking-your-own-case">Checking your own case</a></li>
+  <li><a href="#where-the-numbers-come-from" id="toc-where-the-numbers-come-from" class="nav-link" data-scroll-target="#where-the-numbers-come-from">Where the numbers come from</a></li>
+  </ul>
+</nav>
+</div>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">How big a table can each model handle?</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Marcel Neunhoeffer </p>
+          </div>
+  </div>
+    
+    <div>
+    <div class="quarto-title-meta-heading">Published</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date">August 11, 2026</p>
+    </div>
+  </div>
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>Every model here conditions on its training rows at predict time. There is no fitted parameter vector standing between your table and the forward pass — the table <em>is</em> the input — so its size decides whether the run happens at all. This vignette is the answer to “will this fit, and if not, what would?”</p>
+<p>Everything below is computed while the vignette is built, from measured constants, and <strong>needs no weights</strong>: architecture dimensions ship with the package. You can ask whether a 6.5 GB download is worth making before you make it.</p>
+<section id="available-memory-not-installed-memory" class="level2">
+<h2 class="anchored" data-anchor-id="available-memory-not-installed-memory">Available memory, not installed memory</h2>
+<p>The tables are indexed by memory <strong>free at the moment you run</strong>, not by what is on the sticker. The distinction is the whole point. The run that prompted this work fitted comfortably on a 48 GB machine and was killed by the operating system the next time, unchanged, because another process was holding 7 GB.</p>
+<p>A rough translation, assuming a machine doing nothing else demanding:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>installed</th>
+<th>realistically free</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>16 GB</td>
+<td>8–11 GB</td>
+</tr>
+<tr class="even">
+<td>32 GB</td>
+<td>22–26 GB</td>
+</tr>
+<tr class="odd">
+<td>64 GB</td>
+<td>50–56 GB</td>
+</tr>
+</tbody>
+</table>
+<p><code>estimate_peak_memory()</code> reports what your machine has free right now, so you never have to guess:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>est <span class="ot">&lt;-</span> <span class="fu">estimate_peak_memory</span>(<span class="st">"tabicl-v2-classifier"</span>, <span class="at">n_context =</span> <span class="dv">2000</span>,</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>                            <span class="at">n_query =</span> <span class="dv">200</span>, <span class="at">n_features =</span> <span class="dv">50</span>)</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">c</span>(<span class="at">available_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_avail_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>),</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">installed_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_total_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>))</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; available_gb installed_gb </span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         34.1         51.5</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+</section>
+<section id="the-headline-numbers" class="level2">
+<h2 class="anchored" data-anchor-id="the-headline-numbers">The headline numbers</h2>
+<p>Largest training context each model takes <strong>at its own defaults</strong>, with 50 predictor columns and 200 rows to predict, while still leaving the margin <code>estimate_peak_memory()</code> calls comfortable:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">envelope_table</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<div class="kable-table">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">model</th>
+<th style="text-align: right;">8 GB</th>
+<th style="text-align: right;">16 GB</th>
+<th style="text-align: right;">32 GB</th>
+<th style="text-align: right;">64 GB</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">TabPFN v2.5</td>
+<td style="text-align: right;">86</td>
+<td style="text-align: right;">2023</td>
+<td style="text-align: right;">5177</td>
+<td style="text-align: right;">10055</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">TabPFN v2.6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2305</td>
+<td style="text-align: right;">7080</td>
+<td style="text-align: right;">15142</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">TabPFN v3</td>
+<td style="text-align: right;">340</td>
+<td style="text-align: right;">1864</td>
+<td style="text-align: right;">4913</td>
+<td style="text-align: right;">11011</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">TabICL</td>
+<td style="text-align: right;">72</td>
+<td style="text-align: right;">570</td>
+<td style="text-align: right;">1567</td>
+<td style="text-align: right;">3559</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">TabFM</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">325</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Mitra</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">638</td>
+<td style="text-align: right;">1611</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>Read that as a planning number, not a ceiling. It is the largest table the estimator would not comment on — roughly half the usable headroom left unspent, which is what keeps a run alive when something else on the machine wakes up.</p>
+<p>The ceiling itself, the largest table the guard would not refuse:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">envelope_table</span>(<span class="at">verdict =</span> <span class="st">"tight"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<div class="kable-table">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">model</th>
+<th style="text-align: right;">8 GB</th>
+<th style="text-align: right;">16 GB</th>
+<th style="text-align: right;">32 GB</th>
+<th style="text-align: right;">64 GB</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">TabPFN v2.5</td>
+<td style="text-align: right;">1569</td>
+<td style="text-align: right;">4819</td>
+<td style="text-align: right;">9785</td>
+<td style="text-align: right;">17125</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">TabPFN v2.6</td>
+<td style="text-align: right;">1657</td>
+<td style="text-align: right;">6518</td>
+<td style="text-align: right;">14681</td>
+<td style="text-align: right;">27639</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">TabPFN v3</td>
+<td style="text-align: right;">1483</td>
+<td style="text-align: right;">4532</td>
+<td style="text-align: right;">10630</td>
+<td style="text-align: right;">22827</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">TabICL</td>
+<td style="text-align: right;">446</td>
+<td style="text-align: right;">1442</td>
+<td style="text-align: right;">3435</td>
+<td style="text-align: right;">7420</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">TabFM</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">281</td>
+<td style="text-align: right;">1686</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Mitra</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">573</td>
+<td style="text-align: right;">1554</td>
+<td style="text-align: right;">3236</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>The gap between the two tables is the margin. Running in it is a choice you can make deliberately — on a machine you control, with nothing else scheduled, it is often the right one.</p>
+<p>Three things stand out, and all three are measured rather than assumed:</p>
+<ul>
+<li><strong>Nothing is comfortable on 8 GB free.</strong> Before a single activation exists there is a fixed cost of 0.6–2.7 GB depending on backend — R, libtorch, the allocator’s arenas — and 9.5 GB for TabFM. Small tables are fine there; fold-sized ones are not, and the ordering between models at 8 GB says more about that fixed cost than about the architectures.</li>
+<li><strong>TabPFN v2.6 goes furthest once there is room to work in</strong> — about four times TabICL’s context and ten times Mitra’s, at 50 columns. Its state is one vector per group of three features per row; Mitra’s is one per feature per row, which is where the difference comes from.</li>
+<li><strong>TabFM is in a different regime.</strong> 6.5 GB of weights are resident before anything happens, and its 32-member default multiplies what comes after.</li>
+</ul>
+</section>
+<section id="columns-cost-as-much-as-rows" class="level2">
+<h2 class="anchored" data-anchor-id="columns-cost-as-much-as-rows">Columns cost as much as rows</h2>
+<p>Capacity is not a row count. Every backend’s state is <em>rows × features</em> (or rows × feature-groups), so doubling the columns costs what doubling the rows costs:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>cols <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">25</span>, <span class="dv">50</span>, <span class="dv">100</span>, <span class="dv">200</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">envelope_table</span>(<span class="at">models =</span> MODELS[<span class="fu">c</span>(<span class="st">"TabPFN v2.6"</span>, <span class="st">"TabPFN v3"</span>, <span class="st">"TabICL"</span>,</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>                                 <span class="st">"Mitra"</span>)],</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>               <span class="at">n_features =</span> cols, <span class="at">available =</span> <span class="fl">32e9</span>,</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>               <span class="at">labels =</span> <span class="fu">paste</span>(cols, <span class="st">"cols"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<div class="kable-table">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">model</th>
+<th style="text-align: right;">10 cols</th>
+<th style="text-align: right;">25 cols</th>
+<th style="text-align: right;">50 cols</th>
+<th style="text-align: right;">100 cols</th>
+<th style="text-align: right;">200 cols</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">TabPFN v2.6</td>
+<td style="text-align: right;">21397</td>
+<td style="text-align: right;">12008</td>
+<td style="text-align: right;">7080</td>
+<td style="text-align: right;">3741</td>
+<td style="text-align: right;">1889</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">TabPFN v3</td>
+<td style="text-align: right;">11373</td>
+<td style="text-align: right;">8092</td>
+<td style="text-align: right;">4913</td>
+<td style="text-align: right;">2603</td>
+<td style="text-align: right;">1277</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">TabICL</td>
+<td style="text-align: right;">4467</td>
+<td style="text-align: right;">2665</td>
+<td style="text-align: right;">1567</td>
+<td style="text-align: right;">768</td>
+<td style="text-align: right;">310</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Mitra</td>
+<td style="text-align: right;">3122</td>
+<td style="text-align: right;">1367</td>
+<td style="text-align: right;">638</td>
+<td style="text-align: right;">234</td>
+<td style="text-align: right;">17</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>A 200-column table cuts Mitra’s usable context by a factor of 180 relative to 10 columns. If you have wide data and a choice, spend the effort on feature selection before you spend it on RAM.</p>
+</section>
+<section id="rows-you-predict-are-rows-too" class="level2">
+<h2 class="anchored" data-anchor-id="rows-you-predict-are-rows-too">Rows you predict are rows too</h2>
+<p>The forward pass sees the training context <em>and</em> the rows being predicted, so a large test set costs the same per row as a large training set — up to <code>predict_chunk_size</code>, which caps how many are ever resident at once:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>q <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">200</span>, <span class="dv">1000</span>, <span class="dv">5000</span>)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">data.frame</span>(</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">n_query =</span> q,</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">max_context =</span> <span class="fu">vapply</span>(q, <span class="cf">function</span>(n) {</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">memory_envelope</span>(<span class="st">"tabicl-v2-classifier"</span>, <span class="at">n_features =</span> <span class="dv">50</span>,</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>                    <span class="at">available =</span> <span class="fl">32e9</span>, <span class="at">n_query =</span> n)<span class="sc">$</span>max_context</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>  }, <span class="fu">numeric</span>(<span class="dv">1</span>))</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<div class="kable-table">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: right;">n_query</th>
+<th style="text-align: right;">max_context</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">200</td>
+<td style="text-align: right;">1567</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">1000</td>
+<td style="text-align: right;">767</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">5000</td>
+<td style="text-align: right;">743</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>Going from 200 to 1,000 rows to predict halves the context you can afford. Going from 1,000 to 5,000 costs almost nothing more, because TabICL’s default <code>predict_chunk_size</code> is 1,024 and only one chunk is ever resident. This is why <code>predict()</code> on a million rows is fine and <code>fit()</code> on a million rows is not.</p>
+</section>
+<section id="what-the-knobs-buy" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-knobs-buy">What the knobs buy</h2>
+<p>The single largest lever is the ensemble. Members run one after another, so the <em>live</em> memory is one member’s — but the resident high-water mark climbs anyway, because the allocator takes bigger arenas and does not give them back. Turning ensembling off is the difference between a run and no run:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>knobs <span class="ot">&lt;-</span> <span class="fu">list</span>(</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">"defaults (8 members)"</span> <span class="ot">=</span> <span class="fu">list</span>(),</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">"n_estimators = 4"</span>     <span class="ot">=</span> <span class="fu">list</span>(<span class="at">n_estimators =</span> <span class="dv">4</span>),</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">"n_estimators = 1"</span>     <span class="ot">=</span> <span class="fu">list</span>(<span class="at">n_estimators =</span> <span class="dv">1</span>),</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">"defaults + kv_cache"</span>  <span class="ot">=</span> <span class="fu">list</span>(<span class="at">kv_cache =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="fu">data.frame</span>(</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">setting =</span> <span class="fu">names</span>(knobs),</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">max_context =</span> <span class="fu">vapply</span>(knobs, <span class="cf">function</span>(o) {</span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">do.call</span>(memory_envelope,</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>            <span class="fu">c</span>(<span class="fu">list</span>(<span class="st">"tabicl-v2-classifier"</span>, <span class="at">n_features =</span> <span class="dv">50</span>,</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>                   <span class="at">available =</span> <span class="fl">32e9</span>, <span class="at">n_query =</span> <span class="dv">200</span>), o))<span class="sc">$</span>max_context</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>  }, <span class="fu">numeric</span>(<span class="dv">1</span>)),</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>  <span class="at">row.names =</span> <span class="cn">NULL</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<div class="kable-table">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">setting</th>
+<th style="text-align: right;">max_context</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">defaults (8 members)</td>
+<td style="text-align: right;">1567</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">n_estimators = 4</td>
+<td style="text-align: right;">2075</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">n_estimators = 1</td>
+<td style="text-align: right;">5158</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">defaults + kv_cache</td>
+<td style="text-align: right;">1467</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>Note that <code>kv_cache = TRUE</code> <em>costs</em> capacity. It is a speed setting: it conditions on the training rows once per <code>predict()</code> call instead of once per chunk per member, and pays for that by holding one cache per member for the whole call. Reach for it when you are predicting many chunks and have headroom, not when you are short of memory.</p>
+<p>On TabPFN v2.6 and v3 there is a second lever that costs nothing but a little loop overhead — <code>save_peak_memory_factor</code> splits each sublayer’s work, for a bit-identical answer on v2.6 and float32 noise on v3:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>k <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">4</span>, <span class="dv">8</span>)</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="fu">data.frame</span>(</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">save_peak_memory_factor =</span> k,</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">max_context =</span> <span class="fu">vapply</span>(k, <span class="cf">function</span>(f) {</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">memory_envelope</span>(<span class="st">"tabpfn-v3-classifier"</span>, <span class="at">n_features =</span> <span class="dv">50</span>,</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>                    <span class="at">available =</span> <span class="fl">32e9</span>, <span class="at">n_query =</span> <span class="dv">200</span>,</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>                    <span class="at">save_peak_memory_factor =</span> f)<span class="sc">$</span>max_context</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>  }, <span class="fu">numeric</span>(<span class="dv">1</span>))</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<div class="kable-table">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: right;">save_peak_memory_factor</th>
+<th style="text-align: right;">max_context</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4913</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">9976</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">19952</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">38548</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>Near-linear, and free. If you are using v2.6 or v3 and running out of memory, this is the first thing to try.</p>
+</section>
+<section id="memory-is-often-not-what-stops-you" class="level2">
+<h2 class="anchored" data-anchor-id="memory-is-often-not-what-stops-you">Memory is often not what stops you</h2>
+<p>Wall clock, measured on the same grid on an Apple-Silicon CPU, at <strong>one ensemble member</strong> and 90 features. Seconds, by training context size; a dash means the run died or reached the machine’s ceiling before finishing:</p>
+<div class="cell">
+<div class="cell-output-display">
+<div class="kable-table">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">backend</th>
+<th style="text-align: left;">800</th>
+<th style="text-align: left;">1600</th>
+<th style="text-align: left;">3200</th>
+<th style="text-align: left;">6400</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">mitra</td>
+<td style="text-align: left;">22.4</td>
+<td style="text-align: left;">51.2</td>
+<td style="text-align: left;">144.5</td>
+<td style="text-align: left;">–</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">tabfm</td>
+<td style="text-align: left;">14.6</td>
+<td style="text-align: left;">27</td>
+<td style="text-align: left;">70.7</td>
+<td style="text-align: left;">–</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">tabicl</td>
+<td style="text-align: left;">1.1</td>
+<td style="text-align: left;">1.6</td>
+<td style="text-align: left;">2.7</td>
+<td style="text-align: left;">5.4</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">tabpfn</td>
+<td style="text-align: left;">1.8</td>
+<td style="text-align: left;">3.3</td>
+<td style="text-align: left;">8.2</td>
+<td style="text-align: left;">29.7</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">tabpfn26</td>
+<td style="text-align: left;">2.1</td>
+<td style="text-align: left;">4</td>
+<td style="text-align: left;">8.9</td>
+<td style="text-align: left;">25.9</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">tabpfn3</td>
+<td style="text-align: left;">1.3</td>
+<td style="text-align: left;">1.9</td>
+<td style="text-align: left;">3.3</td>
+<td style="text-align: left;">6.5</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<p>Multiply those by the default member count for the real figure: TabICL’s 8 and TabFM’s 32. TabFM at 3,200 context rows is 71 seconds for one member, so around 38 minutes for its default ensemble — long before memory becomes the binding constraint. Mitra’s 145 seconds at the same size is the steepest curve in the package.</p>
+<p>TabPFN and TabICL are seconds; Mitra and TabFM are minutes to hours. If you are choosing a backend for a resampling loop, that ratio matters more than the memory table does.</p>
+</section>
+<section id="choosing" class="level2">
+<h2 class="anchored" data-anchor-id="choosing">Choosing</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>if your table is</th>
+<th>use</th>
+<th>why</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>under ~2,000 rows, any width</td>
+<td>anything</td>
+<td>all six are comfortable</td>
+</tr>
+<tr class="even">
+<td>a few thousand rows, ≤ 100 columns</td>
+<td>TabPFN v2.6 or v3</td>
+<td>furthest reach, seconds not minutes</td>
+</tr>
+<tr class="odd">
+<td>wide (100+ columns)</td>
+<td>TabPFN v2.6, with <code>save_peak_memory_factor</code></td>
+<td>the only combination that stays cheap as columns grow</td>
+</tr>
+<tr class="even">
+<td>large and you want TabICL’s ensembling</td>
+<td>TabICL with <code>n_estimators</code> lowered</td>
+<td>the default 8 costs about three times what one does</td>
+</tr>
+<tr class="odd">
+<td>small (hundreds of rows)</td>
+<td>Mitra or TabFM are fine here</td>
+<td>this is the size they were published for</td>
+</tr>
+</tbody>
+</table>
+<p>And regardless of size, if the run is going to be tight: subsample the context. These models do not learn parameters, so halving the context halves the cost and loses only what those rows contributed as examples — usually far less than the memory it buys.</p>
+</section>
+<section id="checking-your-own-case" class="level2">
+<h2 class="anchored" data-anchor-id="checking-your-own-case">Checking your own case</h2>
+<p>The tables are generic. Your table is not:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Will this specific run fit, on this machine, right now?</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="fu">estimate_peak_memory</span>(<span class="st">"tabpfn-v3-classifier"</span>,</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>                     <span class="at">n_context =</span> <span class="dv">6426</span>, <span class="at">n_query =</span> <span class="dv">714</span>, <span class="at">n_features =</span> <span class="dv">90</span>)</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="co"># How far could I go, with the settings I actually plan to use?</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="fu">memory_envelope</span>(<span class="st">"tabpfn-v3-classifier"</span>, <span class="at">n_features =</span> <span class="dv">90</span>,</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>                <span class="at">available =</span> <span class="fl">24e9</span>, <span class="at">n_estimators =</span> <span class="dv">4</span>,</span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>                <span class="at">save_peak_memory_factor =</span> <span class="dv">4</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>You do not have to remember to ask. <code>fit()</code> and <code>predict()</code> run the same check themselves and warn before allocating anything, which matters because running out inside libtorch kills the R process outright — no error, no traceback, nothing to catch. <code>options(tabfound.memory_guard = "error")</code> turns the warning into a refusal; <code>"off"</code> silences it. See <code>?estimate_peak_memory</code>.</p>
+</section>
+<section id="where-the-numbers-come-from" class="level2">
+<h2 class="anchored" data-anchor-id="where-the-numbers-come-from">Where the numbers come from</h2>
+<p>A scaling model whose constants were <strong>measured</strong>: 72 fit/predict runs across six backends, each in its own process with its peak resident memory sampled from outside. The method, the raw measurements and the fitted constants are all in <code>inst/memory/</code>.</p>
+<p>Two things to know when reading a figure off a table above. The estimates deliberately err high — on the calibration grid they land between 1.0× and 1.5× of measured, never below, because for a guard an over-estimate costs a warning and an under-estimate costs the session. And they were measured on an Apple-Silicon CPU in float32, which is the only device calibrated; on another machine, or if a number matters to you, re-run <code>inst/memory/calibrate.R</code>.</p>
+<p>The Mitra and TabFM rows are the roughest, since both are large enough that most of their calibration points ran up against the ceiling of the machine they were measured on. Read those two as orders of magnitude. <code>inst/memory/README.md</code> has the detail, including where the estimator is least sure of itself.</p>
+<p>If a table here contradicts a run you have actually done, the run is the better evidence — please open an issue.</p>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

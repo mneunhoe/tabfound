@@ -1,0 +1,340 @@
+---
+title: "Multiple imputation with tabfound"
+author: "Marcel Neunhoeffer"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    df-print: kable
+vignette: >
+  %\VignetteIndexEntry{Multiple imputation with tabfound}
+  %\VignetteEngine{quarto::html}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r}
+#| label: setup
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Why these models, for this problem
+
+`predict()` throws away everything the model knows except one number.
+For most tasks that is the point. For multiple imputation it is exactly
+wrong: the spread *between* the imputed data sets is what carries into
+the pooled standard error, so a fitted value in every cell would give
+you confident nonsense.
+
+Tabular foundation models happen to be unusually well equipped here,
+because their heads are distributions to begin with:
+
+| backend | regression head | what a draw is |
+|---|---|---|
+| `tabpfn` (v2.5, v2.6, v3) | bar distribution over 5000 bins | sample a bin, sample within it |
+| `tabicl` | 999-level quantile grid | invert the grid at a uniform |
+| `tabfm`, `mitra` | a single number | nothing to draw from |
+
+Every classifier emits a category distribution, which needs no
+special-casing at all. `tabfound_impute()` runs chained equations on top
+of that.
+
+::: {.callout-note}
+The code here is not evaluated when the vignette is built — the weights
+are not something to download during `R CMD build`. Every output shown
+was produced by running the code exactly as written, against TabPFN
+v2.5 on CPU; see [Reproducing this](#reproducing-this).
+:::
+
+## The loop
+
+```{r}
+#| eval: false
+library(tabfound)
+
+mods <- tabfound_models(classifier = "tabpfn-v2.5-classifier",
+                        regressor  = "tabpfn-v2.5-regressor")
+
+aq  <- airquality[1:60, ]
+imp <- tabfound_impute(aq, m = 5, models = mods, maxit = 3, seed = 20260806)
+imp
+```
+
+```
+tabfound multiple imputation
+* 5 imputations, 3 sweeps each
+* 2 variables imputed: Ozone and Solar.R
+* 29 missing cells of 360
+* draw: "auto"
+i `as_mids()` for mice, `as_amelia()` for Amelia.
+```
+
+What happens per imputation is the textbook chain:
+
+1. every missing cell is filled with a random draw from that column's
+   observed values, so the first sweep conditions on something plausible
+   rather than on `NA`;
+2. each incomplete variable is visited in turn — the model is fitted on
+   the rows where that variable is *observed*, with the other columns at
+   their current completed values, and new values are drawn for the rows
+   where it is missing;
+3. that repeats `maxit` times, and the whole thing `m` times.
+
+`tabfound_models()` is a handle, not a model: it loads each checkpoint
+at most once, on first use, and reuses it for every variable, sweep and
+imputation. A model that is never needed is never loaded, so a data
+frame with no incomplete factors does not pay for the classifier.
+
+### Column types pick the head
+
+Exactly as they do for `tabfound()`: numerics go to the regressor,
+factors, characters and logicals to the classifier, dates and datetimes
+through the regressor and back into their own class.
+
+There is one deliberate exception. **Numeric 0/1 columns with missing
+values take the classifier path** and come back as numeric 0/1. A
+continuous draw is not a valid value of a dummy, and a downstream
+binomial model will refuse it. Amelia treats such columns as continuous;
+this is the one place the behaviour was copied on purpose in the other
+direction.
+
+### `draw` picks the route
+
+`draw = "auto"` asks the backend for the best it has: `"sample"` for
+TabPFN's bar distribution, `"grid"` for TabICL's quantile grid, else
+`"quantile"` (an inverse-CDF draw off a fine grid of predicted
+quantiles). A backend with only a point estimate is refused rather than
+quietly degraded:
+
+```{r}
+#| eval: false
+tabfound_impute(aq, models = tabfound_models(regressor = "mitra-regressor"))
+#> Error: The "mitra" regressor has no predictive distribution to draw from.
+#> x It supports only "mean".
+#> i Use a backend that samples ("tabpfn") or predicts a quantile grid ("tabicl"),
+#>   or pass `draw = "residual"` to draw around the point prediction instead.
+```
+
+`draw = "residual"` is available if you insist — a normal draw around
+the point prediction sized by the in-sample residuals — but it ignores
+everything the predictive distribution knows about skew and
+heteroskedasticity, which is why it is opt-in rather than a fallback.
+
+### Reproducibility
+
+The backends sample in torch's RNG, which `set.seed()` does not reach.
+Each draw is therefore handed a seed taken from R's stream, so one
+`seed =` (or one `set.seed()` beforehand) reproduces the whole
+imputation.
+
+## Pooling
+
+`with()` returns a `mira`, mice's container for repeated analyses, so
+`pool()` takes it directly — no conversion needed:
+
+```{r}
+#| eval: false
+library(mice)
+summary(pool(with(imp, lm(Ozone ~ Wind + Temp))))
+```
+
+```
+         term   estimate  std.error  statistic       df      p.value
+1 (Intercept) -48.919266 24.0875164 -2.0308970 51.74077 0.0474185087
+2        Wind  -0.399109  0.8725424 -0.4574092 18.32698 0.6527528815
+3        Temp   1.110571  0.3047787  3.6438597 33.64993 0.0008958215
+```
+
+Complete-case analysis on the same 60 rows throws away the 25 with a
+missing `Ozone`:
+
+```{r}
+#| eval: false
+summary(lm(Ozone ~ Wind + Temp, data = aq))$coefficients
+```
+
+```
+               Estimate Std. Error   t value    Pr(>|t|)
+(Intercept) -55.6752128 29.8180173 -1.867167 0.071062489
+Wind         -0.6901142  0.8941989 -0.771768 0.445914090
+Temp          1.2746429  0.3759286  3.390652 0.001869036
+```
+
+Imputation recovers a similar slope on `Temp` from all 60 rows with a
+tighter interval (SE 0.305 against 0.376). The imputed rows are
+contributing, and the between-imputation spread is already priced into
+that standard error — it is not a free lunch, it is 35 rows of
+information that deletion was discarding.
+
+### Handing it to mice
+
+For the rest of the mice toolchain — `densityplot()`, `stripplot()`,
+`complete()`, anything expecting a `mids`:
+
+```{r}
+#| eval: false
+mids <- as_mids(imp)
+mids$method
+#>      Ozone    Solar.R       Wind       Temp      Month        Day
+#> "tabfound" "tabfound"         ""         ""         ""         ""
+
+densityplot(mids, ~ Ozone)
+mice::complete(imp, "long")   # registered on mice's own generic, no conversion
+```
+
+The `mids` is built from a real `mice(maxit = 0)` skeleton rather than
+assembled by hand: mice owns the invariants of its own object. What does
+*not* carry over is the diagnostic history mice's own sampler records —
+`chainMean` and `chainVar` are empty, so `plot()` on the result has
+nothing to draw. Everything that depends on the imputed values works
+normally.
+
+### Handing it to Amelia
+
+`mi.meld()` applies the same Rubin's rules and, on this example, returns
+the same numbers to the last digit:
+
+```{r}
+#| eval: false
+library(Amelia)
+amp  <- as_amelia(imp)
+fits <- lapply(amp$imputations, function(d) lm(Ozone ~ Wind + Temp, data = d))
+mi.meld(q  = t(sapply(fits, coef)),
+        se = t(sapply(fits, \(f) summary(f)$coefficients[, 2])))
+```
+
+```
+$q.mi
+     (Intercept)      Wind     Temp
+[1,]   -48.91927 -0.399109 1.110571
+
+$se.mi
+     (Intercept)      Wind      Temp
+[1,]    24.08752 0.8725424 0.3047787
+```
+
+The `amelia` object's EM-specific slots (`theta`, `mu`, `covMatrices`)
+are `NULL`: they describe a multivariate-normal model that was never
+fitted here, and filling them with plausible-looking numbers would be
+worse than leaving them empty. `mi.meld()`, `missmap()` and the
+imputations themselves work; Amelia's EM diagnostics do not.
+
+## Letting mice drive instead
+
+The mirror image: mice runs its own loop and calls in here per variable,
+which buys mice's `where`, `blocks`, `post`, `ignore` and convergence
+plots.
+
+```{r}
+#| eval: false
+options(tabfound.models = mods)
+imp2 <- mice(aq, method = "tabfound", m = 5, maxit = 3)
+```
+
+The trade-off is real and worth knowing: mice hands over an
+already-dummy-coded numeric design matrix, so a factor predictor arrives
+one column per contrast rather than as the single ordinal column these
+networks expect. `tabfound_impute()` keeps factors whole. Prefer it
+unless you specifically need something only mice's loop provides.
+
+## Does it actually work?
+
+Unlike everything else in the package this has no reference
+implementation to be verified against, so the parity harness has nothing
+to say about it. What stands in for parity is a simulation where the
+right answer is known by construction — `inst/simulation/run-mi-sim.R`.
+Missingness is made to depend on the outcome, which is missing at random
+given the data but *not* ignorable for a complete-case analysis, so there
+is a real bias for imputation to remove.
+
+```bash
+Rscript inst/simulation/run-mi-sim.R --backend=lm --reps=200      # 13s, no weights
+Rscript inst/simulation/run-mi-sim.R --backend=tabpfn --reps=200
+```
+
+Over 200 replications at `n = 400` with ~42% of a covariate missing:
+
+| arm | bias | coverage |
+|---|---|---|
+| before deletion | −0.001 | 0.945 |
+| complete cases | −0.111 | 0.780 |
+| MI, correctly specified imputer | +0.003 | 0.935 |
+| MI, **TabPFN** | −0.008 | 0.965 |
+| MI, **TabICL** | −0.061 | 0.860 |
+| MI, `mice` PMM | +0.013 | 0.945 |
+
+TabPFN removes 93% of the bias and restores coverage, matching both a
+correctly specified parametric imputer and `mice`'s PMM without having
+been told anything about the data-generating process. Its intervals run
+systematically narrower than PMM's, which on one coefficient tips into
+undercoverage (0.900 against 0.950) — so PMM remains the safer default
+if you want intervals you need not think about.
+
+**TabICL does not do the job.** It removes 45% of the bias here, and on
+a binary covariate essentially none. Use the TabPFN backend for
+imputation; why TabICL falls short is an open question, and the numbers
+are in `inst/simulation/README.md`.
+
+## What this is not
+
+It is a *use* of the fitted models, not a claim about them, and it has
+two limits worth stating before you rely on it.
+
+**No properness bootstrap.** Between-imputation variability comes
+entirely from the posterior predictive — the in-context prior carries
+the epistemic uncertainty a parametric imputer would get by drawing new
+coefficients. The context rows are not bootstrapped. The coverage
+numbers above suggest this is adequate in practice for TabPFN; it is not
+the same thing as a proof. (`tabfound_syn()`, the synthesis sibling,
+*does* bootstrap by default, because the synthetic-data variance
+estimators assume it — see `vignette("synthetic-data", "tabfound")`.)
+
+**No bounds.** Draws come off the predictive distribution as it is,
+tails included. On the example above that is not hypothetical:
+
+```{r}
+#| eval: false
+oz <- unlist(lapply(imp$imputations, \(d) d$Ozone[is.na(aq$Ozone)]))
+c(cells = length(oz), negative = sum(oz < 0), min = min(oz), max = max(oz))
+#>    cells negative      min      max
+#>      125        3      -16      122
+```
+
+Three of 125 imputed ozone concentrations are negative, which is not a
+physically possible value. There is no equivalent of Amelia's `bounds`,
+and deliberately so — truncating after the fact biases the draws it
+keeps. Transform before imputing instead:
+
+```{r}
+#| eval: false
+aql <- aq; aql$Ozone <- log(aql$Ozone)
+impl <- tabfound_impute(aql, m = 5, models = mods, maxit = 3, seed = 20260806)
+ozl  <- exp(unlist(lapply(impl$imputations, \(d) d$Ozone[is.na(aq$Ozone)])))
+range(ozl)
+#> [1]   0.4 168.9
+```
+
+Positive by construction, at the cost of imputing on a scale the
+analysis model may not want.
+
+## Reproducing this {#reproducing-this}
+
+```{r}
+#| eval: false
+library(tabfound)
+download_model("tabpfn-v2.5-classifier")
+download_model("tabpfn-v2.5-regressor")
+```
+
+Outputs above are single-threaded CPU on macOS/arm64, R 4.5.2, `torch`
+0.16.3, TabPFN v2.5. `mice` and `Amelia` are needed only for the pooling
+sections; `tabfound_impute()` itself needs neither.
+
+## See also
+
+* `vignette("tabfound")` — the models, the API, and everything else
+* `vignette("synthetic-data", "tabfound")` — the same predictive
+  distributions pointed at every cell instead of the missing ones
+* `?tabfound_impute`, `?as_mids`, `?as_amelia`,
+  `?mice.impute.tabfound`

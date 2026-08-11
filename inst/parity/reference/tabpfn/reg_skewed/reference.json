@@ -1,0 +1,44 @@
+{
+  "tabpfn_version": "8.2.0",
+  "torch_version": "2.13.0",
+  "fixture": "reg_skewed",
+  "task": "regression",
+  "n_estimators": 4,
+  "seed": 0,
+  "ckpt": "tabpfn-v2.5-regressor-v2.5_default.ckpt",
+  "fingerprint_feature": true,
+  "softmax_temperature": 0.9,
+  "quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "n_members_traced": 4,
+  "n_target_transforms": 2,
+  "target_transform_stats": [
+    {
+      "member": 1,
+      "lambda": [
+        -0.04688172787427902
+      ],
+      "mean": [
+        -0.28754867405320206
+      ],
+      "scale": [
+        0.8039378448973044
+      ]
+    },
+    {
+      "member": 3,
+      "lambda": [
+        -0.04688172787427902
+      ],
+      "mean": [
+        -0.28754867405320206
+      ],
+      "scale": [
+        0.8039378448973044
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "tabpfn_version": "8.2.0",
+  "torch_version": "2.13.0",
+  "fixture": "reg_categorical",
+  "task": "regression",
+  "n_estimators": 4,
+  "seed": 0,
+  "ckpt": "reg26.ckpt",
+  "fingerprint_feature": false,
+  "softmax_temperature": 0.9,
+  "declared_categorical": null,
+  "inferred_categorical": [
+    0
+  ],
+  "quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "n_members_traced": 4,
+  "n_target_transforms": 0,
+  "target_transform_stats": []
+}

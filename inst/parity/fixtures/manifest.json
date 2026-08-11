@@ -1,0 +1,69 @@
+{
+  "version": 2,
+  "fixtures": {
+    "clf_iris": {
+      "task": "classification",
+      "note": "iris, 3 classes, 4 numeric features, no NaN",
+      "n_train": 100,
+      "n_test": 50,
+      "n_features": 4,
+      "categorical_features": []
+    },
+    "clf_binary_missing": {
+      "task": "classification",
+      "note": "binary, 6 features incl. a constant column and 25 NaNs",
+      "n_train": 80,
+      "n_test": 40,
+      "n_features": 6,
+      "categorical_features": []
+    },
+    "reg_iris": {
+      "task": "regression",
+      "note": "iris Sepal.Length from 3 numeric features",
+      "n_train": 100,
+      "n_test": 50,
+      "n_features": 3,
+      "categorical_features": []
+    },
+    "reg_skewed": {
+      "task": "regression",
+      "note": "synthetic nonlinear, log-normal-ish target (exercises target transforms)",
+      "n_train": 120,
+      "n_test": 60,
+      "n_features": 5,
+      "categorical_features": []
+    },
+    "clf_tiny": {
+      "task": "classification",
+      "note": "48/12 rows, 4 features, 3 classes -- cheap enough for a 1.6B model",
+      "n_train": 48,
+      "n_test": 12,
+      "n_features": 4,
+      "categorical_features": []
+    },
+    "reg_tiny": {
+      "task": "regression",
+      "note": "48/12 rows, 4 features, continuous target",
+      "n_train": 48,
+      "n_test": 12,
+      "n_features": 4,
+      "categorical_features": []
+    },
+    "clf_categorical": {
+      "task": "classification",
+      "note": "3 categorical columns (3, 6 and 12 levels) + 2 numeric, 1 with NAs",
+      "n_train": 200,
+      "n_test": 80,
+      "n_features": 5,
+      "categorical_features": [1, 3, 4]
+    },
+    "reg_categorical": {
+      "task": "regression",
+      "note": "same columns as clf_categorical, continuous target",
+      "n_train": 200,
+      "n_test": 80,
+      "n_features": 5,
+      "categorical_features": [1, 3, 4]
+    }
+  }
+}

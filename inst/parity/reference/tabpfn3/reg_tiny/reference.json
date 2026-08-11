@@ -1,0 +1,22 @@
+{
+  "fixture": "reg_tiny",
+  "task": "regression",
+  "tabpfn_version": "8.2.0",
+  "torch_version": "2.13.0",
+  "ckpt": "tabpfn-v3-regressor-v3_default.ckpt",
+  "architecture": "tabpfn_v3",
+  "head": "regressor",
+  "n_out": 5000,
+  "n_classes": null,
+  "n_bar_bins": 5000,
+  "softmax_temperature": 0.9,
+  "quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "n_train": 48,
+  "n_test": 12,
+  "n_features": 4,
+  "save_peak_memory_factor": 8
+}

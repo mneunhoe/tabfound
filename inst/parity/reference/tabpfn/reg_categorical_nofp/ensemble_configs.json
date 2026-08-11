@@ -1,0 +1,78 @@
+[
+  {
+    "preprocess_config": {
+      "name": "quantile_uni_coarse",
+      "categorical_name": "numeric",
+      "append_original": "auto",
+      "max_features_per_estimator": 500,
+      "global_transformer_name": null,
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 853,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": null,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "target_transform": null
+  },
+  {
+    "preprocess_config": {
+      "name": "quantile_uni_coarse",
+      "categorical_name": "numeric",
+      "append_original": "auto",
+      "max_features_per_estimator": 500,
+      "global_transformer_name": null,
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 852,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": null,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "target_transform": "Pipeline(steps=[('input_transformer', SafePowerTransformer(standardize=False)),\n                ('standard',\n                 Pipeline(steps=[('inf_to_nan_pre',\n                                  FunctionTransformer(check_inverse=False,\n                                                      func=<function _replace_inf_with_nan at 0x113b77100>,\n                                                      inverse_func=<function _identity at 0x1138c91c0>)),\n                                 ('nan_impute_pre',\n                                  _NoInverseImputer(keep_empty_features=True)),\n                                 ('standard', StandardScaler()),\n                                 ('inf_to_nan_post',\n                                  FunctionTransformer(check_inverse=False,\n                                                      func=<function _replace_inf_with_nan at 0x113b77100>,\n                                                      inverse_func=<function _identity at 0x1138c91c0>)),\n                                 ('nan_impute_post',\n                                  _NoInverseImputer(keep_empty_features=True))]))])"
+  },
+  {
+    "preprocess_config": {
+      "name": "squashing_scaler_default",
+      "categorical_name": "ordinal_very_common_categories_shuffled",
+      "append_original": false,
+      "max_features_per_estimator": 500,
+      "global_transformer_name": "svd_quarter_components",
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 850,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": null,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "target_transform": null
+  },
+  {
+    "preprocess_config": {
+      "name": "squashing_scaler_default",
+      "categorical_name": "ordinal_very_common_categories_shuffled",
+      "append_original": false,
+      "max_features_per_estimator": 500,
+      "global_transformer_name": "svd_quarter_components",
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 851,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": null,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "target_transform": "Pipeline(steps=[('input_transformer', SafePowerTransformer(standardize=False)),\n                ('standard',\n                 Pipeline(steps=[('inf_to_nan_pre',\n                                  FunctionTransformer(check_inverse=False,\n                                                      func=<function _replace_inf_with_nan at 0x113b77100>,\n                                                      inverse_func=<function _identity at 0x1138c91c0>)),\n                                 ('nan_impute_pre',\n                                  _NoInverseImputer(keep_empty_features=True)),\n                                 ('standard', StandardScaler()),\n                                 ('inf_to_nan_post',\n                                  FunctionTransformer(check_inverse=False,\n                                                      func=<function _replace_inf_with_nan at 0x113b77100>,\n                                                      inverse_func=<function _identity at 0x1138c91c0>)),\n                                 ('nan_impute_post',\n                                  _NoInverseImputer(keep_empty_features=True))]))])"
+  }
+]

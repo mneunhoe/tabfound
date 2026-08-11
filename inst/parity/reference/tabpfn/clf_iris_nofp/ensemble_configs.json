@@ -1,0 +1,122 @@
+[
+  {
+    "preprocess_config": {
+      "name": "squashing_scaler_default",
+      "categorical_name": "ordinal_very_common_categories_shuffled",
+      "append_original": false,
+      "max_features_per_estimator": 500,
+      "global_transformer_name": "svd_quarter_components",
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 853,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": 12.0,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "class_permutation": {
+      "__ndarray__": true,
+      "dtype": "int64",
+      "shape": [
+        3
+      ],
+      "vals": [
+        0,
+        2,
+        1
+      ]
+    }
+  },
+  {
+    "preprocess_config": {
+      "name": "squashing_scaler_default",
+      "categorical_name": "ordinal_very_common_categories_shuffled",
+      "append_original": false,
+      "max_features_per_estimator": 500,
+      "global_transformer_name": "svd_quarter_components",
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 852,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": 12.0,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "class_permutation": {
+      "__ndarray__": true,
+      "dtype": "int64",
+      "shape": [
+        3
+      ],
+      "vals": [
+        2,
+        0,
+        1
+      ]
+    }
+  },
+  {
+    "preprocess_config": {
+      "name": "none",
+      "categorical_name": "numeric",
+      "append_original": false,
+      "max_features_per_estimator": 500,
+      "global_transformer_name": null,
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 850,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": 12.0,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "class_permutation": {
+      "__ndarray__": true,
+      "dtype": "int64",
+      "shape": [
+        3
+      ],
+      "vals": [
+        1,
+        2,
+        0
+      ]
+    }
+  },
+  {
+    "preprocess_config": {
+      "name": "none",
+      "categorical_name": "numeric",
+      "append_original": false,
+      "max_features_per_estimator": 500,
+      "global_transformer_name": null,
+      "max_onehot_cardinality": null,
+      "differentiable": false
+    },
+    "add_fingerprint_feature": false,
+    "polynomial_features": "no",
+    "feature_shift_count": 851,
+    "feature_shift_decoder": "shuffle",
+    "outlier_removal_std": 12.0,
+    "_model_index": 0,
+    "passthrough_inf": false,
+    "class_permutation": {
+      "__ndarray__": true,
+      "dtype": "int64",
+      "shape": [
+        3
+      ],
+      "vals": [
+        1,
+        0,
+        2
+      ]
+    }
+  }
+]

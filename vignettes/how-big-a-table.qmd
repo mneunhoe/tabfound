@@ -1,0 +1,329 @@
+---
+title: "How big a table can each model handle?"
+author: "Marcel Neunhoeffer"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    df-print: kable
+vignette: >
+  %\VignetteIndexEntry{How big a table can each model handle?}
+  %\VignetteEngine{quarto::html}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r}
+#| label: setup
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(tabfound)
+
+RAM <- c(8, 16, 32, 64) * 1e9
+MODELS <- c(
+  "TabPFN v2.5" = "tabpfn-v2.5-classifier",
+  "TabPFN v2.6" = "tabpfn-v2.6-classifier",
+  "TabPFN v3"   = "tabpfn-v3-classifier",
+  "TabICL"      = "tabicl-v2-classifier",
+  "TabFM"       = "tabfm-1.0.0-classifier",
+  "Mitra"       = "mitra-classifier"
+)
+
+# One row per model, one column per point on whichever axis is varying.
+envelope_table <- function(models = MODELS, n_features = 50, available = RAM,
+                           n_query = 200, labels = NULL, ...) {
+  labels <- labels %||% paste0(available / 1e9, " GB")
+  rows <- lapply(names(models), function(nm) {
+    e <- memory_envelope(models[[nm]], n_features = n_features,
+                         available = available, n_query = n_query, ...)
+    cells <- as.data.frame(as.list(e$max_context), check.names = FALSE)
+    names(cells) <- labels
+    cbind(data.frame(model = nm), cells)
+  })
+  do.call(rbind, rows)
+}
+`%||%` <- function(x, y) if (is.null(x)) y else x
+```
+
+Every model here conditions on its training rows at predict time. There
+is no fitted parameter vector standing between your table and the
+forward pass — the table *is* the input — so its size decides whether
+the run happens at all. This vignette is the answer to "will this fit,
+and if not, what would?"
+
+Everything below is computed while the vignette is built, from measured
+constants, and **needs no weights**: architecture dimensions ship with
+the package. You can ask whether a 6.5 GB download is worth making
+before you make it.
+
+## Available memory, not installed memory
+
+The tables are indexed by memory **free at the moment you run**, not by
+what is on the sticker. The distinction is the whole point. The run that
+prompted this work fitted comfortably on a 48 GB machine and was killed
+by the operating system the next time, unchanged, because another
+process was holding 7 GB.
+
+A rough translation, assuming a machine doing nothing else demanding:
+
+| installed | realistically free |
+|---|---|
+| 16 GB | 8–11 GB |
+| 32 GB | 22–26 GB |
+| 64 GB | 50–56 GB |
+
+`estimate_peak_memory()` reports what your machine has free right now, so
+you never have to guess:
+
+```{r}
+#| label: probe
+est <- estimate_peak_memory("tabicl-v2-classifier", n_context = 2000,
+                            n_query = 200, n_features = 50)
+c(available_gb = round(est$system_avail_bytes / 1e9, 1),
+  installed_gb = round(est$system_total_bytes / 1e9, 1))
+```
+
+## The headline numbers
+
+Largest training context each model takes **at its own defaults**, with
+50 predictor columns and 200 rows to predict, while still leaving the
+margin `estimate_peak_memory()` calls comfortable:
+
+```{r}
+#| label: headline
+envelope_table()
+```
+
+Read that as a planning number, not a ceiling. It is the largest table
+the estimator would not comment on — roughly half the usable headroom
+left unspent, which is what keeps a run alive when something else on the
+machine wakes up.
+
+The ceiling itself, the largest table the guard would not refuse:
+
+```{r}
+#| label: tight
+envelope_table(verdict = "tight")
+```
+
+The gap between the two tables is the margin. Running in it is a choice
+you can make deliberately — on a machine you control, with nothing else
+scheduled, it is often the right one.
+
+Three things stand out, and all three are measured rather than assumed:
+
+* **Nothing is comfortable on 8 GB free.** Before a single activation
+  exists there is a fixed cost of 0.6–2.7 GB depending on backend — R,
+  libtorch, the allocator's arenas — and 9.5 GB for TabFM. Small tables
+  are fine there; fold-sized ones are not, and the ordering between
+  models at 8 GB says more about that fixed cost than about the
+  architectures.
+* **TabPFN v2.6 goes furthest once there is room to work in** — about
+  four times TabICL's context and ten times Mitra's, at 50 columns. Its
+  state is one vector per group of three features per row; Mitra's is
+  one per feature per row, which is where the difference comes from.
+* **TabFM is in a different regime.** 6.5 GB of weights are resident
+  before anything happens, and its 32-member default multiplies what
+  comes after.
+
+## Columns cost as much as rows
+
+Capacity is not a row count. Every backend's state is *rows × features*
+(or rows × feature-groups), so doubling the columns costs what doubling
+the rows costs:
+
+```{r}
+#| label: features
+cols <- c(10, 25, 50, 100, 200)
+envelope_table(models = MODELS[c("TabPFN v2.6", "TabPFN v3", "TabICL",
+                                 "Mitra")],
+               n_features = cols, available = 32e9,
+               labels = paste(cols, "cols"))
+```
+
+A 200-column table cuts Mitra's usable context by a factor of 180
+relative to 10 columns. If you have wide data and a choice, spend the
+effort on feature selection before you spend it on RAM.
+
+## Rows you predict are rows too
+
+The forward pass sees the training context *and* the rows being
+predicted, so a large test set costs the same per row as a large
+training set — up to `predict_chunk_size`, which caps how many are ever
+resident at once:
+
+```{r}
+#| label: chunk
+q <- c(200, 1000, 5000)
+data.frame(
+  n_query = q,
+  max_context = vapply(q, function(n) {
+    memory_envelope("tabicl-v2-classifier", n_features = 50,
+                    available = 32e9, n_query = n)$max_context
+  }, numeric(1))
+)
+```
+
+Going from 200 to 1,000 rows to predict halves the context you can
+afford. Going from 1,000 to 5,000 costs almost nothing more, because
+TabICL's default `predict_chunk_size` is 1,024 and only one chunk is ever
+resident. This is why `predict()` on a million rows is fine and `fit()`
+on a million rows is not.
+
+## What the knobs buy
+
+The single largest lever is the ensemble. Members run one after another,
+so the *live* memory is one member's — but the resident high-water mark
+climbs anyway, because the allocator takes bigger arenas and does not
+give them back. Turning ensembling off is the difference between a run
+and no run:
+
+```{r}
+#| label: knobs
+knobs <- list(
+  "defaults (8 members)" = list(),
+  "n_estimators = 4"     = list(n_estimators = 4),
+  "n_estimators = 1"     = list(n_estimators = 1),
+  "defaults + kv_cache"  = list(kv_cache = TRUE)
+)
+data.frame(
+  setting = names(knobs),
+  max_context = vapply(knobs, function(o) {
+    do.call(memory_envelope,
+            c(list("tabicl-v2-classifier", n_features = 50,
+                   available = 32e9, n_query = 200), o))$max_context
+  }, numeric(1)),
+  row.names = NULL
+)
+```
+
+Note that `kv_cache = TRUE` *costs* capacity. It is a speed setting: it
+conditions on the training rows once per `predict()` call instead of once
+per chunk per member, and pays for that by holding one cache per member
+for the whole call. Reach for it when you are predicting many chunks and
+have headroom, not when you are short of memory.
+
+On TabPFN v2.6 and v3 there is a second lever that costs nothing but a
+little loop overhead — `save_peak_memory_factor` splits each sublayer's
+work, for a bit-identical answer on v2.6 and float32 noise on v3:
+
+```{r}
+#| label: spmf
+k <- c(1, 2, 4, 8)
+data.frame(
+  save_peak_memory_factor = k,
+  max_context = vapply(k, function(f) {
+    memory_envelope("tabpfn-v3-classifier", n_features = 50,
+                    available = 32e9, n_query = 200,
+                    save_peak_memory_factor = f)$max_context
+  }, numeric(1))
+)
+```
+
+Near-linear, and free. If you are using v2.6 or v3 and running out of
+memory, this is the first thing to try.
+
+## Memory is often not what stops you
+
+Wall clock, measured on the same grid on an Apple-Silicon CPU, at **one
+ensemble member** and 90 features. Seconds, by training context size; a
+dash means the run died or reached the machine's ceiling before
+finishing:
+
+```{r}
+#| label: timing
+#| echo: false
+fs <- list.files(system.file("memory", "measurements", package = "tabfound"),
+                 pattern = "json$", full.names = TRUE)
+fs <- fs[!startsWith(basename(fs), "ensemble-")]
+tm <- do.call(rbind, lapply(fs, function(f) {
+  b <- jsonlite::fromJSON(f, simplifyVector = FALSE)
+  do.call(rbind, lapply(b$points, function(p) {
+    if (!identical(p$status, "ok") || p$n_features != 90) return(NULL)
+    data.frame(backend = b$backend, n_context = p$n_context,
+               seconds = round(p$elapsed_sec, 1))
+  }))
+}))
+tm <- stats::reshape(tm, idvar = "backend", timevar = "n_context",
+                     direction = "wide")
+names(tm) <- sub("^seconds\\.", "", names(tm))
+tm <- tm[order(tm$backend), ]
+rownames(tm) <- NULL
+# Blank where the point was not usable: Mitra and TabFM either died at
+# 6,400 rows or hit the machine's ceiling on the way.
+tm[] <- lapply(tm, function(col) ifelse(is.na(col), "--", as.character(col)))
+tm
+```
+
+Multiply those by the default member count for the real figure: TabICL's
+8 and TabFM's 32. TabFM at 3,200 context rows is 71 seconds for one
+member, so around 38 minutes for its default ensemble — long before
+memory becomes the binding constraint. Mitra's 145 seconds at the same
+size is the steepest curve in the package.
+
+TabPFN and TabICL are seconds; Mitra and TabFM are minutes to hours. If
+you are choosing a backend for a resampling loop, that ratio matters more
+than the memory table does.
+
+## Choosing
+
+| if your table is | use | why |
+|---|---|---|
+| under ~2,000 rows, any width | anything | all six are comfortable |
+| a few thousand rows, ≤ 100 columns | TabPFN v2.6 or v3 | furthest reach, seconds not minutes |
+| wide (100+ columns) | TabPFN v2.6, with `save_peak_memory_factor` | the only combination that stays cheap as columns grow |
+| large and you want TabICL's ensembling | TabICL with `n_estimators` lowered | the default 8 costs about three times what one does |
+| small (hundreds of rows) | Mitra or TabFM are fine here | this is the size they were published for |
+
+And regardless of size, if the run is going to be tight: subsample the
+context. These models do not learn parameters, so halving the context
+halves the cost and loses only what those rows contributed as examples —
+usually far less than the memory it buys.
+
+## Checking your own case
+
+The tables are generic. Your table is not:
+
+```{r}
+#| label: your-case
+#| eval: false
+# Will this specific run fit, on this machine, right now?
+estimate_peak_memory("tabpfn-v3-classifier",
+                     n_context = 6426, n_query = 714, n_features = 90)
+
+# How far could I go, with the settings I actually plan to use?
+memory_envelope("tabpfn-v3-classifier", n_features = 90,
+                available = 24e9, n_estimators = 4,
+                save_peak_memory_factor = 4)
+```
+
+You do not have to remember to ask. `fit()` and `predict()` run the same
+check themselves and warn before allocating anything, which matters
+because running out inside libtorch kills the R process outright — no
+error, no traceback, nothing to catch. `options(tabfound.memory_guard =
+"error")` turns the warning into a refusal; `"off"` silences it. See
+`?estimate_peak_memory`.
+
+## Where the numbers come from
+
+A scaling model whose constants were **measured**: 72 fit/predict runs
+across six backends, each in its own process with its peak resident
+memory sampled from outside. The method, the raw measurements and the
+fitted constants are all in `inst/memory/`.
+
+Two things to know when reading a figure off a table above. The
+estimates deliberately err high — on the calibration grid they land
+between 1.0× and 1.5× of measured, never below, because for a guard an
+over-estimate costs a warning and an under-estimate costs the session.
+And they were measured on an Apple-Silicon CPU in float32, which is the
+only device calibrated; on another machine, or if a number matters to
+you, re-run `inst/memory/calibrate.R`.
+
+The Mitra and TabFM rows are the roughest, since both are large enough
+that most of their calibration points ran up against the ceiling of the
+machine they were measured on. Read those two as orders of magnitude.
+`inst/memory/README.md` has the detail, including where the estimator is
+least sure of itself.
+
+If a table here contradicts a run you have actually done, the run is the
+better evidence — please open an issue.

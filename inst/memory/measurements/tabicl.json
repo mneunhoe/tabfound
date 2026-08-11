@@ -1,0 +1,288 @@
+{
+  "backend": "tabicl",
+  "model_id": "tabicl-v2-classifier",
+  "measured_on": "2026-08-11",
+  "platform": "Darwin arm64",
+  "r_version": "4.5.2",
+  "torch_version": "0.16.3",
+  "machine_total_bytes": 51539607552,
+  "weights_bytes": 110256776,
+  "points": [
+    {
+      "n_context": 800,
+      "n_features": 8,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 1416495104,
+      "loaded_bytes": 574275584,
+      "elapsed_sec": 0.4133,
+      "method": "rss-sampling",
+      "samples": 112,
+      "act": [
+        499200,
+        1164800,
+        665600
+      ],
+      "att": [
+        3993600,
+        509600,
+        8320000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 102400
+    },
+    {
+      "n_context": 1600,
+      "n_features": 8,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 2171666432,
+      "loaded_bytes": 586678272,
+      "elapsed_sec": 0.5751,
+      "method": "rss-sampling",
+      "samples": 119,
+      "act": [
+        806400,
+        1881600,
+        1075200
+      ],
+      "att": [
+        6451200,
+        823200,
+        26880000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 204800
+    },
+    {
+      "n_context": 3200,
+      "n_features": 8,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 3435708416,
+      "loaded_bytes": 593117184,
+      "elapsed_sec": 0.9978,
+      "method": "rss-sampling",
+      "samples": 140,
+      "act": [
+        1420800,
+        3315200,
+        1894400
+      ],
+      "att": [
+        11366400,
+        1450400,
+        94720000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 409600
+    },
+    {
+      "n_context": 800,
+      "n_features": 32,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 2875326464,
+      "loaded_bytes": 574210048,
+      "elapsed_sec": 0.6617,
+      "method": "rss-sampling",
+      "samples": 123,
+      "act": [
+        1830400,
+        2496000,
+        665600
+      ],
+      "att": [
+        14643200,
+        2340000,
+        8320000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 409600
+    },
+    {
+      "n_context": 6400,
+      "n_features": 8,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 5669453824,
+      "loaded_bytes": 591314944,
+      "elapsed_sec": 2.3155,
+      "method": "rss-sampling",
+      "samples": 202,
+      "act": [
+        2649600,
+        6182400,
+        3532800
+      ],
+      "att": [
+        21196800,
+        2704800,
+        353280000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 819200
+    },
+    {
+      "n_context": 1600,
+      "n_features": 32,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 4180639744,
+      "loaded_bytes": 590675968,
+      "elapsed_sec": 0.88,
+      "method": "rss-sampling",
+      "samples": 138,
+      "act": [
+        2956800,
+        4032000,
+        1075200
+      ],
+      "att": [
+        23654400,
+        3780000,
+        26880000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 819200
+    },
+    {
+      "n_context": 800,
+      "n_features": 90,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 5896323072,
+      "loaded_bytes": 561430528,
+      "elapsed_sec": 1.057,
+      "method": "rss-sampling",
+      "samples": 144,
+      "act": [
+        4992000,
+        5657600,
+        665600
+      ],
+      "att": [
+        39936000,
+        12022400,
+        8320000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 1152000
+    },
+    {
+      "n_context": 3200,
+      "n_features": 32,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 7790329856,
+      "loaded_bytes": 576225280,
+      "elapsed_sec": 1.5282,
+      "method": "rss-sampling",
+      "samples": 167,
+      "act": [
+        5209600,
+        7104000,
+        1894400
+      ],
+      "att": [
+        41676800,
+        6660000,
+        94720000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 1638400
+    },
+    {
+      "n_context": 1600,
+      "n_features": 90,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 8072593408,
+      "loaded_bytes": 598704128,
+      "elapsed_sec": 1.5578,
+      "method": "rss-sampling",
+      "samples": 169,
+      "act": [
+        8064000,
+        9139200,
+        1075200
+      ],
+      "att": [
+        64512000,
+        19420800,
+        26880000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 2304000
+    },
+    {
+      "n_context": 6400,
+      "n_features": 32,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 11855265792,
+      "loaded_bytes": 565018624,
+      "elapsed_sec": 3.0103,
+      "method": "rss-sampling",
+      "samples": 241,
+      "act": [
+        9715200,
+        13248000,
+        3532800
+      ],
+      "att": [
+        77721600,
+        12420000,
+        353280000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 3276800
+    },
+    {
+      "n_context": 3200,
+      "n_features": 90,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 13829750784,
+      "loaded_bytes": 554942464,
+      "elapsed_sec": 2.6947,
+      "method": "rss-sampling",
+      "samples": 227,
+      "act": [
+        14208000,
+        16102400,
+        1894400
+      ],
+      "att": [
+        113664000,
+        34217600,
+        94720000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 4608000
+    },
+    {
+      "n_context": 6400,
+      "n_features": 90,
+      "n_query": 500,
+      "status": "ok",
+      "peak_bytes": 24476385280,
+      "loaded_bytes": 592297984,
+      "elapsed_sec": 5.3508,
+      "method": "rss-sampling",
+      "samples": 351,
+      "act": [
+        26496000,
+        30028800,
+        3532800
+      ],
+      "att": [
+        211968000,
+        63811200,
+        353280000
+      ],
+      "weights_bytes": 110256776,
+      "persistent_bytes": 9216000
+    }
+  ]
+}

@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Marcel Neunhoeffer">
+<meta name="dcterms.date" content="2026-08-07">
+
+<title>Synthetic data with tabfound</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="synthetic-data_files/libs/clipboard/clipboard.min.js"></script>
+<script src="synthetic-data_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="synthetic-data_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="synthetic-data_files/libs/quarto-html/popper.min.js"></script>
+<script src="synthetic-data_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="synthetic-data_files/libs/quarto-html/anchor.min.js"></script>
+<link href="synthetic-data_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="synthetic-data_files/libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="synthetic-data_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="synthetic-data_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="synthetic-data_files/libs/bootstrap/bootstrap-917079515d91bccb85b543faf8aa8bb6.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+  <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#the-same-models-a-different-contract" id="toc-the-same-models-a-different-contract" class="nav-link active" data-scroll-target="#the-same-models-a-different-contract">The same models, a different contract</a></li>
+  <li><a href="#a-first-pass" id="toc-a-first-pass" class="nav-link" data-scroll-target="#a-first-pass">A first pass</a></li>
+  <li><a href="#the-sampler-is-the-main-design-axis" id="toc-the-sampler-is-the-main-design-axis" class="nav-link" data-scroll-target="#the-sampler-is-the-main-design-axis">The sampler is the main design axis</a></li>
+  <li><a href="#properness" id="toc-properness" class="nav-link" data-scroll-target="#properness">Properness</a></li>
+  <li><a href="#missing-and-special-values" id="toc-missing-and-special-values" class="nav-link" data-scroll-target="#missing-and-special-values">Missing and special values</a></li>
+  <li><a href="#controlling-the-pass" id="toc-controlling-the-pass" class="nav-link" data-scroll-target="#controlling-the-pass">Controlling the pass</a></li>
+  <li><a href="#letting-synthpop-drive-instead" id="toc-letting-synthpop-drive-instead" class="nav-link" data-scroll-target="#letting-synthpop-drive-instead">Letting synthpop drive instead</a></li>
+  <li><a href="#evaluating-what-came-out" id="toc-evaluating-what-came-out" class="nav-link" data-scroll-target="#evaluating-what-came-out">Evaluating what came out</a></li>
+  <li><a href="#scope" id="toc-scope" class="nav-link" data-scroll-target="#scope">Scope</a></li>
+  <li><a href="#reproducing-this" id="toc-reproducing-this" class="nav-link" data-scroll-target="#reproducing-this">Reproducing this</a></li>
+  <li><a href="#see-also" id="toc-see-also" class="nav-link" data-scroll-target="#see-also">See also</a></li>
+  </ul>
+</nav>
+</div>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Synthetic data with tabfound</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Marcel Neunhoeffer </p>
+          </div>
+  </div>
+    
+    <div>
+    <div class="quarto-title-meta-heading">Published</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date">August 7, 2026</p>
+    </div>
+  </div>
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="the-same-models-a-different-contract" class="level2">
+<h2 class="anchored" data-anchor-id="the-same-models-a-different-contract">The same models, a different contract</h2>
+<p>Multiple imputation and synthetic data generation are both fully conditional specification. They differ all the way down, but the two rows that carry the weight are <em>context</em> and <em>query</em>:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th>imputation (<code>tabfound_impute()</code>)</th>
+<th>synthesis (<code>tabfound_syn()</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>cells targeted</td>
+<td>the missing ones</td>
+<td>every row of every variable</td>
+</tr>
+<tr class="even">
+<td>conditioning set</td>
+<td>all other variables</td>
+<td>only variables already visited</td>
+</tr>
+<tr class="odd">
+<td>iteration</td>
+<td><code>maxit</code> sweeps toward a stationary distribution</td>
+<td>one ordered pass</td>
+</tr>
+<tr class="even">
+<td>context (“fit”)</td>
+<td>the current completed data, refit each sweep</td>
+<td>the <strong>original</strong> data, fit once per variable</td>
+</tr>
+<tr class="odd">
+<td>query</td>
+<td>the current completed covariates</td>
+<td>the <strong>synthetic</strong> covariates from earlier in the pass</td>
+</tr>
+<tr class="even">
+<td>combination rules</td>
+<td>Rubin</td>
+<td>Reiter / Raab–Nowok–Dibben</td>
+</tr>
+</tbody>
+</table>
+<p>Synthesis factorises the joint as p(x₁)·p(x₂|x₁)·p(x₃|x₁,x₂)·…, fits each conditional on real data and draws at synthetic covariates. The first variable is a bootstrap of the real marginal.</p>
+<p>Two consequences follow, and both matter:</p>
+<ul>
+<li><strong>It is cheaper.</strong> Cost drops from <em>m</em> × sweeps × <em>p</em> model fits to <em>p</em>. And because a “fit” here is only conditioning on a context, with <code>proper = FALSE</code> that context is identical across all <em>m</em> syntheses — so all <em>m</em> share one fit and one forward pass over a stacked query. A tree has to be regrown per synthesis; this does not.</li>
+<li><strong>It is statistically riskier.</strong> Imputation hides two things synthesis exposes: the sampler’s support behaviour, and the absence of parameter uncertainty in row-independent draws. Both get their own section below.</li>
+</ul>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Note
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>The code here is not evaluated when the vignette is built. Every output shown was produced by running the code exactly as written, against TabPFN v2.5 on CPU; see <a href="#reproducing-this">Reproducing this</a>.</p>
+</div>
+</div>
+</section>
+<section id="a-first-pass" class="level2">
+<h2 class="anchored" data-anchor-id="a-first-pass">A first pass</h2>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>mods <span class="ot">&lt;-</span> <span class="fu">tabfound_models</span>(<span class="at">classifier =</span> <span class="st">"tabpfn-v2.5-classifier"</span>,</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>                        <span class="at">regressor  =</span> <span class="st">"tabpfn-v2.5-regressor"</span>)</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>sds <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(iris, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">seed =</span> <span class="dv">20260807</span>)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>sds</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<pre><code>tabfound synthetic data
+* 5 synthetic data sets of 150 rows from 150
+* 5 variables synthesised: Sepal.Length, Sepal.Width, Petal.Length,
+  Petal.Width, and Species
+* draw mode: "predictive"
+* proper: TRUE
+i `as_synds()` for the synthpop toolchain (`compare()`, `utility.gen()`,
+  `lm.synds()`).</code></pre>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(sds<span class="sc">$</span>syn[[<span class="dv">1</span>]], <span class="dv">5</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<pre><code>  Sepal.Length Sepal.Width Petal.Length Petal.Width    Species
+1          5.5    2.615422     4.525384    1.200430 versicolor
+2          6.4    2.716248     5.331699    1.573342  virginica
+3          6.1    2.789541     3.974613    1.278386 versicolor
+4          6.9    3.206068     5.481702    2.237269  virginica
+5          7.0    3.202926     4.986701    1.721479 versicolor</code></pre>
+<p>Two things are visible in that output. <code>Sepal.Length</code> holds values with one decimal — real observed values, because it comes first in the visit sequence and has nothing to condition on, so it is a bootstrap of its own marginal. Everything after it carries many decimals: those are genuinely new numbers off a continuous predictive distribution. <code>method</code> records which is which:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>sds<span class="sc">$</span>method</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Sepal.Length  Sepal.Width Petal.Length  Petal.Width       Species</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;     "sample" "regression" "regression" "regression" "classification"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Does it keep the structure?</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">colMeans</span>(iris[<span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>])</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Sepal.Length  Sepal.Width Petal.Length  Petal.Width</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         5.84         3.06         3.76         1.20</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="co"># averaged over the 5 syntheses: 5.92  3.03  3.87  1.23</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cor</span>(iris<span class="sc">$</span>Petal.Length, iris<span class="sc">$</span>Petal.Width)          <span class="co">#&gt; 0.963</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="co"># averaged over the 5 syntheses:                  #&gt; 0.955</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(iris<span class="sc">$</span>Species)                               <span class="co">#&gt; 50 50 50</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="co"># averaged over the 5 syntheses:                  #&gt; 44.2 54.4 51.4</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>And inference, through synthpop’s synthetic-data variance estimator:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(synthpop)</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(<span class="fu">lm.synds</span>(Petal.Width <span class="sc">~</span> Petal.Length <span class="sc">+</span> Species, <span class="fu">as_synds</span>(sds)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<pre><code>Fit to synthetic data set with 5 syntheses. Inference to coefficients
+and standard errors that would be obtained from the original data.
+
+Combined estimates:
+                  xpct(Beta) xpct(se.Beta) xpct(z) Pr(&gt;|xpct(z)|)
+(Intercept)        -0.041713      0.057936 -0.7200         0.4715
+Petal.Length        0.200035      0.035042  5.7085      1.140e-08 ***
+Speciesversicolor   0.525878      0.104337  5.0402      4.651e-07 ***
+Speciesvirginica    0.919677      0.152033  6.0492      1.456e-09 ***</code></pre>
+<p>against the real data’s <code>0.230</code>, <code>0.435</code>, <code>0.838</code>. Same signs, same significance pattern, coefficients within about one standard error — which is roughly what a single-pass synthesiser on 150 rows should be expected to deliver, and no more.</p>
+</section>
+<section id="the-sampler-is-the-main-design-axis" class="level2">
+<h2 class="anchored" data-anchor-id="the-sampler-is-the-main-design-axis">The sampler is the main design axis</h2>
+<p><code>synthpop::syn.cart()</code> draws a leaf, then a donor uniformly from that leaf’s members. TabPFN’s regressor is structurally the same two stages — softmax the bucket logits, pick a bucket, draw uniformly inside it — with bucket weights in place of leaf membership counts.</p>
+<p>The difference propagates everywhere: <strong>CART’s support is the observed values; TabPFN’s is the continuum.</strong> <code>draw_mode</code> is how far from CART you want to be, and it is the utility/disclosure trade-off itself, so it belongs in the write-up rather than in a default nobody reads.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (dm <span class="cf">in</span> <span class="fu">c</span>(<span class="st">"predictive"</span>, <span class="st">"pmm"</span>, <span class="st">"rank"</span>)) {</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  s  <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(iris, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">draw_mode =</span> dm, <span class="at">seed =</span> <span class="dv">20260807</span>)</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  sy <span class="ot">&lt;-</span> <span class="fu">as_synds</span>(s)</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(dm,</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>      <span class="st">"S_pMSE"</span>,  <span class="fu">mean</span>(<span class="fu">utility.gen</span>(sy, iris)<span class="sc">$</span>S_pMSE),</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>      <span class="st">"repU"</span>,    <span class="fu">mean</span>(<span class="fu">colMeans</span>(<span class="fu">replicated.uniques</span>(sy, iris)<span class="sc">$</span>repU.rm)),</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>      <span class="st">"novel"</span>,   <span class="fu">mean</span>(<span class="fu">sapply</span>(s<span class="sc">$</span>syn, \(d) <span class="fu">mean</span>(<span class="sc">!</span>(d<span class="sc">$</span>Petal.Length <span class="sc">%in%</span> iris<span class="sc">$</span>Petal.Length)))),</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">"</span><span class="sc">\n</span><span class="st">"</span>)</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>mode</th>
+<th style="text-align: right;"><code>S_pMSE</code></th>
+<th style="text-align: right;">replicated uniques</th>
+<th style="text-align: right;">novel <code>Petal.Length</code> values</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>predictive</code></td>
+<td style="text-align: right;">4.40</td>
+<td style="text-align: right;">0.00%</td>
+<td style="text-align: right;">98.1%</td>
+</tr>
+<tr class="even">
+<td><code>pmm</code></td>
+<td style="text-align: right;">1.76</td>
+<td style="text-align: right;">3.33%</td>
+<td style="text-align: right;">0.0%</td>
+</tr>
+<tr class="odd">
+<td><code>rank</code></td>
+<td style="text-align: right;">1.64</td>
+<td style="text-align: right;">6.53%</td>
+<td style="text-align: right;">0.0%</td>
+</tr>
+<tr class="even">
+<td><code>synthpop::syn.cart</code></td>
+<td style="text-align: right;">1.46</td>
+<td style="text-align: right;">6.53%</td>
+<td style="text-align: right;">0.0%</td>
+</tr>
+</tbody>
+</table>
+<p>That table is the whole argument in miniature. <code>predictive</code> produces almost entirely novel values and replicates no unique record — and pays for it with a propensity score that separates real from synthetic much more easily (<code>S_pMSE</code> of 1 is what an indistinguishable synthesis scores). <code>pmm</code> and <code>rank</code> return real donors, which buys back utility and buys back replication risk in the same move; <code>rank</code> reproduces the marginal exactly, so part of its fidelity is by construction rather than by merit. <code>syn.cart</code> is the incumbent and is right there with them.</p>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Warning
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>One dataset, one seed, <code>n = 150</code>. This is an illustration of what the axis <em>is</em>, not a benchmark. A frontier worth citing needs several data sets, several seeds, and a disclosure battery — <code>replicated.uniques()</code> is the weakest of the available measures, not the strongest.</p>
+</div>
+</div>
+<p>Categorical variables need no such choice: a softmax over the levels plus one draw per row already <em>is</em> the exact analogue of drawing from a leaf’s class proportions.</p>
+<p><code>clamp</code> interacts with this and is worth knowing about. It holds <code>predictive</code> draws inside the observed range by flooring and capping them, which piles the excess mass onto the observed minimum and maximum. That is a boundary artefact, not a modelled point mass — if a variable has a real spike at its minimum, say so with <code>cont_na</code> (below) rather than letting <code>clamp</code> manufacture one.</p>
+</section>
+<section id="properness" class="level2">
+<h2 class="anchored" data-anchor-id="properness">Properness</h2>
+<p>These models draw each query row independently given a fixed context. There is no shared drawn θ across rows, so between-synthesis variance reflects predictive noise and carries <strong>no parameter uncertainty</strong>. That is the same defect that makes an imputer improper under Rubin’s rules — and for synthesis it is not a robustness check but a validity requirement, because the Reiter and Raab–Nowok–Dibben estimators that <code>lm.synds()</code> implements assume the mechanism propagates it.</p>
+<p><code>proper = TRUE</code> bootstraps the context rows once per synthesis, which is exactly synthpop’s definition of properness. It is the default here, and it is the one place <code>tabfound_syn()</code> deliberately disagrees with <code>synthpop::syn()</code>.</p>
+<p>You can see it do its job:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (p <span class="cf">in</span> <span class="fu">c</span>(<span class="cn">FALSE</span>, <span class="cn">TRUE</span>)) {</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  s <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(iris, <span class="at">m =</span> <span class="dv">10</span>, <span class="at">models =</span> mods, <span class="at">proper =</span> p, <span class="at">seed =</span> <span class="dv">11</span>)</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  b <span class="ot">&lt;-</span> <span class="fu">sapply</span>(s<span class="sc">$</span>syn, \(d) <span class="fu">coef</span>(<span class="fu">lm</span>(Petal.Width <span class="sc">~</span> Petal.Length, d))[[<span class="st">"Petal.Length"</span>]])</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="st">"proper ="</span>, p, <span class="st">" mean"</span>, <span class="fu">mean</span>(b), <span class="st">" sd"</span>, <span class="fu">sd</span>(b), <span class="st">"</span><span class="sc">\n</span><span class="st">"</span>)</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; proper = FALSE  mean 0.4108  sd 0.0091</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; proper = TRUE   mean 0.4046  sd 0.0141</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; (real data: 0.4158)</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Both centre on the real slope. The bootstrap widens the spread across syntheses by about half again — that added spread <em>is</em> the parameter uncertainty, and it is what the variance estimator is expecting to find. Turning it off costs one fit per variable instead of <em>m</em>, so <code>FALSE</code> is the fast setting, not the safe one.</p>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Important
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Whether coverage is actually nominal under the bootstrap is an open question, not something this vignette answers. The honest experiment is a calibration study on data-generating processes with known truth, reporting confidence-interval coverage for a battery of analysis models under improper and bootstrapped contexts at several <em>m</em>. Until that exists, treat <code>lm.synds()</code> intervals from this synthesiser as provisional.</p>
+</div>
+</div>
+</section>
+<section id="missing-and-special-values" class="level2">
+<h2 class="anchored" data-anchor-id="missing-and-special-values">Missing and special values</h2>
+<p><code>NA</code> is a value to reproduce, not a hole to fill. For a categorical variable it becomes a level the classifier draws like any other. For a continuous variable it is modelled in two parts — a categorical model for <em>which</em> special value (or “a real number”), then the regressor for the real numbers — because a bar distribution cannot put mass on a point.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>aq  <span class="ot">&lt;-</span> airquality[<span class="dv">1</span><span class="sc">:</span><span class="dv">100</span>, ]</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>s   <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(aq, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">seed =</span> <span class="dv">5</span>)</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="fu">colMeans</span>(<span class="fu">is.na</span>(aq))</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;   Ozone Solar.R    Wind    Temp   Month     Day</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;   0.310   0.070   0.000   0.000   0.000   0.000</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="co"># averaged over the 5 syntheses:</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;   0.328   0.076   0.000   0.000   0.000   0.000</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p><code>cont_na</code> extends the same machinery to any other point mass — a zero-inflated income variable, a bottom-coded score:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>sds <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(d, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">cont_na =</span> <span class="fu">list</span>(<span class="at">income =</span> <span class="dv">0</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Without it the spike is treated as a region of a continuous distribution and gets smeared across its neighbourhood.</p>
+</section>
+<section id="controlling-the-pass" class="level2">
+<h2 class="anchored" data-anchor-id="controlling-the-pass">Controlling the pass</h2>
+<p><strong>Visit sequence.</strong> With no iteration to wash it out, the order is not a detail: it decides which conditionals are modelled and which are only implied. Quantify its effect rather than assuming it away.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_syn</span>(iris, <span class="at">models =</span> mods,</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>             <span class="at">visit_sequence =</span> <span class="fu">c</span>(<span class="st">"Species"</span>, <span class="st">"Petal.Length"</span>, <span class="st">"Petal.Width"</span>,</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>                                <span class="st">"Sepal.Length"</span>, <span class="st">"Sepal.Width"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p><strong>Predictors.</strong> A 0/1 matrix in mice’s <code>predictorMatrix</code> layout. Entries naming a variable that has not been generated yet are dropped with a warning rather than silently honoured — a single ordered pass can only condition on what already exists.</p>
+<p><strong>Methods.</strong> <code>"regression"</code>, <code>"classification"</code>, <code>"sample"</code> (bootstrap the marginal, no model) or <code>""</code> (not synthesised — the real column is carried through, and is still available to condition on). Useful for a key you want left alone:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_syn</span>(d, <span class="at">models =</span> mods, <span class="at">method =</span> <span class="fu">c</span>(<span class="at">id =</span> <span class="st">""</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p><strong>Size.</strong> <code>k</code> sets the rows per synthetic data set independently of the input, so 150 rows of <code>iris</code> can produce 1000:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>big <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(iris, <span class="at">m =</span> <span class="dv">1</span>, <span class="at">k =</span> <span class="dv">1000</span>, <span class="at">models =</span> mods, <span class="at">seed =</span> <span class="dv">6</span>)</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(big<span class="sc">$</span>syn[[<span class="dv">1</span>]]<span class="sc">$</span>Species)</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; 275 364 361</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Note that <code>k != nrow(data)</code> changes which variance estimator applies downstream.</p>
+</section>
+<section id="letting-synthpop-drive-instead" class="level2">
+<h2 class="anchored" data-anchor-id="letting-synthpop-drive-instead">Letting synthpop drive instead</h2>
+<p><code>synthpop::syn()</code> dispatches on method name, so <code>method = "tabfound"</code> hands it the visit sequence and calls in here per variable. That buys synthpop’s <code>rules</code>/<code>rvalues</code> constraints, its <code>cont.na</code> handling, <code>k != n</code>, and — since the object is a native <code>synds</code> — everything downstream with no conversion at all.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">options</span>(<span class="at">tabfound.models =</span> mods)</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>sds <span class="ot">&lt;-</span> synthpop<span class="sc">::</span><span class="fu">syn</span>(iris, <span class="at">method =</span> <span class="st">"tabfound"</span>, <span class="at">m =</span> <span class="dv">2</span>, <span class="at">seed =</span> <span class="dv">20260807</span>)</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>sds<span class="sc">$</span>method</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Sepal.Length  Sepal.Width Petal.Length  Petal.Width      Species</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;     "sample"   "tabfound"   "tabfound"   "tabfound"   "tabfound"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<pre><code>  Sepal.Length Sepal.Width Petal.Length Petal.Width    Species
+1          6.4    2.787100     5.585445   2.2793370  virginica
+2          5.2    2.511311     3.262038   0.8982476 versicolor
+3          5.9    2.720448     5.147052   1.7012309  virginica</code></pre>
+<p><code>syn()</code> refuses any <code>...</code> argument that is not named for one of <em>its own</em> methods, so <code>syn(..., tabfound.draw_mode = "pmm")</code> cannot work. Tuning goes through an option instead:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">options</span>(<span class="at">tabfound.syn =</span> <span class="fu">list</span>(<span class="at">draw_mode =</span> <span class="st">"pmm"</span>, <span class="at">donors =</span> <span class="dv">3</span>))</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>s <span class="ot">&lt;-</span> synthpop<span class="sc">::</span><span class="fu">syn</span>(iris, <span class="at">method =</span> <span class="st">"tabfound"</span>, <span class="at">m =</span> <span class="dv">1</span>, <span class="at">proper =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="fu">all</span>(s<span class="sc">$</span>syn<span class="sc">$</span>Sepal.Width <span class="sc">%in%</span> iris<span class="sc">$</span>Sepal.Width)</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; TRUE</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Recognised entries are <code>models</code>, <code>draw</code>, <code>draw_mode</code>, <code>donors</code>, <code>smoothing</code>, <code>clamp</code> and <code>quantile_grid</code>. An unrecognised one is an error rather than a silent no-op.</p>
+<p>Two differences from <code>tabfound_syn()</code> are worth knowing. synthpop hands over its own frames, so factor predictors arrive as ordinal codes taken from the <em>context’s</em> levels — the query is recoded against them here, because coding the two independently would make the synthetic covariates address different categories than the model was fitted on. And <code>proper</code> follows synthpop’s default of <code>FALSE</code> rather than this package’s <code>TRUE</code>.</p>
+</section>
+<section id="evaluating-what-came-out" class="level2">
+<h2 class="anchored" data-anchor-id="evaluating-what-came-out">Evaluating what came out</h2>
+<p><code>tabfound_syn()</code> results go straight into synthpop’s generics, and <code>as_synds()</code> covers the rest:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="fu">compare</span>(sds, iris)                              <span class="co"># distributional fidelity</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="fu">utility.gen</span>(sds, iris)                          <span class="co"># propensity-score pMSE</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="fu">utility.tab</span>(sds, iris, <span class="at">vars =</span> <span class="st">"Species"</span>)        <span class="co"># tabular utility</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="fu">disclosure</span>(sds, iris,                           <span class="co"># attribute disclosure</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>           <span class="at">keys =</span> <span class="fu">c</span>(<span class="st">"Sepal.Length"</span>, <span class="st">"Sepal.Width"</span>), <span class="at">target =</span> <span class="st">"Species"</span>)</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>sy <span class="ot">&lt;-</span> <span class="fu">as_synds</span>(sds)                             <span class="co"># for the non-generic ones</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="fu">replicated.uniques</span>(sy, iris)</span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="fu">sdc</span>(sy, iris, <span class="at">rm.replicated.uniques =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; no. of replicated uniques removed from each synthetic data set:</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; 0, 0, 0, 0, 0</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(<span class="fu">glm.synds</span>(<span class="fu">I</span>(Species <span class="sc">==</span> <span class="st">"virginica"</span>) <span class="sc">~</span> Sepal.Width <span class="sc">+</span> Sepal.Length,</span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>                  sy, <span class="at">family =</span> binomial))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<pre><code>Combined estimates:
+             xpct(Beta) xpct(se.Beta) xpct(z) Pr(&gt;|xpct(z)|)
+(Intercept)   -18.73145       4.03426 -4.6431      3.432e-06 ***
+Sepal.Width    -0.47331       0.74865 -0.6322         0.5272
+Sepal.Length    3.20019       0.57998  5.5178      3.433e-08 ***</code></pre>
+<p>A battery worth running before releasing anything: propensity-score <code>utility.gen()</code>, one- and two-way <code>utility.tab()</code>, confidence-interval overlap across a fixed set of analysis models through <code>lm.synds()</code> / <code>glm.synds()</code>, marginal and pairwise-correlation recovery, and at least one three-way interaction — single-pass synthesis is precisely where higher-order structure degrades. Baselines: <code>syn.cart</code> smoothed and unsmoothed, <code>syn.norm</code>, <code>syn.normrank</code>.</p>
+</section>
+<section id="scope" class="level2">
+<h2 class="anchored" data-anchor-id="scope">Scope</h2>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Important
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>The context <strong>is</strong> the real data at generation time. This is a fully conditional synthesiser, not a disclosure-control method, and no differential-privacy claim is available from it.</p>
+</div>
+</div>
+<p>Sharp conditionals produce records close to real ones; the <code>pmm</code> and <code>rank</code> modes produce records built <em>from</em> real values. Measure replication and attribute disclosure on your own data and report the frontier — do not infer privacy from the fact that the values are synthetic.</p>
+<p>Two further limits: high-cardinality factors and wide tables run into the backends’ own ceilings rather than anything this code imposes, and there is no reference implementation to be verified against, so the parity harness has nothing to say about any of it. Like <code>tabfound_impute()</code>, this is a use of the fitted models, not a claim about them.</p>
+</section>
+<section id="reproducing-this" class="level2">
+<h2 class="anchored" data-anchor-id="reproducing-this">Reproducing this</h2>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-classifier"</span>)</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-regressor"</span>)</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="fu">install.packages</span>(<span class="st">"synthpop"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Outputs above are single-threaded CPU on macOS/arm64, R 4.5.2, <code>torch</code> 0.16.3, <code>synthpop</code> 1.9.1, TabPFN v2.5.</p>
+</section>
+<section id="see-also" class="level2">
+<h2 class="anchored" data-anchor-id="see-also">See also</h2>
+<ul>
+<li><code>vignette("tabfound")</code> — the models, the API, and everything else</li>
+<li><code>vignette("multiple-imputation", "tabfound")</code> — the same predictive distributions pointed at the missing cells instead of every cell</li>
+<li><code>?tabfound_syn</code>, <code>?as_synds</code>, <code>?syn.tabfound</code>, <code>?tabfound_synthetic</code></li>
+</ul>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
