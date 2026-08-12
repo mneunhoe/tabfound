@@ -13,7 +13,10 @@ tabicl_regressor(
   random_state = 42L,
   quantile_subsample = NULL,
   predict_chunk_size = 1024L,
-  kv_cache = FALSE
+  kv_cache = FALSE,
+  row_chunk_size = NULL,
+  save_peak_memory_factor = NULL,
+  col_chunk_size = NULL
 )
 }
 \arguments{

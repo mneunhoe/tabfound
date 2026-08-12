@@ -18,7 +18,11 @@
   icl_blocks,
   cell_tokens = NULL,
   kv_cache = FALSE,
-  n_estimators = 1
+  n_estimators = 1,
+  masked_attention = FALSE,
+  row_chunk = Inf,
+  group_channels = 0,
+  col_chunk = Inf
 )
 }
 \arguments{

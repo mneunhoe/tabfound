@@ -749,26 +749,88 @@ parity_tabpfn3 <- function(reference_dir, fixture_dir, fixture,
   x_test  <- py$x_test$unsqueeze(1L)
   y_train <- py$y_train$unsqueeze(1L)
 
-  out <- torch::with_no_grad(net(x_train, y_train, x_test))
+  # `row_chunk_size = NULL` is the unchunked pass, asked for by name. The
+  # network's own default is the checkpoint's 2048/4, matching what the
+  # reference does when nobody passes `performance_options` -- so on a
+  # fixture above 2048 rows, leaving this out would compare a chunked R
+  # pass against an unchunked Python one and call the difference a
+  # mismatch. The Python harness names its paths the same way.
+  out <- torch::with_no_grad(net(x_train, y_train, x_test,
+                                 row_chunk_size = NULL))
   r_plain <- as.array(out$logits[1, , ])
   add("forward:logits", tensor_diff(r_plain, as.array(py$logits)))
 
+  # Neither of v3's cheap paths is bitwise: both change the batch shapes
+  # the attention kernel sees, which in float32 moves the last bits. How
+  # far they move it grows with the table, so a fixed bound is the wrong
+  # instrument -- on 2,664 rows the reference's *own* chunked pass sits
+  # 1.5e-5 of scale from its own plain one, above the 1e-5 these rows
+  # used to carry. Graded as a ratio instead: the port may reorganise the
+  # arithmetic, but no more than the reference reorganises it. The
+  # absolute bound is kept as an alternative so a fixture small enough
+  # for both sides to be near-exact still passes on its own terms.
+  py_shift <- function(nm) {
+    if (is.null(py[[nm]])) return(NA_real_)
+    max(abs(as.array(py[[nm]]) - as.array(py$logits)))
+  }
+  add_selfcheck <- function(stage, r_alt, ref_name) {
+    shift <- max(abs(r_alt - r_plain))
+    ref <- py_shift(ref_name)
+    ratio <- if (!is.na(ref) && ref > 0) shift / ref
+             else if (shift == 0) 0 else Inf
+    add(stage,
+        list(n = length(r_alt), max_abs = shift, max_rel = ratio,
+             max_scaled = shift / max(abs(r_plain))),
+        note = sprintf("reference's own gap %.3e", ref))
+  }
+
   if (!is.null(py$logits_chunked)) {
     chunked <- as.array(torch::with_no_grad(net(
-      x_train, y_train, x_test,
+      x_train, y_train, x_test, row_chunk_size = NULL,
       save_peak_memory_factor = as.integer(meta$save_peak_memory_factor %||% 8L)
     ))$logits[1, , ])
     add("forward:chunked", tensor_diff(chunked, as.array(py$logits_chunked)))
-    add("selfcheck:chunked-fp32", tensor_diff(chunked, r_plain))
+    add_selfcheck("selfcheck:chunked-fp32", chunked, "logits_chunked")
   }
+
+  # The row/column chunking of stages 0-2, at the chunk sizes the
+  # reference used. Below `row_chunk_size` rows neither side's loop runs
+  # more than once, so the row is the plain forward under another name
+  # and is labelled "-inactive"; above it, this is the mechanism.
+  if (!is.null(py$logits_stage_chunked)) {
+    stage_chunked <- as.array(torch::with_no_grad(net(
+      x_train, y_train, x_test,
+      row_chunk_size = as.integer(meta$row_chunk_size %||% 2048L),
+      col_chunk_size = as.integer(meta$col_chunk_size %||% 4L)
+    ))$logits[1, , ])
+    active <- isTRUE(meta$stage_chunking_active)
+    add(if (active) "forward:stage-chunked" else "forward:stage-chunked-inactive",
+        tensor_diff(stage_chunked, as.array(py$logits_stage_chunked)),
+        note = sprintf("row %s / col %s", meta$row_chunk_size %||% "?",
+                       meta$col_chunk_size %||% "?"))
+    # And against R's own plain pass, ratio-graded like the other two
+    # mechanisms: the port may reorganise the arithmetic, but no more
+    # than the reference reorganises it for the same reason.
+    if (active) {
+      add_selfcheck("selfcheck:stage-chunked-fp32", stage_chunked,
+                    "logits_stage_chunked")
+    } else {
+      # Nothing was chunked, so this must be bit-for-bit the plain pass.
+      add("selfcheck:stage-chunked",
+          tensor_diff(stage_chunked, r_plain),
+          note = "chunk size exceeds the row count; one iteration")
+    }
+  }
+
   if (!is.null(py$logits_cached)) {
     no_rows <- torch::torch_zeros(c(1L, 0L, py$x_train$size(2)))
     cache <- torch::with_no_grad(net(
-      x_train, y_train, no_rows, return_kv_cache = TRUE))$kv_cache
+      x_train, y_train, no_rows, return_kv_cache = TRUE,
+      row_chunk_size = NULL))$kv_cache
     cached <- as.array(torch::with_no_grad(net(
-      NULL, NULL, x_test, kv_cache = cache))$logits[1, , ])
+      NULL, NULL, x_test, kv_cache = cache, row_chunk_size = NULL))$logits[1, , ])
     add("forward:cached", tensor_diff(cached, as.array(py$logits_cached)))
-    add("selfcheck:cached-fp32", tensor_diff(cached, r_plain))
+    add_selfcheck("selfcheck:cached-fp32", cached, "logits_cached")
   }
 
   temp <- meta$softmax_temperature %||% 0.9
@@ -855,10 +917,23 @@ parity_tolerances <- function() {
               # v3's counterparts. Both mechanisms are the same
               # computation as the plain forward, but neither is bitwise:
               # they change the batch shapes the attention kernel sees,
-              # which in float32 moves the last bits. Graded on the
-              # logits' own scale at 1e-5, ~1000x below anything that
-              # could reach a prediction through the softmax.
+              # which in float32 moves the last bits -- and by more the
+              # bigger the table, which is why `tol_rel` here is a
+              # *ratio* to the reference's own gap between the same two
+              # paths rather than an error. Passes at no more than twice
+              # the reorganisation the reference itself does, or on the
+              # 1e-5 scale bound, which is what a small fixture clears on
+              # its own terms.
               "selfcheck:chunked-fp32", "selfcheck:cached-fp32",
+              # v3's stage-0-2 row/column chunking. Cross-implementation,
+              # so the plain forward's bounds; and against R's own plain
+              # pass, the same ratio treatment as the other two
+              # mechanisms. Below the chunk size the loop runs once and
+              # the "-inactive" pair must be exact, which is what catches
+              # a driver that copies or reorders even when it has nothing
+              # to do.
+              "forward:stage-chunked", "forward:stage-chunked-inactive",
+              "selfcheck:stage-chunked-fp32", "selfcheck:stage-chunked",
               # Informational: on data where the cache legitimately
               # changes the answer, how much it changed it. Graded by
               # `forward:cached` instead.
@@ -873,14 +948,14 @@ parity_tolerances <- function() {
                 1e-4,
                 1e-6, 1e-6, 1e-4,
                 1e-6, 1e-5, 1e-5, 1e-4,
-                1e-3, 1e-3, 0, 0, 0, 0, Inf, 0),
+                1e-3, 1e-3, 0, 0, 0, 0, 0, 1e-3, 0, 0, Inf, 0),
     tol_rel = c(1e-6, 1e-6, 1e-6, 1e-3, 1e-4, 1e-4, 1e-4,
                 1e-4, 1e-4, 1e-4,
                 1e-6, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3,
                 1e-3,
                 1e-6, 1e-6, 1e-3,
                 1e-6, 1e-5, 1e-5, 1e-4,
-                1e-3, 1e-3, 0, 0, 0, 0, Inf, 1.5),
+                1e-3, 1e-3, 0, 0, 2, 2, 0, 1e-3, 2, 0, Inf, 1.5),
     # Scale-relative bound, used only where a tensor's dynamic range
     # makes the other two meaningless. NA disables it.
     tol_scaled = c(NA, NA, NA, 1e-4, NA, NA, NA,
@@ -889,7 +964,7 @@ parity_tolerances <- function() {
                    1e-4,
                    NA, NA, 1e-4,
                    NA, 1e-5, 1e-5, NA,
-                   1e-4, 1e-4, NA, NA, 1e-5, 1e-5, NA, NA),
+                   1e-4, 1e-4, NA, NA, 1e-5, 1e-5, 1e-4, 1e-4, 1e-5, NA, NA, NA),
     stringsAsFactors = FALSE
   )
 }

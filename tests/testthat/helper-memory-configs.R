@@ -23,6 +23,17 @@ mem_config_tabpfn25 <- function() {
   )
 }
 
+# v2.6 shares v2.5's `peak_terms()` and its config field names; what
+# differs for the estimator is the backend *name*, which is what the
+# suggestions branch on -- v2.6 has `save_peak_memory_factor` but no
+# stage chunking, and should say so rather than offer a knob it cannot
+# honour.
+mem_config_tabpfn26 <- function() {
+  cfg <- mem_config_tabpfn25()
+  cfg$arch <- "tabpfn_v2_6"
+  cfg
+}
+
 mem_config_tabpfn3 <- function() {
   list(
     arch = "tabpfn_v3", head = "classifier",

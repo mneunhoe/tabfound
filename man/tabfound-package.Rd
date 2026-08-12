@@ -22,8 +22,8 @@ User-facing entry points are \code{\link[=tabular_classifier]{tabular_classifier
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/marcel-neunhoeffer/tabfound}
-  \item Report bugs at \url{https://github.com/marcel-neunhoeffer/tabfound/issues}
+  \item \url{https://github.com/mneunhoe/tabfound}
+  \item Report bugs at \url{https://github.com/mneunhoe/tabfound/issues}
 }
 
 }

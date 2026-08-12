@@ -12,7 +12,9 @@ tabpfn_regressor(
   trace_dir = NULL,
   categorical_features = NULL,
   kv_cache = FALSE,
-  save_peak_memory_factor = NULL
+  save_peak_memory_factor = NULL,
+  row_chunk_size = NA_integer_,
+  col_chunk_size = NA_integer_
 )
 }
 \arguments{
@@ -58,6 +60,21 @@ Splits each sublayer's work into this many chunks, shrinking the
 attention score matrix each one materialises. Bit-identical output,
 lower peak memory, slightly more overhead. Supported by the
 \code{tabpfn26} and \code{tabpfn3} backends.}
+
+\item{row_chunk_size, col_chunk_size}{Stage-0-2 chunking, \code{tabpfn3}
+only. The first drives the cell embedding, distribution embedder and
+column aggregator a chunk of rows at a time, so the
+\verb{(rows, columns, embedding)} tensor is never resident whole; the
+second bounds the column-wise pre-pass that builds the distribution
+embedder's inducing summaries. Left alone, both take the checkpoint's
+own values -- 2048 and 4, which is what the Python reference does by
+default on this architecture. \code{NULL} runs every row in one pass,
+which is what this package did before the chunking landed.
+
+Unlike \code{save_peak_memory_factor} this is not bit-identical: it
+changes the batch shapes the attention kernel sees, and on the
+package's large fixture it moves the logits by 1.4e-5 of their own
+scale -- less than the reference's own chunked pass moves them.}
 }
 \description{
 Build the TabPFN regressor predictor

@@ -18,5 +18,8 @@
   "n_train": 100,
   "n_test": 50,
   "n_features": 4,
-  "save_peak_memory_factor": 8
+  "save_peak_memory_factor": 8,
+  "row_chunk_size": 2048,
+  "col_chunk_size": 4,
+  "stage_chunking_active": false
 }

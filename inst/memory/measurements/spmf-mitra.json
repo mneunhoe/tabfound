@@ -1,0 +1,86 @@
+{
+  "backend": "mitra",
+  "model_id": "mitra-classifier",
+  "point": {
+    "n_context": 4000,
+    "n_query": 500,
+    "n_features": 50
+  },
+  "measured_on": "2026-08-12",
+  "machine_total_bytes": 51539607552,
+  "spmf_floor": 0.634721769473904,
+  "points": [
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 40818884608,
+      "loaded_bytes": 973684736,
+      "elapsed_sec": 48.0549,
+      "method": "rss-sampling",
+      "samples": 2018,
+      "spmf": 1
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 33601028096,
+      "loaded_bytes": 981696512,
+      "elapsed_sec": 28.1268,
+      "method": "rss-sampling",
+      "samples": 1523,
+      "spmf": 2
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 24326701056,
+      "loaded_bytes": 978190336,
+      "elapsed_sec": 29.2865,
+      "method": "rss-sampling",
+      "samples": 1582,
+      "spmf": 4
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 21372944384,
+      "loaded_bytes": 999800832,
+      "elapsed_sec": 34.212,
+      "method": "rss-sampling",
+      "samples": 1813,
+      "spmf": 8
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 17852776448,
+      "loaded_bytes": 998572032,
+      "elapsed_sec": 37.8811,
+      "method": "rss-sampling",
+      "samples": 2005,
+      "spmf": 16
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 14849998848,
+      "loaded_bytes": 975634432,
+      "elapsed_sec": 47.3385,
+      "method": "rss-sampling",
+      "samples": 2456,
+      "spmf": 32
+    }
+  ]
+}

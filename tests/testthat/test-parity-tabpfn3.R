@@ -30,7 +30,12 @@ model_dir_for <- function(fixture) {
 # `clf_binary_missing` is the one that matters most: a constant column and
 # 25 NaNs put the indicator channel, the mean imputation and the
 # zero-variance branch of the in-architecture scaler all on the same pass.
-fixtures <- c("clf_iris", "clf_binary_missing", "clf_tiny",
+#
+# `clf_large` is the only one big enough for the reference's own
+# `_stages_0_to_2` row/column chunking to fire (2,664 rows against its
+# 2,048-row default), so it is the only one that says anything about the
+# chunked path.
+fixtures <- c("clf_iris", "clf_binary_missing", "clf_tiny", "clf_large",
               "reg_iris", "reg_skewed", "reg_tiny")
 
 for (fx in fixtures) {

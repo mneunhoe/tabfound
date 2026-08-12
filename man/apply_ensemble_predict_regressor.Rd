@@ -18,7 +18,9 @@ apply_ensemble_predict_regressor(
   trace_dir = NULL,
   categorical_features = integer(),
   kv_caches = NULL,
-  save_peak_memory_factor = NULL
+  save_peak_memory_factor = NULL,
+  row_chunk_size = NA_integer_,
+  col_chunk_size = NA_integer_
 )
 }
 \arguments{

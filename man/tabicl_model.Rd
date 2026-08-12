@@ -6,7 +6,104 @@
 \usage{
 tabicl_model(config)
 }
+\arguments{
+\item{x}{\verb{(B, T, H)}, labelled rows first.}
+
+\item{y_train}{\verb{(B, train_size)}, or \code{NULL} when every row is a test
+row (the cache-consuming path).}
+
+\item{col_hidden}{Per-block summaries from a cache, or \code{NULL} to
+build them from the labelled rows.}
+
+\item{row_chunk_size}{Rows per pass, or \code{NULL} for all at once.}
+
+\item{col_chunk_size}{Columns per pass of the summary pre-pass. The
+row loop cannot start until the summaries exist, so on a wide
+table this is what decides whether row chunking helps at all.}
+}
+\value{
+\verb{(B, T, num_cls * E)} row representations.
+}
 \description{
 TabICL (top level)
 }
+\section{The invariant this must not break}{
+
+Only the inducing half of a column block carries scalable softmax,
+and its scale depends on the \emph{source} length -- the number of rows
+being read. So the summaries are built once, from all the labelled
+rows, and chunks only ever pass through the second half, whose keys
+and values are the fixed inducing set. If a chunk ever reached the
+first half, the answer would depend on the chunk size, and it would
+look entirely reasonable.
+}
+
+\keyword{*}
+\keyword{--}
+\keyword{E)`}
+\keyword{HC,}
+\keyword{T,}
+\keyword{The}
+\keyword{What}
+\keyword{`(B,}
+\keyword{a}
+\keyword{and}
+\keyword{at}
+\keyword{avoids}
+\keyword{carries}
+\keyword{chunk}
+\keyword{column}
+\keyword{columns.}
+\keyword{decides}
+\keyword{depends}
+\keyword{embedding}
+\keyword{embedding,}
+\keyword{every}
+\keyword{exist,}
+\keyword{fits.}
+\keyword{fixed}
+\keyword{full}
+\keyword{handful}
+\keyword{how}
+\keyword{however}
 \keyword{internal}
+\keyword{is}
+\keyword{itself,}
+\keyword{large}
+\keyword{legitimate:}
+\keyword{loop}
+\keyword{makes}
+\keyword{num_cls}
+\keyword{of}
+\keyword{on}
+\keyword{once}
+\keyword{one}
+\keyword{optionally}
+\keyword{over}
+\keyword{path}
+\keyword{per}
+\keyword{per-block}
+\keyword{prefix}
+\keyword{row}
+\keyword{row's}
+\keyword{row-independent}
+\keyword{rows}
+\keyword{sequence}
+\keyword{stage}
+\keyword{stage's}
+\keyword{stages,}
+\keyword{summaries}
+\keyword{survives}
+\keyword{table}
+\keyword{table.}
+\keyword{term}
+\keyword{that}
+\keyword{the}
+\keyword{this}
+\keyword{through}
+\keyword{time}
+\keyword{vectors}
+\keyword{what}
+\keyword{which}
+\keyword{wide}
+\keyword{width}

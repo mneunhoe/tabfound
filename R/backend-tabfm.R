@@ -190,11 +190,57 @@ tabfm_col_embedding <- torch::nn_module(
   },
 
   # Run the training rows through, keeping each block's inducing summary.
+  #
+  # @param col_chunk_size Columns per pass, or `NULL` for all at once.
+  #   Every column is embedded on its own -- `prepare()` folds them into
+  #   the attention batch -- so this changes nothing about the answer.
+  #   It is the term that matters on this backend: measured at
+  #   4,000 x 90, the cumulative pre-pass peak goes 12.9 GB after the
+  #   cell embedder to 29.2 GB after this stage, and a row-chunked
+  #   forward cannot start until it finishes.
   # @return `list(out, hidden)`.
-  build_hidden = function(x, train_size) {
-    p <- self$prepare(x, train_size)
-    built <- self$tf_col$build_hidden(p$src, attn_mask = p$mask)
-    list(out = self$project_out(built$src, p), hidden = built$hidden)
+  build_hidden = function(x, train_size, col_chunk_size = NULL) {
+    hc <- x$size(3)
+    cc <- suppressWarnings(as.integer(col_chunk_size %||% NA_integer_))
+    if (is.na(cc) || cc < 1L || cc >= hc) {
+      p <- self$prepare(x, train_size)
+      built <- self$tf_col$build_hidden(p$src, attn_mask = p$mask)
+      return(list(out = self$project_out(built$src, p),
+                  hidden = built$hidden))
+    }
+
+    b <- x$size(1)
+    outs <- list()
+    hids <- NULL
+    for (s in seq(1L, hc, by = cc)) {
+      len <- min(s + cc - 1L, hc) - s + 1L
+      p <- self$prepare(x$narrow(3L, s, len), train_size)
+      built <- self$tf_col$build_hidden(p$src, attn_mask = p$mask)
+      outs[[length(outs) + 1L]] <- self$project_out(built$src, p)
+      # `prepare()` flattened `(b, hc)` into the attention batch, so the
+      # summaries come back folded. Unfold before concatenating, or a
+      # batch of more than one would interleave its datasets' columns --
+      # which stays finite, stays plausible, and is wrong.
+      unfolded <- lapply(built$hidden, function(h) {
+        h$reshape(c(b, len, h$size(2), h$size(3)))
+      })
+      if (is.null(hids)) {
+        hids <- lapply(unfolded, list)
+      } else {
+        for (i in seq_along(hids)) {
+          hids[[i]][[length(hids[[i]]) + 1L]] <- unfolded[[i]]
+        }
+      }
+      collect_between_layers(outs[[length(outs)]])
+    }
+    list(
+      out = if (length(outs) == 1L) outs[[1L]] else
+        torch::torch_cat(outs, dim = 3L),
+      hidden = lapply(hids, function(h) {
+        full <- if (length(h) == 1L) h[[1L]] else torch::torch_cat(h, dim = 2L)
+        full$reshape(c(b * hc, full$size(3), full$size(4)))
+      })
+    )
   },
 
   #' Embed test rows against prebuilt block summaries.
@@ -407,6 +453,7 @@ tabfm_model <- torch::nn_module(
 
     # Read by the predictors; see `tabfm_kv_cache()`.
     self$supports_kv_cache <- TRUE
+    self$supports_stage_chunking <- TRUE
     self$kv_cache_is_exact <- TRUE
   },
 
@@ -435,12 +482,13 @@ tabfm_model <- torch::nn_module(
   # @param y `(B, train_size)`; @param train_size `(B)` long.
   # @param cat_mask As in `forward()`. A cache is only valid for the mask
   #   it was built with, since the mask changes how cells are embedded.
-  build_kv_cache = function(x, y, train_size, cat_mask = NULL) {
+  build_kv_cache = function(x, y, train_size, cat_mask = NULL,
+                            col_chunk_size = NULL) {
     x <- self$fill_missing(x)
     emb <- self$cell_embedder(x, y, train_size, cat_mask)
-    c1 <- self$col_embedder$build_hidden(emb, train_size)
+    c1 <- self$col_embedder$build_hidden(emb, train_size, col_chunk_size)
     emb <- self$row_interactor(self$add_cls(c1$out))
-    c2 <- self$col_embedder_2$build_hidden(emb, train_size)
+    c2 <- self$col_embedder_2$build_hidden(emb, train_size, col_chunk_size)
     reps <- self$row_interactor_2(c2$out)
     tabfm_kv_cache(
       col_hidden   = list(c1$hidden, c2$hidden),
@@ -468,34 +516,105 @@ tabfm_model <- torch::nn_module(
   # SVD features (see `tabfm_ensemble_fit()`, which rejects them). With
   # uniform widths `d` equals the column count for every member, and the
   # reference's own arithmetic then reduces to this one exactly.
-  forward = function(x, y, train_size, cat_mask = NULL, kv_cache = NULL) {
-    if (!is.null(kv_cache)) {
-      return(self$forward_cached(x, kv_cache, cat_mask = cat_mask))
+  #' Everything before the in-context stage, optionally a chunk of rows
+  #' at a time
+  #'
+  #' The same shape TabICL has, with one more of each stage: cells, then
+  #' columns, then rows, then columns and rows again. Once the two column
+  #' stages' inducing summaries exist, every row's path to its
+  #' representation depends on the summaries and on itself, which is what
+  #' makes the loop legitimate.
+  #'
+  #' TabFM restricts context by **masking** where TabICL slices, but that
+  #' only changes how the summaries are built, not what they are: they
+  #' come from the labelled rows either way, and a chunk never reaches
+  #' the attention that reads across rows.
+  #'
+  #' @param col_hidden `list(hidden_1, hidden_2)` from a cache, or `NULL`
+  #'   to build them from the labelled rows.
+  #' @param row_chunk_size Rows per pass, or `NULL` for all at once.
+  #' @keywords internal
+  stages_0_to_1 = function(x, y, train_size, cat_mask = NULL,
+                           col_hidden = NULL, row_chunk_size = NULL,
+                           dump = TRUE, col_chunk_size = NULL) {
+    n_rows <- x$size(2)
+    size <- suppressWarnings(as.integer(row_chunk_size %||% NA_integer_))
+    use_chunks <- !is.na(size) && size >= 1L && size < n_rows
+
+    hidden <- col_hidden
+    if (use_chunks && is.null(hidden)) {
+      n_train <- as.integer(train_size$max()$cpu()$item())
+      if (n_train <= 0L) {
+        cli::cli_abort("Row chunking needs either labelled rows or a cache.")
+      }
+      emb <- self$cell_embedder(x$narrow(2L, 1L, n_train),
+                                y$narrow(2L, 1L, n_train),
+                                train_size, cat_mask)
+      c1 <- self$col_embedder$build_hidden(emb, train_size, col_chunk_size)
+      emb <- self$row_interactor(self$add_cls(c1$out))
+      c2 <- self$col_embedder_2$build_hidden(emb, train_size, col_chunk_size)
+      hidden <- list(c1$hidden, c2$hidden)
     }
-    x <- self$fill_missing(x)
 
     # Stage outputs are dumped when TABFOUND_DUMP_DIR is set, under the
     # same names the Python parity script hooks. Six stages is enough to
-    # bisect any mismatch to one module.
-    emb <- self$cell_embedder(x, y, train_size, cat_mask)
-    dump_if_enabled("tabfm_cell", emb)
-    emb <- self$col_embedder(emb, train_size)
-    dump_if_enabled("tabfm_col1", emb)
+    # bisect any mismatch to one module -- and a chunked run would
+    # overwrite each of them once per chunk, so only the single-pass path
+    # writes them.
+    trace <- isTRUE(dump) && !use_chunks
+    run <- function(xc, yc, tsc) {
+      emb <- self$cell_embedder(xc, yc, tsc, cat_mask)
+      if (trace) dump_if_enabled("tabfm_cell", emb)
+      emb <- if (is.null(hidden)) self$col_embedder(emb, tsc)
+             else self$col_embedder$forward_cached(emb, hidden[[1]])
+      if (trace) dump_if_enabled("tabfm_col1", emb)
+      emb <- self$row_interactor(self$add_cls(emb))
+      if (trace) dump_if_enabled("tabfm_row1", emb)
+      emb <- if (is.null(hidden)) self$col_embedder_2(emb, tsc)
+             else self$col_embedder_2$forward_cached(emb, hidden[[2]])
+      if (trace) dump_if_enabled("tabfm_col2", emb)
+      self$row_interactor_2(emb)
+    }
 
-    emb <- self$row_interactor(self$add_cls(emb))
-    dump_if_enabled("tabfm_row1", emb)
-    emb <- self$col_embedder_2(emb, train_size)
-    dump_if_enabled("tabfm_col2", emb)
-    reps <- self$row_interactor_2(emb)
-    dump_if_enabled("tabfm_reps", reps)
+    if (!use_chunks) {
+      reps <- run(x, y, train_size)
+      if (trace) dump_if_enabled("tabfm_reps", reps)
+      return(reps)
+    }
 
+    parts <- vector("list", length(seq(1L, n_rows, by = size)))
+    j <- 0L
+    for (s in seq(1L, n_rows, by = size)) {
+      j <- j + 1L
+      len <- min(s + size - 1L, n_rows) - s + 1L
+      # How many rows of *this* chunk are labelled, per batch element.
+      tsc <- torch::torch_clamp(train_size - (s - 1L), min = 0L, max = len)
+      parts[[j]] <- run(x$narrow(2L, s, len), y$narrow(2L, s, len), tsc)
+      collect_between_layers(parts[[j]])
+    }
+    if (j == 1L) parts[[1L]] else torch::torch_cat(parts, dim = 2L)
+  },
+
+  # @param row_chunk_size Rows per pass through everything before the
+  #   in-context stage; see `stages_0_to_1()`.
+  forward = function(x, y, train_size, cat_mask = NULL, kv_cache = NULL,
+                     row_chunk_size = NULL, col_chunk_size = NULL) {
+    if (!is.null(kv_cache)) {
+      return(self$forward_cached(x, kv_cache, cat_mask = cat_mask,
+                                 row_chunk_size = row_chunk_size))
+    }
+    x <- self$fill_missing(x)
+    reps <- self$stages_0_to_1(x, y, train_size, cat_mask,
+                               row_chunk_size = row_chunk_size,
+                               col_chunk_size = col_chunk_size)
     out <- self$icl_predictor(reps, y, train_size)
     dump_if_enabled("tabfm_logits", out)
     out
   },
 
   #' @keywords internal
-  forward_cached = function(x, kv_cache, cat_mask = NULL) {
+  forward_cached = function(x, kv_cache, cat_mask = NULL,
+                            row_chunk_size = NULL) {
     if (x$size(3) != kv_cache$n_features) {
       cli::cli_abort(
         "This cache was built for {kv_cache$n_features} feature{?s}; \\
@@ -517,18 +636,9 @@ tabfm_model <- torch::nn_module(
     train_size <- torch::torch_zeros(x$size(1), dtype = torch::torch_long(),
                                      device = x$device)
 
-    emb <- self$cell_embedder(x, y, train_size, cat_mask)
-    dump_if_enabled("tabfm_cell", emb)
-    emb <- self$col_embedder$forward_cached(emb, kv_cache$col_hidden[[1]])
-    dump_if_enabled("tabfm_col1", emb)
-
-    emb <- self$row_interactor(self$add_cls(emb))
-    dump_if_enabled("tabfm_row1", emb)
-    emb <- self$col_embedder_2$forward_cached(emb, kv_cache$col_hidden[[2]])
-    dump_if_enabled("tabfm_col2", emb)
-    reps <- self$row_interactor_2(emb)
-    dump_if_enabled("tabfm_reps", reps)
-
+    reps <- self$stages_0_to_1(x, y, train_size, cat_mask,
+                               col_hidden = kv_cache$col_hidden,
+                               row_chunk_size = row_chunk_size)
     out <- self$icl_predictor$forward_cached(reps, kv_cache$icl_kv)
     dump_if_enabled("tabfm_logits", out)
     out
@@ -682,24 +792,29 @@ tabfm_subfolder_for <- function(task) {
 # (`max_num_rows`), so each one's cache is built from that member's own
 # training rows rather than from a shared tensor.
 # @keywords internal
-.tabfm_member_out <- function(net, dev, mem, n_test, cat_mask, cache_store, i) {
+.tabfm_member_out <- function(net, dev, mem, n_test, cat_mask, cache_store, i,
+                              row_chunk_size = NULL, col_chunk_size = NULL) {
   n_tr <- nrow(mem$X) - n_test
   X_train <- mem$X[seq_len(n_tr), , drop = FALSE]
   X_test  <- mem$X[-seq_len(n_tr), , drop = FALSE]
   if (is.null(cache_store)) {
     b <- .tabfm_batch(X_train, mem$y, X_test, cat_mask, dev)
-    out <- torch::with_no_grad({ net(b$x, b$y, b$train_size, b$cat_mask) })
+    out <- torch::with_no_grad({
+      net(b$x, b$y, b$train_size, b$cat_mask,
+          row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size)
+    })
     return(list(out = out, block = out[1, (b$n_train + 1L):out$size(2), ]))
   }
   cache <- member_cache(cache_store, i, function() {
     b <- .tabfm_batch(X_train, mem$y, X_train[0L, , drop = FALSE], cat_mask, dev)
     torch::with_no_grad({
-      net$build_kv_cache(b$x, b$y, b$train_size, b$cat_mask)
+      net$build_kv_cache(b$x, b$y, b$train_size, b$cat_mask, col_chunk_size)
     })
   })
   x_te <- as_float_tensor(as.matrix(X_test), device = dev)$unsqueeze(1L)
   out <- torch::with_no_grad({
-    net(x_te, NULL, NULL, .tabfm_cat_tensor(cat_mask, dev), kv_cache = cache)
+    net(x_te, NULL, NULL, .tabfm_cat_tensor(cat_mask, dev), kv_cache = cache,
+        row_chunk_size = row_chunk_size)
   })
   list(out = out, block = out[1, , ])
 }
@@ -823,6 +938,7 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
                              n_feature_crosses = 0,
                              n_svd_features = 0,
                              predict_chunk_size = 512L, kv_cache = FALSE,
+                             row_chunk_size = NULL, col_chunk_size = NULL,
                              trace_dir = NULL) {
   net <- ctx$net; dev <- ctx$device
   opts <- .tabfm_opts(n_estimators, norm_methods, feat_shuffle_method,
@@ -854,7 +970,7 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
     for (i in seq_along(members)) {
       mem <- members[[i]]
       res <- .tabfm_member_out(net, dev, mem, nrow(X_test), mem$cat_mask,
-                               caches, i)
+                               caches, i, row_chunk_size, col_chunk_size)
       if (!is.null(trace_dir)) trace_tensor(trace_dir, "logits", res$out)
       logits <- as.matrix(res$block[, 1:n_cls]$cpu())
       # Training used `(y + shift) %% K`, so the model's column for
@@ -903,6 +1019,7 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
                             n_feature_crosses = 0,
                             n_svd_features = 0,
                             predict_chunk_size = 512L, kv_cache = FALSE,
+                            row_chunk_size = NULL, col_chunk_size = NULL,
                             trace_dir = NULL) {
   net <- ctx$net; dev <- ctx$device
   opts <- .tabfm_opts(n_estimators, norm_methods, feat_shuffle_method,
@@ -927,7 +1044,7 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
     for (i in seq_along(members)) {
       mem <- members[[i]]
       res <- .tabfm_member_out(net, dev, mem, nrow(X_test), mem$cat_mask,
-                               caches, i)
+                               caches, i, row_chunk_size, col_chunk_size)
       if (!is.null(trace_dir)) trace_tensor(trace_dir, "logits", res$out)
       preds <- as.numeric(res$block[, 1]$cpu())
       acc <- if (is.null(acc)) preds else acc + preds
@@ -1141,7 +1258,15 @@ tabfm_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     # One token per cell, not per feature group -- this is the difference.
     cell_tokens  = p,
     kv_cache     = isTRUE(opts$kv_cache),
-    n_estimators = n_est
+    n_estimators = n_est,
+    # The one backend that restricts context by *masking* rather than
+    # slicing, which is what puts a score matrix back on the bill: a
+    # masked SDPA falls off the memory-efficient kernel.
+    masked_attention = TRUE,
+    row_chunk    = .stage_row_chunk(opts, config),
+    col_chunk    = .stage_col_chunk(opts, config),
+    # One token per cell here, so a "group" is a single column's worth.
+    group_channels = as.numeric(config$feature_group_size %||% 1)
   )
 }
 

@@ -1,20 +1,24 @@
 {
   "backend": "tabpfn3",
   "source": "measured",
-  "measured_on": "2026-08-11",
-  "notes": "Fitted by inst/memory/calibrate.R against 12 measured points on Darwin arm64 (rss-sampling), model tabpfn-v3-classifier. Constants are for the peak_terms() formulas as they stand; changing either invalidates the other. safety_factor is whatever it takes for no measured point to sit above its own estimate.",
+  "measured_on": "2026-08-12",
+  "notes": "Fitted by inst/memory/calibrate.R against 21 measured points on Darwin arm64 (rss-sampling), model tabpfn-v3-classifier. Constants are for the peak_terms() formulas as they stand; changing either invalidates the other. safety_factor is whatever it takes for no measured point to sit above its own estimate.",
   "devices": {
     "cpu": {
       "float32": {
-        "intercept_bytes": 1179282688,
-        "act_copies": 212.384201610058,
-        "att_copies": 1.60510332065824,
+        "intercept_bytes": 1188041984,
+        "act_copies": 78.8371823439559,
+        "att_copies": 0,
+        "res_copies": 37.1506736083267,
+        "floor_bytes": 2386903040,
         "prep_state_factor": 1,
+        "spmf_floor": 1.00499248375481,
         "ensemble_log2_factor": 0.677361843293362,
         "ensemble_cap": 4.58959064449292,
-        "safety_factor": 1.13729028736478,
+        "ensemble_source": "borrowed from tabicl (unmeasured here)",
+        "safety_factor": 1.37000245655588,
         "weights_fallback_bytes": 212697108,
-        "ensemble_source": "borrowed from tabicl (unmeasured here)"
+        "prepass_copies": 3.94747916666667
       }
     }
   }

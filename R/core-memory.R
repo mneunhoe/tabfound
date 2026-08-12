@@ -206,6 +206,11 @@
     intercept_bytes        = entry$intercept_bytes %||% 0,
     act_copies             = entry$act_copies %||% 12,
     att_copies             = entry$att_copies %||% 0,
+    res_copies             = entry$res_copies %||% 2,
+    floor_bytes            = entry$floor_bytes %||% 0,
+    spmf_floor             = entry$spmf_floor %||% 1,
+    prepass_copies         = entry$prepass_copies,
+    icl_copies             = entry$icl_copies,
     prep_state_factor      = entry$prep_state_factor %||% 1,
     safety_factor          = entry$safety_factor %||% 1,
     ensemble_log2_factor   = entry$ensemble_log2_factor %||% 0,
@@ -310,7 +315,29 @@
 # missed the point.
 # @keywords internal
 .local_artifact_dir <- function(model) {
-  if (dir.exists(model)) return(list(path = model, subfolder = NULL))
+  if (dir.exists(model)) {
+    if (file.exists(file.path(model, "config.json"))) {
+      return(list(path = model, subfolder = NULL))
+    }
+    # Not every backend puts its artifacts at the top of the directory.
+    # TabFM ships a `classification/` and a `regression/` tree under one
+    # snapshot, which is why passing that snapshot's path used to fail
+    # here while passing the model *id* worked -- the catalogue carries
+    # the subfolder and a bare path does not. Ask the backends what they
+    # would look for, rather than teaching this function one layout.
+    for (nm in list_backends()$name) {
+      sub_for <- get_backend(nm)$subfolder_for
+      if (!is.function(sub_for)) next
+      for (task in c("classification", "regression")) {
+        sub <- tryCatch(sub_for(task), error = function(e) NULL)
+        if (is.null(sub)) next
+        if (file.exists(file.path(model, sub, "config.json"))) {
+          return(list(path = model, subfolder = sub))
+        }
+      }
+    }
+    return(list(path = model, subfolder = NULL))
+  }
   id <- tryCatch(.catalog_id(model), error = function(e) NULL)
   if (is.null(id) || !isTRUE(.model_is_downloaded(id))) return(NULL)
   list(path = .model_dir(id), subfolder = .model_catalog()[[id]]$subfolder)
@@ -377,13 +404,57 @@
     lapply(f, function(v) tryCatch(eval(v), error = function(e) NULL))
   } else list()
   opts <- utils::modifyList(defaults, user_opts %||% list())
-  utils::modifyList(opts, extra %||% list())
+  extra <- extra %||% list()
+  opts <- utils::modifyList(opts, extra)
+  # `modifyList()` *removes* an element it is handed as NULL rather than
+  # storing one. For `row_chunk_size` that is the wrong reading: NULL is
+  # a value there -- "run every row in one pass" -- and dropping it would
+  # silently estimate the chunked run instead, which is the one case a
+  # caller asking this question most needs to see.
+  for (nm in names(extra)) {
+    if (is.null(extra[[nm]])) opts[nm] <- list(NULL)
+  }
+  opts
 }
 
 
 # ---------------------------------------------------------------------------
 # Shapes the backends build their terms from
 # ---------------------------------------------------------------------------
+
+# Rows resident in a stage-chunked pass through stages 0-2.
+#
+# The three states of `row_chunk_size` as the estimator sees them: absent
+# or `NA` is the checkpoint's own value, `NULL` is the unchunked pass,
+# and a number is itself. Mirrors `.tabpfn3_chunk_arg()` on the network
+# side -- they have to agree, or the estimate is about a different run
+# than the one that will happen.
+# @keywords internal
+.stage_row_chunk <- function(opts, config) {
+  if ("row_chunk_size" %in% names(opts) && is.null(opts$row_chunk_size)) {
+    return(Inf)
+  }
+  rc <- suppressWarnings(as.numeric(opts$row_chunk_size %||% NA))
+  if (isTRUE(is.finite(rc)) && rc >= 1) return(rc)
+  as.numeric(config$inference_row_chunk_size %||% 2048)
+}
+
+# Columns resident in the summary pre-pass, same three states.
+#
+# Kept separate from the row chunk because they bound different things: a
+# row chunk bounds the forward loop, a column chunk bounds the pre-pass
+# the loop cannot start without. Only TabPFN v3 carries a default in its
+# config; on TabICL and TabFM the knob exists but is off unless asked
+# for, and `Inf` is what "off" means here.
+# @keywords internal
+.stage_col_chunk <- function(opts, config) {
+  if ("col_chunk_size" %in% names(opts) && is.null(opts$col_chunk_size)) {
+    return(Inf)
+  }
+  cc <- suppressWarnings(as.numeric(opts$col_chunk_size %||% NA))
+  if (isTRUE(is.finite(cc)) && cc >= 1) return(cc)
+  as.numeric(config$inference_col_chunk_size %||% Inf)
+}
 
 #' Query rows resident in one forward pass
 #'
@@ -426,23 +497,67 @@
                               group_size, n_cls, col_heads, row_heads,
                               icl_heads, col_inducing, icl_blocks,
                               cell_tokens = NULL, kv_cache = FALSE,
-                              n_estimators = 1) {
+                              n_estimators = 1, masked_attention = FALSE,
+                              row_chunk = Inf, group_channels = 0,
+                              col_chunk = Inf) {
   fg  <- max(1, ceiling(n_features / max(1, group_size)))
   tok <- cell_tokens %||% fg
   hc  <- fg + n_cls
   n   <- n_context + n_query
   d_icl <- embed_dim * n_cls
 
+  # Rows resident in stages 0-2 at once. Chunking is what makes this a
+  # constant rather than the row count.
+  chunked <- isTRUE(is.finite(row_chunk)) && row_chunk < n
+  rc <- if (chunked) row_chunk else n
+
+  # What outlives the row loop when there is one: the grouped input every
+  # chunk is sliced from, `group_channels` floats per column per row, and
+  # the row embeddings the chunks accumulate into. Both are linear in the
+  # row count and both are far narrower than the embedded tensor the loop
+  # exists to avoid -- 6 and 4 channels against 128 -- which is the whole
+  # point. Carried as `res` rather than `act` because they are one copy
+  # apiece, not the dozens a live block holds.
+  res <- if (chunked) n * (tok * group_channels + n_cls * embed_dim) else 0
+
+  # The summary pre-pass, which exists only when the forward is chunked:
+  # it reads *every* context row -- that is what a summary is -- while a
+  # slice of the columns, so the row chunk does not bound it and the
+  # column chunk does. Leaving it out was how the estimator came to
+  # report a chunked TabFM as cheap while its pre-pass alone measured
+  # 36.4 GB of a 35.6 GB run.
+  #
+  # It carries its own copy count rather than the forward's. A stage's
+  # `act_copies` is fitted to whichever stage dominates a whole forward
+  # pass -- every live tensor in the pipeline at that moment -- and the
+  # pre-pass is a narrower thing: one column-stage stack and nothing
+  # else. Measured on TabICL at 12,000 x 300, charging it the forward's
+  # 138 copies put the estimate at 112 GB against 36.9 GB observed.
+  prepass <- if (chunked) n_context * min(tok, col_chunk) * embed_dim else 0
+
   stages <- list(
+    list(name = "column summaries",
+         act = 0, res = 0, att = 0, prepass = prepass),
     list(name = "column embedding",
-         act = n * tok * embed_dim,
-         att = tok * col_heads * n * col_inducing),
+         act = rc * tok * embed_dim, res = res,
+         att = 0),
     list(name = "row interaction",
-         act = n * hc * embed_dim,
-         att = n * row_heads * hc * hc),
+         act = rc * hc * embed_dim, res = res,
+         att = 0),
     list(name = "in-context learning",
-         act = n * d_icl,
-         att = icl_heads * n_context * n)
+         act = n * d_icl, res = 0, copies = "icl",
+         # Only a *masked* attention pays for its score matrix. Torch's
+         # fused SDPA picks a memory-efficient kernel when no mask is
+         # passed and never materialises the `(n, n)` scores: measured at
+         # `(1, 8, n, 64)`, peak RSS goes 353 -> 382 -> 448 MB across
+         # n = 4,000, 8,000, 16,000, where the scores alone would be 488,
+         # 1,953 and 7,812 MB, and a hand-written attention at n = 8,000
+         # takes 6,235 MB. With a mask it is quadratic again, though at
+         # roughly a sixth of a float32 score matrix.
+         #
+         # Of the six backends only TabFM masks here -- it restricts
+         # context by masking where TabICL and the TabPFN family slice.
+         att = if (isTRUE(masked_attention)) icl_heads * n_context * n else 0)
   )
 
   # A cache is built once per ensemble member and every one of them stays
@@ -498,10 +613,45 @@ DTYPE_BYTES <- 4
 #' @keywords internal
 .peak_from_terms <- function(stages, weights, persistent, co, spmf = 1,
                              n_estimators = 1) {
-  act_mult <- 1 + (co$act_copies - 1) / spmf
+  # What `save_peak_memory_factor` reaches, and what it does not.
+  #
+  # This used to be `1 + (act_copies - 1) / spmf`, which says exactly one
+  # copy of the activation survives chunking and the other ninety-nine
+  # divide. Measured, that is far too generous: on Mitra at 2,000 x 50 a
+  # factor of 8 takes the peak from 25.1 GB to 11.2 GB -- 2.2x, where
+  # that form predicts 7.5x. `spmf_floor` is the share the factor cannot
+  # touch, fitted per backend from a sweep, and it defaults to **1** --
+  # "buys nothing" -- because an unmeasured backend must not be promised
+  # a saving it may not deliver. A guard that over-estimates costs a
+  # warning; one that under-estimates costs the session.
+  # Not clamped at 1: a backend where the loop's own temporaries cost
+  # more than the transient it removes has a floor *above* 1, and saying
+  # so is more use than pretending the knob is free. TabICL measures 1.22
+  # -- using the factor there costs about a fifth more memory.
+  fl <- max(0, co$spmf_floor %||% 1)
+  act_mult <- co$act_copies * (fl + (1 - fl) / spmf)
   att_mult <- co$att_copies / spmf
+  # `res` is not divided by `spmf` and not multiplied by `act_copies`:
+  # these are the few whole-table tensors a chunked stage keeps outside
+  # its loop, so neither kind of chunking touches them. Its own small
+  # multiple covers the copy a `torch_cat` makes at the end.
+  res_mult <- co$res_copies %||% 2
+  # The summary pre-pass, where one exists, is charged its own count --
+  # defaulting to the forward's, which over-estimates and is therefore
+  # the safe thing to do until a sweep says otherwise.
+  pre_mult <- (co$prepass_copies %||% co$act_copies) / spmf
+  # One `act_copies` per backend assumes every stage holds the same
+  # number of live copies of its activation. They do not, and it only
+  # showed once chunking changed *which* stage dominates: the constant
+  # was fitted where the column stage was largest, and a chunked run
+  # hands it to the in-context stage instead. So that stage carries its
+  # own, defaulting to the shared one where nothing has measured it.
+  icl_copies <- co$icl_copies %||% co$act_copies
+  icl_mult <- 1 + (icl_copies - 1) / spmf
   stage_bytes <- vapply(stages, function(s) {
-    DTYPE_BYTES * (act_mult * (s$act %||% 0) + att_mult * (s$att %||% 0))
+    mult <- if (identical(s$copies %||% "", "icl")) icl_mult else act_mult
+    DTYPE_BYTES * (mult * (s$act %||% 0) + att_mult * (s$att %||% 0) +
+                   res_mult * (s$res %||% 0) + pre_mult * (s$prepass %||% 0))
   }, numeric(1))
   names(stage_bytes) <- vapply(stages, function(s) s$name %||% "", character(1))
   n_est <- max(1, suppressWarnings(as.numeric(n_estimators)))
@@ -513,12 +663,21 @@ DTYPE_BYTES <- 4
   ens <- min(1 + (co$ensemble_log2_factor %||% 0) * log2(n_est),
              co$ensemble_cap %||% Inf)
   transient <- max(c(stage_bytes, 0)) * ens
+  modelled <- (co$intercept_bytes + weights + persistent + transient) *
+    co$safety_factor
   list(
     stage_bytes = stage_bytes,
     ensemble_multiplier = ens,
     transient = transient,
-    peak = (co$intercept_bytes + weights + persistent + transient) *
-      co$safety_factor
+    # Two regimes, because the measurements show two. Above a gigabyte or
+    # so the peak is the activation and the model tracks it. Below that
+    # it is the process -- R, libtorch, and whichever arena the allocator
+    # took -- and it does not fall with the input: TabPFN v2.5 at 8
+    # features measures 2.1 GB at 800 rows and 1.1 GB at 1,600,
+    # reproducibly. `floor_bytes` is the largest peak observed where the
+    # activation was negligible, so the estimate never drops below what
+    # this backend costs to do nothing.
+    peak = max(modelled, co$floor_bytes %||% 0)
   )
 }
 
@@ -666,7 +825,8 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
     opts               = opts[intersect(names(opts),
                                         c("n_estimators", "kv_cache",
                                           "save_peak_memory_factor",
-                                          "predict_chunk_size"))],
+                                          "predict_chunk_size",
+                                          "row_chunk_size", "col_chunk_size"))],
     weights_bytes      = weights,
     weights_source     = weights_source,
     persistent_bytes   = persistent,
@@ -756,15 +916,39 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
       s <- c(s, "Lower {.arg predict_chunk_size} (now {chunk}): only one \\
                   chunk of query rows is resident at a time.")
     }
+    # Ordered by how much each moves. On v3 the stage chunking is the
+    # dominant one -- it bounds the `(rows, columns, embedding)` tensor
+    # itself, where `save_peak_memory_factor` only bounds the temporaries
+    # made from it -- so it goes first, and it is the one knob that
+    # changes how the peak grows with rows rather than by how much.
+    if (identical(backend, "tabpfn3")) {
+      rc <- suppressWarnings(as.numeric(opts$row_chunk_size %||% NA))
+      if (is.null(opts$row_chunk_size)) {
+        # Explicitly off, which is the one setting that makes the peak
+        # grow with every row rather than with a chunk of them.
+        s <- c(s, "Leave {.arg row_chunk_size} at its default instead of \\
+                    {.code NULL}: stages 0-2 then hold one chunk of rows \\
+                    rather than all of them.")
+      } else if (!isTRUE(is.finite(rc))) {
+        # The default -- the checkpoint's own, 2048 on every released v3.
+        s <- c(s, "Lower {.arg row_chunk_size} below the checkpoint's \\
+                    default: stages 0-2 hold one chunk of rows at a time, \\
+                    so it is the term that decides how the peak grows.")
+      } else if (rc > 256) {
+        s <- c(s, "Lower {.arg row_chunk_size} (now {rc}): stages 0-2 hold \\
+                    one chunk of rows at a time, so it is the term that \\
+                    decides how the peak grows.")
+      }
+    }
     if (backend %in% c("tabpfn26", "tabpfn3") &&
         is.null(opts$save_peak_memory_factor)) {
       s <- c(s, "Set {.arg save_peak_memory_factor} (try {.val 4}): it \\
                   splits each sublayer's work, for the same answer.")
     }
-    if (identical(backend, "tabpfn3")) {
-      s <- c(s, "This port does not carry v3's reference row/column stage \\
-                  chunking, so its peak is higher than the Python \\
-                  reference's on large tables (see the README's known gaps).")
+    if (identical(backend, "tabpfn26")) {
+      s <- c(s, "This generation has no stage chunking -- only TabPFN v3 \\
+                  bounds the row axis of its embedding tensor. At these \\
+                  dimensions v3 will cost far less.")
     }
   }
 
@@ -932,6 +1116,130 @@ memory_envelope <- function(model, n_features, available = NULL,
                peak_bytes = fits(lo)$peak)
   })
   do.call(rbind, out)
+}
+
+
+#' Pick stage-chunk sizes that fit the memory you have
+#'
+#' The reference implementation halves its chunk size and retries when an
+#' allocation fails. R cannot do that: a libtorch allocation failure kills
+#' the process outright, with no condition to catch and nothing left to
+#' retry from — which is the premise the whole preflight rests on. So the
+#' chunk size has to be chosen *before* the run, from the estimate, and
+#' this is the function that does it.
+#'
+#' Only TabPFN v3 has stage chunking. For any other backend this returns
+#' the run's estimate with `row_chunk_size = NA`, which is the honest
+#' answer: there is no knob here to turn.
+#'
+#' @section What it searches:
+#' Row chunks from the checkpoint's own default downwards, halving, and
+#' then column chunks the same way if the row axis alone does not get
+#' there. The largest pair that fits wins — smaller chunks cost loop
+#' overhead and buy nothing once the estimate clears.
+#'
+#' The order is not arbitrary. A row chunk bounds the forward loop; a
+#' column chunk bounds the summary pre-pass the loop cannot start
+#' without. On a table that is long rather than wide the first is what
+#' binds, and on a wide one the second takes over — measured on TabICL at
+#' 12,000 × 300, row chunking alone leaves 36.9 GB and adding a column
+#' chunk of 8 takes it to 29.8 GB.
+#'
+#' A `NULL` row chunk is never suggested: it is the unchunked pass, and
+#' if that fitted there would be nothing to ask.
+#'
+#' @param model A `tabfound_model`, a catalogued model id, an artifact
+#'   directory, or a `config.json` read into a list.
+#' @param n_context,n_query,n_features Dimensions of the intended run.
+#' @param available Memory to plan against, in bytes. Defaults to what
+#'   this machine has free now.
+#' @param verdict Accept a chunk size that earns at least this verdict:
+#'   `"ok"` (default) or `"tight"`.
+#' @param min_row_chunk Smallest row chunk worth suggesting.
+#' @param ... Other backend knobs, as [estimate_peak_memory()] takes them.
+#' @return A list with `row_chunk_size`, `col_chunk_size`, `peak_bytes`,
+#'   `verdict` and `feasible`. When nothing fits, `feasible` is `FALSE`
+#'   and the sizes are the smallest tried — the run is too big for this
+#'   machine whatever the chunking, and `n_context` is the thing to
+#'   change.
+#' @examples
+#' \dontrun{
+#' # 200,000 rows on a laptop with 8 GB free: how small do the chunks
+#' # have to be?
+#' suggest_chunk_sizes("tabpfn-v3-classifier", n_context = 2e5,
+#'                     n_features = 50, available = 8e9)
+#' }
+#' @seealso [estimate_peak_memory()], [memory_envelope()]
+#' @export
+suggest_chunk_sizes <- function(model, n_context, n_query = 1000, n_features,
+                                available = NULL, verdict = c("ok", "tight"),
+                                min_row_chunk = 64L, ...) {
+  verdict <- match.arg(verdict)
+  accept <- if (identical(verdict, "ok")) "ok" else c("ok", "tight")
+
+  est <- function(rc) {
+    estimate_peak_memory(model, n_context = n_context, n_query = n_query,
+                         n_features = n_features, available = available,
+                         row_chunk_size = rc, ...)
+  }
+  est2 <- function(rc, cc) {
+    estimate_peak_memory(model, n_context = n_context, n_query = n_query,
+                         n_features = n_features, available = available,
+                         row_chunk_size = rc, col_chunk_size = cc, ...)
+  }
+
+  # `NA` is "the checkpoint's own", which is where the search starts.
+  top <- est(NA_integer_)
+  if (!isTRUE(top$backend %in% c("tabpfn3", "tabicl", "tabfm"))) {
+    return(list(row_chunk_size = NA_integer_, col_chunk_size = NA_integer_,
+                peak_bytes = top$total_peak_bytes, verdict = top$verdict,
+                feasible = top$verdict %in% accept,
+                note = sprintf("the %s backend has no stage chunking",
+                               top$backend)))
+  }
+
+  # The search starts at whatever the run would use if nobody said
+  # anything, which is the checkpoint's own value -- not the literal `NA`
+  # that stands for it in `opts`.
+  start <- suppressWarnings(as.numeric(top$opts$row_chunk_size %||% NA))
+  if (!isTRUE(is.finite(start))) {
+    start <- .stage_row_chunk(list(), .resolve_memory_target(model)$config)
+  }
+  halving <- function(from, floor_at) {
+    out <- as.integer(max(floor_at, from))
+    while (out[length(out)] > floor_at) {
+      out <- c(out, as.integer(max(floor_at, out[length(out)] %/% 2L)))
+    }
+    unique(out)
+  }
+  sizes <- halving(start, min_row_chunk)
+
+  for (rc in sizes) {
+    e <- est(rc)
+    if (e$verdict %in% accept) {
+      return(list(row_chunk_size = rc, col_chunk_size = NA_integer_,
+                  peak_bytes = e$total_peak_bytes, verdict = e$verdict,
+                  feasible = TRUE, note = NULL))
+    }
+  }
+
+  # The rows are as small as they go and it still does not fit, so what
+  # is left is the pre-pass. Search the columns at the smallest row chunk.
+  rc <- sizes[length(sizes)]
+  cols <- halving(n_features, 1L)
+  for (cc in cols) {
+    e <- est2(rc, cc)
+    if (e$verdict %in% accept) {
+      return(list(row_chunk_size = rc, col_chunk_size = cc,
+                  peak_bytes = e$total_peak_bytes, verdict = e$verdict,
+                  feasible = TRUE, note = NULL))
+    }
+  }
+  smallest <- est2(rc, cols[length(cols)])
+  list(row_chunk_size = rc, col_chunk_size = cols[length(cols)],
+       peak_bytes = smallest$total_peak_bytes, verdict = smallest$verdict,
+       feasible = FALSE,
+       note = "no chunk size fits; reduce n_context or free memory")
 }
 
 

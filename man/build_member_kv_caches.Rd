@@ -13,7 +13,9 @@ build_member_kv_caches(
   member_y,
   device = "cpu",
   categorical_features = integer(),
-  save_peak_memory_factor = NULL
+  save_peak_memory_factor = NULL,
+  row_chunk_size = NA_integer_,
+  col_chunk_size = NA_integer_
 )
 }
 \arguments{

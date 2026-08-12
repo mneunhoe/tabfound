@@ -1,0 +1,41 @@
+{
+  "backend": "tabpfn3",
+  "model_id": "tabpfn-v3-classifier",
+  "point": {
+    "n_context": 8000,
+    "n_query": 500,
+    "n_features": 200
+  },
+  "measured_on": "2026-08-12",
+  "machine_total_bytes": 51539607552,
+  "prepass_copies": 3.94747916666667,
+  "safety_factor": 1.37000245655588,
+  "points": [
+    {
+      "n_context": 8000,
+      "n_query": 500,
+      "n_features": 200,
+      "status": "ok",
+      "peak_bytes": 28020424704,
+      "loaded_bytes": 779075584,
+      "elapsed_sec": 14.191,
+      "method": "rss-sampling",
+      "samples": 768,
+      "row_chunk_size": 2048,
+      "col_chunk_size": "NA"
+    },
+    {
+      "n_context": 8000,
+      "n_query": 500,
+      "n_features": 200,
+      "status": "ok",
+      "peak_bytes": 24916000768,
+      "loaded_bytes": 789151744,
+      "elapsed_sec": 16.5131,
+      "method": "rss-sampling",
+      "samples": 845,
+      "row_chunk_size": 2048,
+      "col_chunk_size": 8
+    }
+  ]
+}

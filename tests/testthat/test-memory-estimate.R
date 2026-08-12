@@ -106,9 +106,18 @@ test_that("the transient peak is the largest stage, not the sum of them", {
   # At one member, where the ensemble multiplier is 1 and the transient
   # is the largest stage unmodified.
   e <- peak(mem_config_tabicl(), n_estimators = 1)
-  expect_length(e$stage_bytes, 3L)
+  # Four now, not three: the summary pre-pass is its own stage, because
+  # a row-chunked run cannot start until it finishes and it is bounded by
+  # the *column* chunk rather than the row one.
+  expect_length(e$stage_bytes, 4L)
   expect_equal(e$transient_bytes, unname(max(e$stage_bytes)))
   expect_lt(e$transient_bytes, sum(e$stage_bytes))
+  # And it is zero unless the forward is chunked, since an unchunked pass
+  # computes its summaries inline rather than in a pass of its own.
+  expect_identical(unname(e$stage_bytes[["column summaries"]]), 0)
+  chunked <- peak(mem_config_tabicl(), n_estimators = 1,
+                  row_chunk_size = 512L)
+  expect_gt(chunked$stage_bytes[["column summaries"]], 0)
 })
 
 test_that("weights come exactly from the config's recorded shapes", {
@@ -204,13 +213,116 @@ test_that("Mitra's cache costs gigabytes, and the estimate says so", {
   expect_true(any(grepl("kv_cache", on$suggestions)))
 })
 
-test_that("save_peak_memory_factor lowers the transient term", {
-  plain   <- peak(mem_config_tabpfn3())
-  chunked <- peak(mem_config_tabpfn3(), save_peak_memory_factor = 4)
+test_that("save_peak_memory_factor lowers the transient where it measurably does", {
+  # What the factor buys is a *measured* per-backend constant now, not an
+  # assumed `1 + (act_copies - 1) / k`. Mitra's sweep says a factor of 32
+  # takes its activation to 0.65 of the unchunked figure; the estimate
+  # has to move with it.
+  plain   <- peak(mem_config_mitra())
+  chunked <- peak(mem_config_mitra(), save_peak_memory_factor = 4)
   expect_lt(chunked$transient_bytes, plain$transient_bytes)
   # It chunks the temporaries, not the state tensor they are made from,
   # so it can never take the transient to zero.
   expect_gt(chunked$transient_bytes, plain$transient_bytes / 4)
+})
+
+test_that("it promises nothing where the sweep found nothing", {
+  # TabPFN v3's stage chunking has already taken the transient away by
+  # the time the factor could act on it: measured across k = 1..32 at
+  # 4,000 x 50 the peak moves from 5.8 GB to 5.1 GB, which is noise.
+  # Its fitted floor is 1.005, so the estimate must not fall.
+  expect_gte(tabfound:::.memory_coefs("tabpfn3", "cpu")$spmf_floor, 1)
+  plain   <- peak(mem_config_tabpfn3())
+  chunked <- peak(mem_config_tabpfn3(), save_peak_memory_factor = 8)
+  expect_gte(chunked$transient_bytes, plain$transient_bytes)
+})
+
+test_that("a factor that costs more than it saves is modelled as costing", {
+  # TabICL's in-context stage never materialises its scores, so there is
+  # no large transient to chunk and the loop's own temporaries dominate:
+  # the sweep measures the factor making it about a fifth *worse*. A
+  # floor pinned at 1 would report that as neutral, which would send a
+  # user reaching for a knob that hurts them.
+  expect_gt(tabfound:::.memory_coefs("tabicl", "cpu")$spmf_floor, 1)
+  plain   <- peak(mem_config_tabicl())
+  chunked <- peak(mem_config_tabicl(), save_peak_memory_factor = 8)
+  expect_gt(chunked$transient_bytes, plain$transient_bytes)
+})
+
+test_that("an unswept backend is assumed to gain nothing from the factor", {
+  # The default has to be the pessimistic one. A backend nobody has
+  # swept must not be promised a saving on the strength of a formula.
+  for (nm in list_backends()$name) {
+    co <- tabfound:::.memory_coefs(nm, device = "cpu")
+    expect_gte(co$spmf_floor, 0)
+  }
+  # And the default, for a coefficient file written before the sweep
+  # existed, is "no saving" rather than "some saving".
+  cfg <- withr::local_tempdir()
+  dir.create(file.path(cfg, "memory", "coefs"), recursive = TRUE)
+  jsonlite::write_json(
+    list(backend = "stub", source = "test",
+         devices = list(cpu = list(float32 = list(act_copies = 10)))),
+    file.path(cfg, "memory", "coefs", "stub.json"), auto_unbox = TRUE)
+  local_mocked_bindings(
+    tabfound_file = function(...) file.path(cfg, ...),
+    .package = "tabfound"
+  )
+  expect_equal(tabfound:::.memory_coefs("stub", "cpu")$spmf_floor, 1)
+})
+
+test_that("col_chunk_size bounds the pre-pass and nothing else", {
+  # The two axes bound different things, and a test that cannot tell them
+  # apart would pass on a model that had wired them together. The row
+  # chunk bounds the forward loop; the column chunk bounds the summary
+  # pre-pass the loop cannot start without.
+  cfg <- mem_config_tabicl()
+  rows_only <- peak(cfg, 20000, 500, 200, row_chunk_size = 2048L)
+  both      <- peak(cfg, 20000, 500, 200, row_chunk_size = 2048L,
+                    col_chunk_size = 8L)
+  expect_gt(rows_only$stage_bytes[["column summaries"]],
+            both$stage_bytes[["column summaries"]])
+  # The forward loop's own stages are untouched by the column chunk.
+  expect_equal(rows_only$stage_bytes[["column embedding"]],
+               both$stage_bytes[["column embedding"]])
+  expect_lt(both$total_peak_bytes, rows_only$total_peak_bytes)
+
+  # And with no row chunking there is no pre-pass to bound, so the column
+  # chunk changes nothing at all.
+  a <- peak(cfg, 20000, 500, 200, row_chunk_size = NULL)
+  b <- peak(cfg, 20000, 500, 200, row_chunk_size = NULL, col_chunk_size = 8L)
+  expect_equal(a$total_peak_bytes, b$total_peak_bytes)
+})
+
+test_that("the pre-pass is charged its own copy count, not the forward's", {
+  # Reusing `act_copies` here put TabICL's chunked estimate at 112 GB
+  # against 36.9 GB measured. It is a narrower operation than the forward
+  # that constant was fitted to -- one column-stage stack, not a whole
+  # pipeline -- and the sweep says so: 71.2 against 137.7 on TabICL, 3.9
+  # against 78.8 on v3.
+  for (nm in c("tabicl", "tabpfn3")) {
+    co <- tabfound:::.memory_coefs(nm, device = "cpu")
+    expect_false(is.null(co$prepass_copies), info = nm)
+    expect_gt(co$prepass_copies, 0)
+    expect_lt(co$prepass_copies, co$act_copies)
+  }
+  # Unswept, it falls back to the forward's count -- which over-states
+  # the pre-pass and is therefore the right way to be wrong.
+  co <- tabfound:::.memory_coefs("mitra", device = "cpu")
+  expect_null(co$prepass_copies)
+})
+
+test_that("suggest_chunk_sizes reaches for the column axis when rows run out", {
+  cfg <- mem_config_tabicl()
+  roomy <- suggest_chunk_sizes(cfg, n_context = 6426, n_features = 90,
+                               available = 40e9)
+  expect_true(roomy$feasible)
+  # A table wide enough that the pre-pass is what binds gets a column
+  # chunk as well as a row one.
+  wide <- suggest_chunk_sizes(cfg, n_context = 20000, n_features = 400,
+                              available = 40e9, verdict = "tight")
+  expect_true(is.na(roomy$col_chunk_size) ||
+                roomy$col_chunk_size >= wide$col_chunk_size)
 })
 
 test_that("predict_chunk_size caps the query rows that are ever resident", {
@@ -264,15 +376,34 @@ test_that("the backends rank the way their architectures say they should", {
 })
 
 test_that("fold-sized runs on a 48 GB machine are not called comfortable", {
-  # Measured, one ensemble member, 6,426 x 90: TabICL 24.5 GB, TabPFN v3
-  # 24.7 GB, TabPFN v2.6 19.4 GB. None of that is comfortable against
-  # 40 GB free, and the run that prompted this work was killed at these
-  # dimensions when a neighbour took 7 GB.
-  for (cfg in list(mem_config_tabicl(), mem_config_tabpfn3(),
-                   mem_config_tabpfn25())) {
+  # Re-measured 2026-08-11, one ensemble member, 6,426 x 90 -- the
+  # Muchlinski fold that prompted this whole preflight, and which was
+  # killed at these dimensions when a neighbour took 7 GB:
+  #
+  #   TabICL 25.7 GB, TabPFN v2.5 19.7 GB, TabPFN v2.6 12.7 GB
+  #
+  # None of that is comfortable against 40 GB free.
+  for (cfg in list(mem_config_tabicl(), mem_config_tabpfn25())) {
     e <- peak(cfg, 6426, 714, 90, available = MEM_IDLE)
     expect_false(e$verdict == "ok")
   }
+})
+
+test_that("TabPFN v3 has earned its way out of that list", {
+  # The same fold on the same machine measured 24.7 GB before v3 carried
+  # the reference's stage chunking and before the layer stacks let go of
+  # their intermediates; it now measures 8.3 GB. That is the difference
+  # between a run the guard has to warn about and one it should wave
+  # through, and it is the single clearest thing the chunking bought.
+  e <- peak(mem_config_tabpfn3(), 6426, 714, 90, available = MEM_IDLE)
+  expect_identical(e$verdict, "ok")
+  expect_lt(e$total_peak_bytes, 20e9)
+
+  # Turning the chunking off has to put it back where it was: a knob that
+  # changes nothing when you turn it off is not the knob doing the work.
+  off <- peak(mem_config_tabpfn3(), 6426, 714, 90, available = MEM_IDLE,
+              row_chunk_size = NULL)
+  expect_gt(off$total_peak_bytes, e$total_peak_bytes)
 })
 
 test_that("Mitra at fold size is refused outright", {
@@ -326,11 +457,27 @@ test_that("suggestions name the term that actually dominates", {
   expect_true(any(grepl("n_context", mitra$suggestions)))
   expect_true(any(grepl("Mitra", mitra$suggestions)))
 
-  # The v3 port's missing stage chunking is a known gap; when v3 is the
-  # one being refused, the estimate has to say so.
+  # v3's stage chunking is the knob that changes how the peak *grows*
+  # with rows, where `save_peak_memory_factor` only changes what it grows
+  # from -- so when v3 is the one being refused, the estimate has to
+  # offer it, and offer it first of the two.
   v3 <- peak(mem_config_tabpfn3(), 200000, 714, 500, available = 4e9)
   expect_false(v3$verdict == "ok")
-  expect_true(any(grepl("chunking", v3$suggestions)))
+  row_at <- grep("row_chunk_size", v3$suggestions)
+  spmf_at <- grep("save_peak_memory_factor", v3$suggestions)
+  expect_length(row_at, 1L)
+  expect_true(row_at < spmf_at)
+
+  # Turning it off is the one setting worth naming as such.
+  off <- peak(mem_config_tabpfn3(), 200000, 714, 500, available = 4e9,
+              row_chunk_size = NULL)
+  expect_true(any(grepl("Leave .*row_chunk_size", off$suggestions)))
+
+  # v2.6 has no such knob, and should say which generation does rather
+  # than offering one it cannot honour.
+  v26 <- peak(mem_config_tabpfn26(), 200000, 714, 500, available = 4e9)
+  expect_false(any(grepl("row_chunk_size", v26$suggestions)))
+  expect_true(any(grepl("v3", v26$suggestions)))
 })
 
 test_that("a comfortable run is not given advice it does not need", {

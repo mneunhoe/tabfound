@@ -377,6 +377,13 @@ def build_config_v3(
         "decoder_head_dim": int(_get("decoder_head_dim", 64)),
         "decoder_num_heads": int(_get("decoder_num_heads", 6)),
         "decoder_use_softmax_scaling": bool(_get("decoder_use_softmax_scaling", False)),
+        # Memory-efficient inference. The reference turns its stage-0-2
+        # row/column chunking on by default for v3 alone
+        # (`use_chunkwise_inference` in `get_default_performance_options`),
+        # so these are defaults the R side has to match rather than knobs
+        # nobody sets.
+        "inference_row_chunk_size": int(_get("inference_row_chunk_size", 2048)),
+        "inference_col_chunk_size": int(_get("inference_col_chunk_size", 4)),
         # Shared.
         "ff_factor": int(_get("ff_factor", 2)),
         "softmax_scaling_mlp_hidden_dim": int(

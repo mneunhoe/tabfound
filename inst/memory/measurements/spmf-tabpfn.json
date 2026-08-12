@@ -1,0 +1,90 @@
+{
+  "backend": "tabpfn",
+  "model_id": "tabpfn-v2.5-classifier",
+  "point": {
+    "n_context": 4000,
+    "n_query": 500,
+    "n_features": 50
+  },
+  "measured_on": "2026-08-12",
+  "machine_total_bytes": 51539607552,
+  "spmf_floor": 0.726783004167223,
+  "points": [
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5836537856,
+      "loaded_bytes": 400818176,
+      "elapsed_sec": 5.4408,
+      "method": "rss-sampling",
+      "samples": 362,
+      "repeats": 3,
+      "spmf": 1
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 3646128128,
+      "loaded_bytes": 391479296,
+      "elapsed_sec": 5.5957,
+      "method": "rss-sampling",
+      "samples": 359,
+      "repeats": 3,
+      "spmf": 2
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 3989438464,
+      "loaded_bytes": 389595136,
+      "elapsed_sec": 6.0431,
+      "method": "rss-sampling",
+      "samples": 397,
+      "repeats": 3,
+      "spmf": 4
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 4539285504,
+      "loaded_bytes": 391872512,
+      "elapsed_sec": 7.8259,
+      "method": "rss-sampling",
+      "samples": 507,
+      "repeats": 3,
+      "spmf": 8
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 4498898944,
+      "loaded_bytes": 374276096,
+      "elapsed_sec": 8.6305,
+      "method": "rss-sampling",
+      "samples": 561,
+      "spmf": 16
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 4192944128,
+      "loaded_bytes": 364953600,
+      "elapsed_sec": 10.4552,
+      "method": "rss-sampling",
+      "samples": 670,
+      "spmf": 32
+    }
+  ]
+}

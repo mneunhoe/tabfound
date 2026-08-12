@@ -319,10 +319,16 @@ run_tabpfn3 <- function() {
   # `clf_binary_missing` is the one that matters most: a constant column
   # plus 25 NaNs exercise the indicator channel, the mean imputation and
   # the zero-variance branch of the scaler in one pass.
+  #
+  # `clf_large` is the only fixture in the package big enough for the
+  # reference's own `_stages_0_to_2` row/column chunking to fire -- every
+  # other one runs that loop exactly once, so nothing here had ever
+  # compared the chunked path against the unchunked one.
   fixtures <- list(
     clf_iris           = clf_dir,
     clf_binary_missing = clf_dir,
     clf_tiny           = clf_dir,
+    clf_large          = clf_dir,
     reg_iris           = reg_dir,
     reg_skewed         = reg_dir,
     reg_tiny           = reg_dir

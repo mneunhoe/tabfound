@@ -301,33 +301,57 @@ mitra_layer <- torch::nn_module(
   #' attends to itself, and that is what "attends to the support" means
   #' for it too. So this one function is the whole layer, called twice.
   #' @keywords internal
-  forward_rows = function(x, kv) {
-    b <- x$size(1); n <- x$size(2); f <- x$size(3); d <- x$size(4)
+  #' @param save_peak_memory_factor Split each of the four sublayers'
+  #'   work into this many chunks of rows. Every one of them is
+  #'   independent across rows -- a query row attends to the cached
+  #'   support and never to another query row, the feature attention is a
+  #'   sequence per row, and both MLPs are elementwise -- so this
+  #'   reorganises work that was already separate and changes nothing
+  #'   about the arithmetic.
+  #'
+  #'   The split is on the row axis rather than through
+  #'   [chunked_evaluate()]'s leading-dimension fold, because
+  #'   `to_rows()` folds `(batch, features)` into the attention batch:
+  #'   flattening `(batch, rows)` first would hand a chunk spanning two
+  #'   datasets to a key/value cache indexed by one.
+  forward_rows = function(x, kv, save_peak_memory_factor = NULL) {
+    b <- x$size(1); f <- x$size(3); d <- x$size(4)
+    spmf <- save_peak_memory_factor
+    ln1 <- self$layer_norm1; a1 <- self$attention1
+    ln2 <- self$layer_norm2; l1 <- self$linear1; l2 <- self$linear2
+    ln3 <- self$layer_norm3; a2 <- self$attention2
+    ln4 <- self$layer_norm4; l3 <- self$linear3; l4 <- self$linear4
 
     # --- attention across observations ---
-    res <- x
-    x_flat <- self$to_rows(self$layer_norm1(x))
-    att <- self$attention1(x_flat, cached_kv = kv)
-    x <- res + self$from_rows(att, b, n, f, d)
+    x <- chunked_evaluate_axis(function(z) {
+      self$from_rows(a1(self$to_rows(ln1(z)), cached_kv = kv),
+                     b, z$size(2), f, d)
+    }, x, spmf, axis = 2L)
 
     # --- MLP ---
-    res <- x
-    x <- res + self$linear2(torch::nnf_gelu(self$linear1(self$layer_norm2(x))))
+    x <- chunked_evaluate_axis(function(z) {
+      l2(torch::nnf_gelu(l1(ln2(z))))
+    }, x, spmf, axis = 2L)
 
     # --- attention across features (each row is its own sequence) ---
-    res <- x
-    xn <- self$layer_norm3(x)$reshape(c(b * n, f, d))
-    x <- res + self$attention2(xn, xn, xn)$reshape(c(b, n, f, d))
+    x <- chunked_evaluate_axis(function(z) {
+      zn <- ln3(z)$reshape(c(b * z$size(2), f, d))
+      a2(zn, zn, zn)$reshape(c(b, z$size(2), f, d))
+    }, x, spmf, axis = 2L)
 
     # --- MLP ---
-    res <- x
-    res + self$linear4(torch::nnf_gelu(self$linear3(self$layer_norm4(x))))
+    chunked_evaluate_axis(function(z) {
+      l4(torch::nnf_gelu(l3(ln4(z))))
+    }, x, spmf, axis = 2L)
   },
 
-  forward = function(support, query) {
+  forward = function(support, query, save_peak_memory_factor = NULL) {
+    # Built before either stream runs, which is what makes it safe for
+    # `forward_rows()` to write its result back into the tensor it was
+    # handed.
     kv <- self$row_kv(support)
-    list(support = self$forward_rows(support, kv),
-         query   = self$forward_rows(query, kv))
+    list(support = self$forward_rows(support, kv, save_peak_memory_factor),
+         query   = self$forward_rows(query, kv, save_peak_memory_factor))
   }
 )
 
@@ -364,6 +388,7 @@ mitra_model <- torch::nn_module(
 
     # Read by the predictors; see `mitra_kv_cache()`.
     self$supports_kv_cache <- TRUE
+    self$supports_chunked_eval <- TRUE
     self$kv_cache_is_exact <- TRUE
   },
 
@@ -382,6 +407,7 @@ mitra_model <- torch::nn_module(
       layer <- self$layers[[i]]
       kv[[i]] <- layer$row_kv(support)
       support <- layer$forward_rows(support, kv[[i]])
+      collect_between_layers(support)
     }
     mitra_kv_cache(kv = kv, quantile_state = qf$state,
                    n_support = x_support$size(2),
@@ -393,8 +419,11 @@ mitra_model <- torch::nn_module(
   # @param kv_cache A [mitra_kv_cache()] to predict against. When given,
   #   `x_support` and `y_support` are ignored.
   # @return `(B, Q, dim_output)`.
-  forward = function(x_support, y_support, x_query, kv_cache = NULL) {
-    if (!is.null(kv_cache)) return(self$forward_cached(x_query, kv_cache))
+  forward = function(x_support, y_support, x_query, kv_cache = NULL,
+                     save_peak_memory_factor = NULL) {
+    if (!is.null(kv_cache)) {
+      return(self$forward_cached(x_query, kv_cache, save_peak_memory_factor))
+    }
 
     qe <- mitra_quantile_embedding(x_support, x_query)
     dump_if_enabled("mitra_quantile", qe$support)
@@ -409,8 +438,9 @@ mitra_model <- torch::nn_module(
     dump_if_enabled("mitra_embedded", query)
 
     for (i in seq_along(self$layers)) {
-      out <- self$layers[[i]](support, query)
+      out <- self$layers[[i]](support, query, save_peak_memory_factor)
       support <- out$support; query <- out$query
+      collect_between_layers(support)
     }
     dump_if_enabled("mitra_encoded", query)
 
@@ -418,7 +448,8 @@ mitra_model <- torch::nn_module(
   },
 
   #' @keywords internal
-  forward_cached = function(x_query, kv_cache) {
+  forward_cached = function(x_query, kv_cache,
+                            save_peak_memory_factor = NULL) {
     if (x_query$size(3) != kv_cache$n_features) {
       cli::cli_abort(
         "This cache was built for {kv_cache$n_features} feature{?s}; \\
@@ -434,7 +465,9 @@ mitra_model <- torch::nn_module(
     dump_if_enabled("mitra_embedded", query)
 
     for (i in seq_along(self$layers)) {
-      query <- self$layers[[i]]$forward_rows(query, kv_cache$kv[[i]])
+      query <- self$layers[[i]]$forward_rows(query, kv_cache$kv[[i]],
+                                             save_peak_memory_factor)
+      collect_between_layers(query)
     }
     dump_if_enabled("mitra_encoded", query)
 
@@ -562,13 +595,17 @@ mitra_task_of <- function(config) {
 # -- so with caching on it is transformed and encoded exactly once.
 # @keywords internal
 .mitra_member_out <- function(net, dev, state, pp, y_train, X_test_chunk,
-                              cache_store, i) {
+                              cache_store, i,
+                              save_peak_memory_factor = NULL) {
   xq <- mitra_preprocessor_transform_X(as.matrix(X_test_chunk), pp)
   if (is.null(cache_store)) {
     xs <- mitra_preprocessor_transform_X(state$X_train, pp)
     ys <- mitra_preprocessor_transform_y(y_train, pp)
     b <- .mitra_batch(xs, ys, xq, dev)
-    return(torch::with_no_grad({ net(b$x_support, b$y_support, b$x_query) }))
+    return(torch::with_no_grad({
+      net(b$x_support, b$y_support, b$x_query,
+          save_peak_memory_factor = save_peak_memory_factor)
+    }))
   }
   cache <- member_cache(cache_store, i, function() {
     xs <- mitra_preprocessor_transform_X(state$X_train, pp)
@@ -578,7 +615,10 @@ mitra_task_of <- function(config) {
     torch::with_no_grad({ net$build_kv_cache(x_support, y_support) })
   })
   x_query <- as_float_tensor(as.matrix(xq), device = dev)$unsqueeze(1L)
-  torch::with_no_grad({ net(NULL, NULL, x_query, kv_cache = cache) })
+  torch::with_no_grad({
+    net(NULL, NULL, x_query, kv_cache = cache,
+        save_peak_memory_factor = save_peak_memory_factor)
+  })
 }
 
 # Fit one preprocessor per ensemble member.
@@ -633,10 +673,19 @@ mitra_task_of <- function(config) {
 #'   memory it costs is the reason -- see [mitra_kv_cache()]. It answers
 #'   the same question an uncached pass does: the support half of this
 #'   architecture never looks at a query row.
+#' @param save_peak_memory_factor Integer, or `NULL` (default) to
+#'   disable. Splits each of a layer's four sublayers into this many
+#'   chunks of rows. Every one of them is already independent across
+#'   rows, so the output is bit-identical and the only cost is loop
+#'   overhead. This is the knob Mitra most needs: it is the one backend
+#'   that attends across rows *and* columns, so its activation carries
+#'   every row at full embedding width on both axes and is the steepest
+#'   in the package.
 #' @keywords internal
 mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
                              random_state = 42L, predict_chunk_size = 1024L,
-                             kv_cache = FALSE) {
+                             kv_cache = FALSE,
+                             save_peak_memory_factor = NULL) {
   net <- ctx$net; dev <- ctx$device
 
   fit_fn <- function(X, y) {
@@ -665,7 +714,8 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
     acc <- NULL
     for (i in seq_along(state$preps)) {
       out <- .mitra_member_out(net, dev, state, state$preps[[i]],
-                               state$y_train_int, X_test_chunk, caches, i)
+                               state$y_train_int, X_test_chunk, caches, i,
+                               save_peak_memory_factor)
       # The head always emits `dim_output` logits; the reference slices to
       # the classes actually present before the softmax.
       probs <- as.matrix(torch::nnf_softmax(out[1, , 1:n_cls],
@@ -700,7 +750,8 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
 mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
                             random_mirror_regression = TRUE,
                             random_state = 42L, predict_chunk_size = 1024L,
-                            kv_cache = FALSE) {
+                            kv_cache = FALSE,
+                            save_peak_memory_factor = NULL) {
   net <- ctx$net; dev <- ctx$device
 
   fit_fn <- function(X, y) {
@@ -718,7 +769,8 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
     for (i in seq_along(state$preps)) {
       pp <- state$preps[[i]]
       out <- .mitra_member_out(net, dev, state, pp, state$y_train,
-                               X_test_chunk, caches, i)
+                               X_test_chunk, caches, i,
+                               save_peak_memory_factor)
       preds <- mitra_preprocessor_invert_y(as.numeric(out[1, , 1]$cpu()), pp)
       acc <- if (is.null(acc)) preds else acc + preds
     }
@@ -870,12 +922,16 @@ mitra_peak_terms <- function(n_context, n_query, n_features, opts, config) {
       # Support and query rows run through the same four sublayers; the
       # keys are always the support set, so the largest score block is
       # the support attending to itself.
+      # Both axes attend unmasked, so neither materialises its scores;
+      # what makes Mitra the steepest in the package is the activation
+      # itself, which carries every row *and* every column at full
+      # embedding width.
       list(name = "attention across rows",
            act = n * f * d,
-           att = f * h * n_context * max(n_context, nq)),
+           att = 0),
       list(name = "attention across features",
            act = n * f * d,
-           att = n * h * f * f)
+           att = 0)
     ),
     # `mitra_kv_cache()` holds one key and one value per layer, each the
     # full `features x support x dim` -- which is why the cache is off by

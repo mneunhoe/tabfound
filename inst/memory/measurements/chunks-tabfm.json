@@ -1,0 +1,42 @@
+{
+  "backend": "tabfm",
+  "model_id": "tabfm-1.0.0-classifier",
+  "point": {
+    "n_context": 8000,
+    "n_query": 500,
+    "n_features": 200
+  },
+  "measured_on": "2026-08-12",
+  "machine_total_bytes": 51539607552,
+  "prepass_copies": "NA",
+  "points": [
+    {
+      "n_context": 8000,
+      "n_query": 500,
+      "n_features": 200,
+      "status": "died",
+      "peak_bytes": 39120617472,
+      "loaded_bytes": 9540796416,
+      "elapsed_sec": "NA",
+      "method": "rss-sampling",
+      "samples": 7003,
+      "row_chunk_size": 2048,
+      "col_chunk_size": "NA",
+      "label": "row only"
+    },
+    {
+      "n_context": 8000,
+      "n_query": 500,
+      "n_features": 200,
+      "status": "died",
+      "peak_bytes": 38971768832,
+      "loaded_bytes": 9580593152,
+      "elapsed_sec": "NA",
+      "method": "rss-sampling",
+      "samples": 2598,
+      "row_chunk_size": 2048,
+      "col_chunk_size": 8,
+      "label": "row + col 8"
+    }
+  ]
+}

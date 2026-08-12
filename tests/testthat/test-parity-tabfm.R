@@ -87,3 +87,132 @@ test_that("chunking test rows does not change predictions", {
   expect_equal(dim(p_whole), dim(p_split))
   expect_lt(max(abs(p_whole - p_split)), 1e-5)
 })
+
+
+# ---------------------------------------------------------------------------
+# Stage chunking
+# ---------------------------------------------------------------------------
+
+# A randomly-initialised model at a fraction of the width. TabFM's real
+# checkpoint is 1.64 B parameters and 6.6 GB, so the questions that are
+# about the driver rather than the weights get asked here.
+tiny_tabfm <- function(is_classifier = TRUE) {
+  net <- tabfm_model(list(
+    embed_dim = 16L, ff_factor = 2L, feature_group_size = 1L, num_freq = 4L,
+    col_num_blocks = 2L, col_nhead = 2L, col_num_inds = 4L,
+    row_num_blocks = 2L, row_nhead = 2L, row_num_cls = 2L,
+    icl_num_blocks = 2L, icl_nhead = 2L,
+    decoder_hidden = 16L, is_classifier = is_classifier,
+    max_classes = if (is_classifier) 4L else 1L
+  ))
+  net$eval()
+  net
+}
+
+tiny_tabfm_batch <- function(n_tr, n_te, p, seed = 1L) {
+  set.seed(seed)
+  x <- torch::torch_randn(c(1L, n_tr + n_te, p))
+  y <- torch::torch_full(c(1L, n_tr + n_te), -100.0)
+  y[1, 1:n_tr] <- torch::torch_randint(0L, 3L, n_tr)$to(dtype = torch::torch_float())
+  list(x = x, y = y,
+       train_size = torch::torch_tensor(n_tr, dtype = torch::torch_long())$
+         reshape(1L))
+}
+
+test_that("a TabFM chunk that cannot bite reproduces the plain pass exactly", {
+  net <- tiny_tabfm()
+  b <- tiny_tabfm_batch(30L, 9L, 6L, seed = 91L)
+  plain <- as.array(torch::with_no_grad(net(b$x, b$y, b$train_size)))
+  for (rc in c(39L, 40L, 1000L)) {
+    expect_identical(
+      as.array(torch::with_no_grad(
+        net(b$x, b$y, b$train_size, row_chunk_size = rc))), plain)
+  }
+})
+
+test_that("TabFM stage chunking agrees with the plain pass at every size", {
+  # 8, 16 and 25 put the train/test boundary at row 30 inside a chunk.
+  # TabFM restricts context by masking rather than slicing, so the
+  # chunk-relative train count feeds a *mask* rather than a slice -- a
+  # different mechanism reaching the same place, and the same way to get
+  # it wrong.
+  net <- tiny_tabfm()
+  b <- tiny_tabfm_batch(30L, 9L, 6L, seed = 92L)
+  plain <- as.array(torch::with_no_grad(net(b$x, b$y, b$train_size)))
+  scale <- max(abs(plain))
+  for (rc in c(1L, 7L, 8L, 16L, 25L, 30L, 32L)) {
+    got <- as.array(torch::with_no_grad(
+      net(b$x, b$y, b$train_size, row_chunk_size = rc)))
+    expect_equal(dim(got), dim(plain))
+    expect_lt(max(abs(got - plain)), 1e-4 * scale)
+  }
+})
+
+test_that("chunking a cached TabFM prediction agrees with the uncached one", {
+  net <- tiny_tabfm()
+  b <- tiny_tabfm_batch(30L, 11L, 6L, seed = 93L)
+  cache <- torch::with_no_grad(net$build_kv_cache(
+    b$x[, 1:30, ], b$y[, 1:30], b$train_size))
+  xq <- b$x[, 31:41, ]
+  base <- as.array(torch::with_no_grad(net(xq, NULL, NULL, kv_cache = cache)))
+  scale <- max(abs(base))
+  for (rc in c(1L, 4L, 11L, 100L)) {
+    got <- as.array(torch::with_no_grad(
+      net(xq, NULL, NULL, kv_cache = cache, row_chunk_size = rc)))
+    expect_lt(max(abs(got - base)), 1e-4 * scale)
+  }
+})
+
+test_that("the TabFM regressor chunks the same way the classifier does", {
+  net <- tiny_tabfm(is_classifier = FALSE)
+  b <- tiny_tabfm_batch(26L, 7L, 5L, seed = 94L)
+  plain <- as.array(torch::with_no_grad(net(b$x, b$y, b$train_size)))
+  got <- as.array(torch::with_no_grad(
+    net(b$x, b$y, b$train_size, row_chunk_size = 9L)))
+  expect_equal(dim(got), dim(plain))
+  expect_lt(max(abs(got - plain)), 1e-4 * max(abs(plain)))
+})
+
+
+test_that("column-chunking TabFM's pre-pass changes nothing", {
+  # The pre-pass is TabFM's ceiling: a row-chunked forward cannot start
+  # until the summaries exist, and measured at 4,000 x 90 the cumulative
+  # peak went 12.9 GB after the cell embedder to 29.2 GB after this
+  # stage. Chunking it by column is what makes 8,000 x 90 run at all.
+  net <- tiny_tabfm()
+  b <- tiny_tabfm_batch(30L, 0L, 8L, seed = 95L)
+  ref <- torch::with_no_grad(
+    net$col_embedder$build_hidden(
+      net$cell_embedder(net$fill_missing(b$x), b$y, b$train_size, NULL),
+      b$train_size))
+  emb <- net$cell_embedder(net$fill_missing(b$x), b$y, b$train_size, NULL)
+  for (cc in c(1L, 3L, 4L, 100L)) {
+    got <- torch::with_no_grad(
+      net$col_embedder$build_hidden(emb, b$train_size, cc))
+    expect_equal(as.integer(got$out$size()), as.integer(ref$out$size()))
+    expect_lt(max(abs(as.array(got$out) - as.array(ref$out))),
+              1e-4 * max(abs(as.array(ref$out))))
+    expect_length(got$hidden, length(ref$hidden))
+    for (i in seq_along(ref$hidden)) {
+      # Unfolded from the `(b, hc)` attention batch before concatenating
+      # and folded back after, so the shape has to survive the round trip
+      # exactly.
+      expect_equal(as.integer(got$hidden[[i]]$size()),
+                   as.integer(ref$hidden[[i]]$size()))
+      expect_lt(max(abs(as.array(got$hidden[[i]]) - as.array(ref$hidden[[i]]))),
+                1e-4 * max(abs(as.array(ref$hidden[[i]]))))
+    }
+  }
+})
+
+test_that("both TabFM chunk axes compose", {
+  net <- tiny_tabfm()
+  b <- tiny_tabfm_batch(30L, 9L, 8L, seed = 96L)
+  plain <- as.array(torch::with_no_grad(net(b$x, b$y, b$train_size)))
+  scale <- max(abs(plain))
+  for (cc in c(1L, 4L)) {
+    got <- as.array(torch::with_no_grad(
+      net(b$x, b$y, b$train_size, row_chunk_size = 8L, col_chunk_size = cc)))
+    expect_lt(max(abs(got - plain)), 1e-4 * scale)
+  }
+})

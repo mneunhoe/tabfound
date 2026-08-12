@@ -41,9 +41,17 @@ per_feature_encoder_layer <- torch::nn_module(
   #'   NULL. When supplied every row of `x` is a test row and the training
   #'   rows are not present at all.
   # @param return_kv Collect this layer's train-row key/value projections.
+  # @param save_peak_memory_factor Chunk count for [chunked_evaluate()].
+  #   Each sublayer is independent across some leading fold -- the
+  #   feature attention across rows, the item attention across columns,
+  #   the MLP and the norms across every cell -- so this reorganises work
+  #   that was already separate. Same mechanism v2.6 has, and the same
+  #   `add_input = FALSE` + `residual = TRUE` arrangement, so the helper
+  #   owns the residual and can write it back in place.
   # @return `list(state, kv)`.
   forward = function(x, single_eval_pos, dump_prefix = NULL,
-                     cached_kv = NULL, return_kv = FALSE) {
+                     cached_kv = NULL, return_kv = FALSE,
+                     save_peak_memory_factor = NULL) {
     dims <- x$size()
     # Not named `N`: R torch's `[` reads that symbol as "to the end of
     # this dimension" rather than as the local, so `h_flat[, k:N, ]` below
@@ -52,13 +60,18 @@ per_feature_encoder_layer <- torch::nn_module(
     # by coincidence, and a coincidence is not what the test-row slice
     # should rest on. (`Inf` is the same sentinel; nothing else is.)
     B <- dims[1]; n_rows <- dims[2]; F_ <- dims[3]; E <- dims[4]
+    spmf <- save_peak_memory_factor
 
     # --- Sublayer 1: attention across features (full self-attention) ---
-    h <- x$reshape(c(B * n_rows, F_, E))
-    h <- self$self_attn_between_features(h, add_input = TRUE)
-    h <- h$reshape(c(B, n_rows, F_, E))
-    if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_attn_features"), h)
-    x <- self$layer_norms[[1]](h)
+    # The rows fold into the batch, so this is independent per row.
+    attn_f <- self$self_attn_between_features
+    x <- chunked_evaluate(function(z) attn_f(z), x, spmf,
+                          residual = TRUE, batch_dims = 2L)
+    if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_attn_features"), x)
+    # The norms treat every cell on its own, so they fold all three.
+    ln1 <- self$layer_norms[[1]]
+    x <- chunked_evaluate(function(z) ln1(z), x, spmf,
+                          residual = FALSE, batch_dims = 3L)
     if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_norm_1"), x)
 
     # --- Sublayer 2: attention across items, with multi-query split ---
@@ -67,40 +80,61 @@ per_feature_encoder_layer <- torch::nn_module(
     # queries attend to train K/V using only head 0's K/V (multi-query),
     # broadcast across all heads. Concat along the sample axis.
     n_test <- n_rows - single_eval_pos
-    # Reshape to (B*F, N, E) so the second axis is the item axis.
-    h_flat <- x$permute(c(1L, 3L, 2L, 4L))$contiguous()$reshape(c(B * F_, n_rows, E))
+    attn_i <- self$self_attn_between_items
+    # Columns fold into the batch here, so the chunking is along `B * F`
+    # -- never along the item axis, which is the one the attention
+    # actually reads across.
+    xf <- x$permute(c(1L, 3L, 2L, 4L))$contiguous()             # (B, F, N, E)
     kv <- NULL
-    if (!is.null(cached_kv)) {
-      # Every row is a test row attending to the cached training K/V.
-      h_flat <- self$self_attn_between_items(
-        h_flat, add_input = TRUE, cached_kv = cached_kv
-      )
-    } else {
+
+    # One column's worth of the multi-query split: train queries attend
+    # to train K/V with every head, test queries to the same K/V with
+    # head 0 alone, broadcast.
+    attend_items <- function(h_flat) {
       train_h <- h_flat[, 1:single_eval_pos, ]
-      if (isTRUE(return_kv)) kv <- self$self_attn_between_items$cache_kv(train_h)
-      train_out <- self$self_attn_between_items(
-        train_h, x_kv = train_h, add_input = TRUE
-      )
+      train_out <- attn_i(train_h, x_kv = train_h)
       if (n_test > 0L) {
         test_h <- h_flat[, (single_eval_pos + 1L):n_rows, ]
-        test_out <- self$self_attn_between_items(
-          test_h, x_kv = train_h, add_input = TRUE,
-          reuse_first_head_kv = TRUE
-        )
-        h_flat <- torch::torch_cat(list(train_out, test_out), dim = 2L)
+        test_out <- attn_i(test_h, x_kv = train_h,
+                           reuse_first_head_kv = TRUE)
+        torch::torch_cat(list(train_out, test_out), dim = 2L)
       } else {
-        h_flat <- train_out
+        train_out
       }
     }
-    h <- h_flat$reshape(c(B, F_, n_rows, E))$permute(c(1L, 3L, 2L, 4L))$contiguous()
-    if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_attn_items"), h)
-    x <- self$layer_norms[[2]](h)
+
+    if (isTRUE(return_kv) || !is.null(cached_kv)) {
+      # Building or using a cache bypasses chunking, as it does on v2.6:
+      # the key/value tensors have to be produced -- or read -- whole,
+      # not a slice of the batch at a time.
+      h_flat <- xf$reshape(c(B * F_, n_rows, E))
+      if (!is.null(cached_kv)) {
+        out <- attn_i(h_flat, add_input = FALSE, cached_kv = cached_kv)
+      } else {
+        kv <- attn_i$cache_kv(h_flat[, 1:single_eval_pos, ])
+        out <- attend_items(h_flat)
+      }
+      xf <- xf + out$reshape(c(B, F_, n_rows, E))
+    } else {
+      xf <- chunked_evaluate(attend_items, xf, spmf,
+                             residual = TRUE, batch_dims = 2L)
+    }
+    if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_attn_items"), xf$permute(c(1L, 3L, 2L, 4L))$contiguous())
+    ln2 <- self$layer_norms[[2]]
+    xf <- chunked_evaluate(function(z) ln2(z), xf, spmf,
+                           residual = FALSE, batch_dims = 3L)
+    x <- xf$permute(c(1L, 3L, 2L, 4L))$contiguous()
     if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_norm_2"), x)
 
     # --- Sublayer 3: MLP (per-token) ---
-    h <- self$mlp(x, add_input = TRUE)
-    if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_mlp"), h)
-    list(state = self$layer_norms[[3]](h), kv = kv)
+    mlp <- self$mlp
+    x <- chunked_evaluate(function(z) mlp(z), x, spmf,
+                          residual = TRUE, batch_dims = 3L)
+    if (!is.null(dump_prefix)) dump_if_enabled(paste0(dump_prefix, "_post_mlp"), x)
+    ln3 <- self$layer_norms[[3]]
+    list(state = chunked_evaluate(function(z) ln3(z), x, spmf,
+                                  residual = FALSE, batch_dims = 3L),
+         kv = kv)
   }
 )
 
@@ -130,9 +164,13 @@ tabpfn_layer_stack <- torch::nn_module(
     )
   },
 
-  forward = function(x, single_eval_pos) {
+  forward = function(x, single_eval_pos, save_peak_memory_factor = NULL) {
     for (i in seq_along(self$layers)) {
-      x <- self$layers[[i]](x, single_eval_pos = single_eval_pos)$state
+      x <- self$layers[[i]](
+        x, single_eval_pos = single_eval_pos,
+        save_peak_memory_factor = save_peak_memory_factor
+      )$state
+      collect_between_layers(x)
     }
     x
   }

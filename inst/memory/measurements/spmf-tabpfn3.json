@@ -1,0 +1,92 @@
+{
+  "backend": "tabpfn3",
+  "model_id": "tabpfn-v3-classifier",
+  "point": {
+    "n_context": 4000,
+    "n_query": 500,
+    "n_features": 50
+  },
+  "measured_on": "2026-08-12",
+  "machine_total_bytes": 51539607552,
+  "spmf_floor": 1.00499248375481,
+  "points": [
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5778571264,
+      "loaded_bytes": 758939648,
+      "elapsed_sec": 3.0779,
+      "method": "rss-sampling",
+      "samples": 236,
+      "repeats": 3,
+      "spmf": 1
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5789499392,
+      "loaded_bytes": 795607040,
+      "elapsed_sec": 3.1312,
+      "method": "rss-sampling",
+      "samples": 240,
+      "repeats": 3,
+      "spmf": 2
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5375475712,
+      "loaded_bytes": 774553600,
+      "elapsed_sec": 3.2623,
+      "method": "rss-sampling",
+      "samples": 248,
+      "repeats": 3,
+      "spmf": 4
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5473255424,
+      "loaded_bytes": 787218432,
+      "elapsed_sec": 3.5769,
+      "method": "rss-sampling",
+      "samples": 267,
+      "repeats": 3,
+      "spmf": 8
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5541707776,
+      "loaded_bytes": 784809984,
+      "elapsed_sec": 4.0217,
+      "method": "rss-sampling",
+      "samples": 288,
+      "repeats": 3,
+      "spmf": 16
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5118754816,
+      "loaded_bytes": 809992192,
+      "elapsed_sec": 4.3836,
+      "method": "rss-sampling",
+      "samples": 307,
+      "repeats": 3,
+      "spmf": 32
+    }
+  ]
+}

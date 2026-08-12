@@ -108,6 +108,111 @@ chunked_evaluate <- function(f, x, factor, residual, batch_dims, ...) {
 }
 
 
+# Where collecting starts paying. The cost is fixed per forward pass --
+# one collection per block, a few milliseconds each -- while the saving
+# grows with the table, so the two cross. Measured on the v3 ICL stack
+# (24 blocks, 512 wide), peak with and against without, and the wall
+# clock beside it:
+#
+#   rows   state    saved      time
+#   1,000   2.0 MB  1,003 MB   +25%     <- not worth it
+#   2,000   3.9 MB  2,001 MB    +9%
+#   4,000   7.8 MB  2,351 MB    -4%     <- faster: less allocator pressure
+#   8,000  15.6 MB  3,118 MB    -5%
+#  16,000  31.2 MB  3,274 MB    +2%
+#
+# 4 MB puts the line between the first two rows. Anyone who would rather
+# have that first gigabyte back can say so with the option.
+COLLECT_MIN_BYTES <- 4194304
+
+#' Let go of a layer's intermediates before starting the next one
+#'
+#' R torch frees a tensor's memory when R's garbage collector runs, not
+#' when the last reference to it leaves scope. A deep stack evaluated in
+#' one call therefore accumulates every block's intermediates until
+#' something triggers a collection, which is why a 24-block stack can
+#' hold 3.3 GB to carry a 31 MB state.
+#'
+#' torch has a knob for this -- `options(torch.threshold_call_gc = )`,
+#' 4000 by default, which is why the accumulation stops just short of
+#' 4 GB -- but lowering it is the worse instrument. The allocator fires
+#' its collection *inside* a block, where the intermediates are still
+#' referenced by the frame that is running and cannot be freed. Measured
+#' on the v3 ICL stack at 16,000 rows: 5,671 MB at the default, 3,000 MB
+#' at a threshold of 50 and 15% slower for it, against **2,426 MB** for a
+#' collection placed between the blocks, which cost nothing measurable.
+#'
+#' Frequency is not negotiable either -- the saving is monotone in it.
+#' At 16,000 rows, collecting every block gives 2,426 MB, every fourth
+#' 4,166 MB, and every eighth 5,753 MB, which is no better than never.
+#'
+#' @param x The tensor the loop carries from one layer to the next; its
+#'   size is what decides whether a collection is worth it. `NULL` means
+#'   "cannot tell", which under `"auto"` means no.
+#' @return Invisibly, whether a collection happened.
+#' @section Options:
+#' `tabfound.collect_between_layers` is `"auto"` (default: collect once
+#' the carried tensor is worth it), `TRUE` (always) or `FALSE` (never).
+#' `tabfound.collect_min_bytes` moves the `"auto"` threshold.
+#' @keywords internal
+collect_between_layers <- function(x = NULL) {
+  mode <- getOption("tabfound.collect_between_layers", "auto")
+  if (isFALSE(mode)) return(invisible(FALSE))
+  if (!isTRUE(mode)) {
+    if (is.null(x)) return(invisible(FALSE))
+    bytes <- tryCatch(x$numel() * x$element_size(), error = function(e) 0)
+    min_bytes <- getOption("tabfound.collect_min_bytes", COLLECT_MIN_BYTES)
+    if (!isTRUE(bytes >= min_bytes)) return(invisible(FALSE))
+  }
+  # `full = FALSE` deliberately: a full collection is 45x the cost
+  # (44.6 ms against 1.0 ms here) and the tensors this is for are freed
+  # by the level-0 pass all the same.
+  gc(full = FALSE)
+  invisible(TRUE)
+}
+
+
+#' Evaluate a function over one axis of a tensor in chunks, in place
+#'
+#' The same trade as [chunked_evaluate()] — peak memory for a little loop
+#' overhead, with the result written back into `x` rather than
+#' accumulated — but splitting a named axis instead of a fold of the
+#' leading ones.
+#'
+#' That distinction matters where the sublayer's own reshape needs the
+#' leading dimensions kept apart. Mitra's observation attention folds
+#' `(batch, features)` into the attention batch and puts *rows* in the
+#' sequence position, so its key/value cache is indexed by
+#' `batch * features`; flattening `(batch, rows)` first, as
+#' [chunked_evaluate()] does, would hand a chunk spanning two datasets to
+#' a cache that expects one. Splitting the row axis leaves that fold
+#' intact.
+#'
+#' `torch_split()` returns views along any axis, so the in-place
+#' `add_()` reaches the original storage whichever axis is chosen.
+#'
+#' @param f Function of one tensor, returning a tensor of the same shape.
+#' @param x Input tensor.
+#' @param factor Number of chunks, or `NULL` to evaluate in one go.
+#' @param axis 1-based axis to split along.
+#' @param residual Write `x + f(x)` rather than `f(x)`.
+#' @param ... Passed to `f`.
+#' @keywords internal
+chunked_evaluate_axis <- function(f, x, factor, axis, residual = TRUE, ...) {
+  if (is.null(factor)) {
+    res <- f(x, ...)
+    return(if (isTRUE(residual)) x + res else res)
+  }
+  x <- x$contiguous()
+  n <- x$size(as.integer(axis))
+  split_size <- as.integer(ceiling(n / as.integer(factor)))
+  for (chunk in torch::torch_split(x, split_size, dim = as.integer(axis))) {
+    if (isTRUE(residual)) chunk$add_(f(chunk, ...)) else chunk$copy_(f(chunk, ...))
+  }
+  x
+}
+
+
 #' Check that a suggested package is installed, abort with an install hint if not
 #' @keywords internal
 require_suggested <- function(pkg) {

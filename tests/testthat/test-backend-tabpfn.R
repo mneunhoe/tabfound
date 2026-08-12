@@ -27,12 +27,15 @@ tiny_v25_col_emb <- function(n = 64L) {
 }
 
 
-test_that("the v2.5 network advertises the cache but not chunked evaluation", {
+test_that("the v2.5 network advertises both the cache and chunked evaluation", {
   net <- per_feature_transformer(tiny_v25_config())
   expect_true(isTRUE(net$supports_kv_cache))
-  # The chunked forward is a v2.6 path; claiming it here would make the
-  # shared predictors pass an argument this `forward` does not have.
-  expect_false(isTRUE(net$supports_chunked_eval))
+  # `save_peak_memory_factor` used to be a v2.6-and-newer path. It is
+  # not any more: v2.5's layer has the same alternating shape and the
+  # same independent folds, so the same wrapping applies.
+  expect_true(isTRUE(net$supports_chunked_eval))
+  # The stage chunking, though, really is v3 only.
+  expect_false(isTRUE(net$supports_stage_chunking))
 })
 
 
@@ -106,4 +109,73 @@ test_that("the v2.5 cache's fitted statistics come only from the training rows",
   expect_true(as.logical((a$state$non_const == b$state$non_const)$all()))
   # And the training rows come out the same however the test rows change.
   expect_true(as.logical((a$main[1:20, , ] == b$main[1:20, , ])$all()))
+})
+
+
+# ---------------------------------------------------------------------------
+# Within-sublayer chunking
+# ---------------------------------------------------------------------------
+
+test_that("v2.5's chunking agrees with the plain layer at every factor", {
+  # This splits folds of *leading* dimensions only -- rows for the
+  # feature attention, columns for the item attention, every cell for the
+  # MLP and the norms -- so no attention's own sequence length changes.
+  # What does change is its batch size, and the kernel blocks by batch,
+  # so the result is exact when the fold divides evenly and float32's
+  # last bits otherwise: ~1.6e-7 relative here, against 5.4e-7 for
+  # Mitra's chunking and 1.4e-5 for v3's stage chunking.
+  net <- per_feature_encoder_layer(embedding_dim = 16L, n_heads = 2L,
+                                   mlp_hidden_dim = 32L)
+  net$eval()
+  set.seed(81)
+  x <- torch::torch_randn(c(1L, 24L, 5L, 16L))
+  base <- as.array(torch::with_no_grad(
+    net(x$clone(), single_eval_pos = 15L)$state))
+  scale <- max(abs(base))
+  for (k in c(2L, 3L, 8L, 100L)) {
+    got <- as.array(torch::with_no_grad(
+      net(x$clone(), single_eval_pos = 15L,
+          save_peak_memory_factor = k)$state))
+    expect_equal(dim(got), dim(base))
+    expect_lt(max(abs(got - base)), 1e-5 * scale)
+  }
+  # 24 rows into 2 is an even fold, and there it is exact.
+  expect_identical(
+    as.array(torch::with_no_grad(
+      net(x$clone(), single_eval_pos = 15L,
+          save_peak_memory_factor = 2L)$state)),
+    base
+  )
+})
+
+test_that("v2.5's chunking leaves the cache paths alone", {
+  # Building or reading a cache needs the key/value tensors whole, so
+  # those branches bypass the chunking -- exactly as v2.6 does. What
+  # matters is that asking for a factor there is still correct, not that
+  # it saves anything.
+  net <- per_feature_encoder_layer(embedding_dim = 16L, n_heads = 2L,
+                                   mlp_hidden_dim = 32L)
+  net$eval()
+  set.seed(82)
+  x <- torch::torch_randn(c(1L, 24L, 5L, 16L))
+
+  built <- torch::with_no_grad(
+    net(x$clone(), single_eval_pos = 15L, return_kv = TRUE))
+  expect_false(is.null(built$kv))
+  chunked_build <- torch::with_no_grad(
+    net(x$clone(), single_eval_pos = 15L, return_kv = TRUE,
+        save_peak_memory_factor = 4L))
+  expect_identical(as.array(chunked_build$state), as.array(built$state))
+  expect_identical(as.array(chunked_build$kv$key), as.array(built$kv$key))
+
+  xt <- torch::torch_randn(c(1L, 7L, 5L, 16L))
+  a <- as.array(torch::with_no_grad(
+    net(xt$clone(), single_eval_pos = 0L, cached_kv = built$kv)$state))
+  b <- as.array(torch::with_no_grad(
+    net(xt$clone(), single_eval_pos = 0L, cached_kv = built$kv,
+        save_peak_memory_factor = 4L)$state))
+  # The item attention ran whole on both -- the cache branch bypasses
+  # chunking -- but the *feature* attention did not, and 7 rows into 4
+  # chunks is ragged, so its batch size differs and the last bits move.
+  expect_lt(max(abs(a - b)), 1e-5 * max(abs(a)))
 })

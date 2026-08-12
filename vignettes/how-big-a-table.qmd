@@ -118,10 +118,15 @@ Three things stand out, and all three are measured rather than assumed:
   are fine there; fold-sized ones are not, and the ordering between
   models at 8 GB says more about that fixed cost than about the
   architectures.
-* **TabPFN v2.6 goes furthest once there is room to work in** — about
-  four times TabICL's context and ten times Mitra's, at 50 columns. Its
-  state is one vector per group of three features per row; Mitra's is
-  one per feature per row, which is where the difference comes from.
+* **TabPFN v3 goes furthest once there is room to work in** — around
+  twenty times TabICL's context and fifty times Mitra's, at 50 columns.
+  Not because its state is smaller: v3 carries one vector per *column*
+  per row where v2.6 carries one per group of three, and Mitra one per
+  feature per row on both axes at once. It reaches further because it is
+  the only backend that never holds that state for the whole table —
+  `row_chunk_size` runs the first three stages a chunk of rows at a time,
+  which turns the term that decides the ceiling from something that grows
+  with the table into a constant. See "what the knobs buy".
 * **TabFM is in a different regime.** 6.5 GB of weights are resident
   before anything happens, and its 32-member default multiplies what
   comes after.
@@ -144,6 +149,11 @@ envelope_table(models = MODELS[c("TabPFN v2.6", "TabPFN v3", "TabICL",
 A 200-column table cuts Mitra's usable context by a factor of 180
 relative to 10 columns. If you have wide data and a choice, spend the
 effort on feature selection before you spend it on RAM.
+
+Note where v3's advantage runs out. Its chunking bounds the *row* axis,
+not the column axis, and its state is a vector per column rather than per
+group of three — so at 200 columns TabPFN v2.6 overtakes it. Wide and
+short is v2.6's case; tall is v3's.
 
 ## Rows you predict are rows too
 
@@ -220,8 +230,59 @@ data.frame(
 )
 ```
 
-Near-linear, and free. If you are using v2.6 or v3 and running out of
-memory, this is the first thing to try.
+Useful, and free. What it cannot do is change how the peak *grows*: the
+tensor it slices is a sublayer's input, not its output, so one copy of
+the state survives whatever factor you pick. Measured on v3 at 50
+features, the marginal cost of a context row goes from 1.59 MB to
+0.549 MB at a factor of 8 — a real 2.9×, and still a straight line.
+
+On v3 alone there is a third lever that bends the line instead of
+lowering it. `row_chunk_size` drives the cell embedding, distribution
+embedder and column aggregator a chunk of rows at a time, so the
+`(rows, columns, embedding)` tensor — 51 KB per row at 100 features — is
+never resident whole:
+
+```{r}
+#| label: rowchunk
+rc <- list("off (one pass)" = NULL, "2048 (the default)" = 2048L,
+           "512" = 512L, "128" = 128L)
+data.frame(
+  row_chunk_size = names(rc),
+  max_context = vapply(rc, function(v) {
+    memory_envelope("tabpfn-v3-classifier", n_features = 50,
+                    available = 32e9, n_query = 200,
+                    row_chunk_size = v)$max_context
+  }, numeric(1)),
+  row.names = NULL
+)
+```
+
+Two things to read off that. Turning it on is worth about a factor of
+ten in rows, which no amount of `save_peak_memory_factor` gets you
+because the two bound different tensors. And it *saturates*: below a
+chunk of about 512 there is nothing left to win, because what is holding
+the ceiling is no longer stages 0-2 but the terms that are linear in the
+whole table — the row embeddings, the in-context state, and the KV cache
+if you asked for one. Past that point the thing to spend is wall clock,
+not chunk size.
+
+It is on by default at the checkpoint's own 2048, which is what the
+Python reference does on this architecture and nowhere else. Unlike
+`save_peak_memory_factor` it is not bit-identical — it changes the batch
+shapes the attention kernel sees, and on the package's 2,664-row parity
+fixture it moves the logits by 1.4e-5 of their own scale, which is less
+than the reference's own chunked pass moves them.
+
+Because R cannot catch a libtorch allocation failure, there is no
+retry-on-OOM to fall back on: the size has to be picked in advance.
+`suggest_chunk_sizes()` picks it, searching down from the default and
+returning the largest that still fits.
+
+```{r}
+#| label: suggest
+str(suggest_chunk_sizes("tabpfn-v3-classifier", n_context = 50000,
+                        n_features = 50, available = 32e9))
+```
 
 ## Memory is often not what stops you
 
@@ -270,8 +331,9 @@ than the memory table does.
 | if your table is | use | why |
 |---|---|---|
 | under ~2,000 rows, any width | anything | all six are comfortable |
-| a few thousand rows, ≤ 100 columns | TabPFN v2.6 or v3 | furthest reach, seconds not minutes |
-| wide (100+ columns) | TabPFN v2.6, with `save_peak_memory_factor` | the only combination that stays cheap as columns grow |
+| a few thousand rows, ≤ 100 columns | TabPFN v3 | furthest reach, seconds not minutes |
+| tens of thousands of rows | TabPFN v3 | the only backend that bounds the row axis of its embedding tensor; 32,768 × 120 measures 18 GB |
+| wide (200+ columns) | TabPFN v2.6, with `save_peak_memory_factor` | v3's chunking bounds rows, not columns, and its state is a vector per column |
 | large and you want TabICL's ensembling | TabICL with `n_estimators` lowered | the default 8 costs about three times what one does |
 | small (hundreds of rows) | Mitra or TabFM are fine here | this is the size they were published for |
 
@@ -295,6 +357,11 @@ estimate_peak_memory("tabpfn-v3-classifier",
 memory_envelope("tabpfn-v3-classifier", n_features = 90,
                 available = 24e9, n_estimators = 4,
                 save_peak_memory_factor = 4)
+
+# The run is fixed and the memory is what it is: how small do the
+# chunks have to be?
+suggest_chunk_sizes("tabpfn-v3-classifier", n_context = 2e5,
+                    n_features = 50, available = 24e9)
 ```
 
 You do not have to remember to ask. `fit()` and `predict()` run the same

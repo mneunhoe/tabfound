@@ -138,6 +138,7 @@ set_transformer <- torch::nn_module(
     for (i in seq_along(self$blocks)) {
       src <- self$blocks[[i]](src, attn_mask = attn_mask,
                               hidden = if (is.null(hidden)) NULL else hidden[[i]])
+      collect_between_layers(src)
     }
     src
   },
@@ -153,6 +154,7 @@ set_transformer <- torch::nn_module(
       h <- self$blocks[[i]]$induce(src, attn_mask)
       out[[i]] <- h$detach()
       src <- self$blocks[[i]](src, hidden = h)
+      collect_between_layers(src)
     }
     list(src = src, hidden = out)
   }
@@ -195,6 +197,7 @@ encoder_stack <- torch::nn_module(
         x, attn_mask = if (is.null(cached_kv)) attn_mask else NULL, rope = rp,
         cached_kv = if (is.null(cached_kv)) NULL else cached_kv[[i]]
       )
+      collect_between_layers(x)
     }
     x
   },
@@ -211,6 +214,7 @@ encoder_stack <- torch::nn_module(
     for (i in seq_along(self$blocks)) {
       kv[[i]] <- self$blocks[[i]]$cache_kv(x, rope = rp)
       x <- self$blocks[[i]](x, rope = rp)
+      collect_between_layers(x)
     }
     kv
   }

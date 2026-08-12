@@ -2,9 +2,11 @@
 #
 # Both the R package and the reference Python implementation must see
 # *identical bytes*, so fixtures are generated once here, cast to
-# float32, and written to safetensors. Regenerating them invalidates
-# every stored reference prediction — bump `FIXTURE_VERSION` and re-run
-# the Python side when you do.
+# float32, and written to safetensors. Changing an existing fixture
+# invalidates every stored reference prediction — bump
+# `FIXTURE_VERSION` and re-run the Python side when you do. *Appending*
+# one does not: each block seeds its own generator, so the bytes of the
+# fixtures above it do not move, and their stored dumps stay valid.
 #
 #   Rscript inst/parity/fixtures.R [outdir]
 
@@ -131,6 +133,46 @@ build_parity_fixtures <- function() {
     y_train = lin[seq_len(n_tr)] + rnorm(n_tr, sd = 0.1),
     x_test  = X[n_tr + seq_len(n_te), , drop = FALSE],
     categorical_features = c(1L, 3L, 4L)
+  )
+
+  # --- 8. large enough that the reference chunks its own forward ---------
+  # TabPFN v3's default performance options set
+  # `use_chunkwise_inference = True` with `inference_row_chunk_size =
+  # 2048` and `inference_col_chunk_size = 4`, so every fixture above it
+  # -- 280 rows at the largest -- takes the reference's *unchunked* path
+  # and says nothing about the chunked one. This one crosses both
+  # thresholds, and is shaped so the awkward cases are the ones that get
+  # exercised:
+  #
+  #   * 2,600 train rows -> row chunks of 2048 + 552, so the last one is
+  #     ragged;
+  #   * 64 test rows on top -> the second chunk straddles the train/test
+  #     boundary at row 2,600, which is the only place a chunk-relative
+  #     train-row count can go wrong;
+  #   * 10 features -> column chunks of 4 + 4 + 2, ragged as well;
+  #   * NaNs and a constant column, because the scaler and the imputation
+  #     means are fitted over *all* train rows before the chunk loop
+  #     starts, and chunking must not disturb either.
+  #
+  # Kept deliberately narrow (10 columns, 64 test rows): what is being
+  # tested is the loop, and every column and test row is bytes shipped in
+  # the built package.
+  set.seed(20260811)
+  n_tr <- 2600L; n_te <- 64L; n <- n_tr + n_te; p <- 10L
+  X <- matrix(rnorm(n * p), ncol = p)
+  X[, 7] <- 2.5                                    # constant column
+  X[cbind(sample.int(n, 120L),
+          sample.int(p - 1L, 120L, replace = TRUE))] <- NA_real_
+  lin <- 1.2 * X[, 1] - 0.7 * X[, 2] + 0.5 * X[, 3] * X[, 4] +
+    0.4 * sin(2 * X[, 5])
+  lin[is.na(lin)] <- 0
+  fx$clf_large <- list(
+    task    = "classification",
+    note    = paste("2600/64 rows, 10 features, 4 classes -- crosses the",
+                    "reference's row (2048) and column (4) chunk sizes"),
+    x_train = X[seq_len(n_tr), , drop = FALSE],
+    y_train = as.integer(cut(lin[seq_len(n_tr)], 4L)) - 1L,
+    x_test  = X[n_tr + seq_len(n_te), , drop = FALSE]
   )
 
   fx

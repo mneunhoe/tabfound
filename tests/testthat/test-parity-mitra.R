@@ -112,3 +112,101 @@ test_that("one missing value silently deletes a whole Mitra feature column", {
   # imputer in front of the parity-checked one.
   expect_true(isTRUE(get_backend("mitra")$handles_missing))
 })
+
+
+# ---------------------------------------------------------------------------
+# Within-sublayer chunking
+# ---------------------------------------------------------------------------
+
+# A randomly-initialised model at a fraction of the width, so the
+# chunking can be checked without the 303 MB checkpoint.
+tiny_mitra <- function(task = "CLASSIFICATION") {
+  net <- mitra_model(list(dim = 32L, dim_output = 4L, n_layers = 2L,
+                          n_heads = 4L, task = task))
+  net$eval()
+  net
+}
+
+test_that("chunking a Mitra layer computes the same thing at every factor", {
+  # All four sublayers are independent across rows -- a query row attends
+  # to the support and never to another query row, the feature attention
+  # is a sequence per row, and both MLPs are elementwise -- so this
+  # reorganises work that was already separate.
+  #
+  # It is *not* bit-identical, and that is worth being precise about,
+  # because v2.6's equivalent is. The observation attention puts rows in
+  # the sequence position, so a chunk changes the query length the kernel
+  # sees; v2.6 splits a fold of leading dimensions and leaves every
+  # attention's own shape alone. What comes out is float32 reduction
+  # order: 5.4e-7 of the logits' scale on the real checkpoint, against
+  # 1.4e-5 for the stage chunking on TabPFN v3.
+  net <- tiny_mitra()
+  set.seed(71)
+  xs <- torch::torch_randn(c(1L, 40L, 6L))
+  ys <- torch::torch_randint(0L, 3L, c(1L, 40L))$to(dtype = torch::torch_float())
+  xq <- torch::torch_randn(c(1L, 11L, 6L))
+
+  base <- as.array(torch::with_no_grad(net(xs$clone(), ys, xq$clone())))
+  scale <- max(abs(base))
+  for (k in c(2L, 3L, 8L, 40L, 100L)) {
+    got <- as.array(torch::with_no_grad(
+      net(xs$clone(), ys, xq$clone(), save_peak_memory_factor = k)))
+    expect_equal(dim(got), dim(base))
+    expect_lt(max(abs(got - base)), 1e-5 * scale)
+  }
+})
+
+test_that("chunking a cached Mitra prediction agrees with the uncached one", {
+  net <- tiny_mitra()
+  set.seed(72)
+  xs <- torch::torch_randn(c(1L, 40L, 6L))
+  ys <- torch::torch_randint(0L, 3L, c(1L, 40L))$to(dtype = torch::torch_float())
+  xq <- torch::torch_randn(c(1L, 11L, 6L))
+
+  cache <- torch::with_no_grad(net$build_kv_cache(xs$clone(), ys))
+  base <- as.array(torch::with_no_grad(
+    net(NULL, NULL, xq$clone(), kv_cache = cache)))
+  scale <- max(abs(base))
+  for (k in c(2L, 3L, 8L)) {
+    got <- as.array(torch::with_no_grad(
+      net(NULL, NULL, xq$clone(), kv_cache = cache,
+          save_peak_memory_factor = k)))
+    expect_lt(max(abs(got - base)), 1e-5 * scale)
+  }
+})
+
+test_that("a Mitra layer's chunking does not depend on the row count dividing", {
+  # 17 rows into 5 chunks is 4+4+4+4+1: the ragged last chunk is where a
+  # driver that assumes an even split falls over, and it is one row wide,
+  # which is where a squeezed dimension would.
+  net <- tiny_mitra()
+  set.seed(73)
+  xs <- torch::torch_randn(c(1L, 17L, 5L))
+  ys <- torch::torch_randint(0L, 3L, c(1L, 17L))$to(dtype = torch::torch_float())
+  xq <- torch::torch_randn(c(1L, 3L, 5L))
+  base <- as.array(torch::with_no_grad(net(xs$clone(), ys, xq$clone())))
+  got <- as.array(torch::with_no_grad(
+    net(xs$clone(), ys, xq$clone(), save_peak_memory_factor = 5L)))
+  expect_equal(dim(got), dim(base))
+  expect_lt(max(abs(got - base)), 1e-5 * max(abs(base)))
+})
+
+test_that("chunked_evaluate_axis writes back through a non-leading axis", {
+  # The whole memory saving rests on `torch_split()` returning views
+  # along the split axis, so that `add_()` reaches the original storage
+  # instead of a copy. If that ever stopped holding, the results would
+  # still be right and the saving would silently be gone.
+  x <- torch::torch_zeros(c(2L, 6L, 3L))
+  out <- chunked_evaluate_axis(function(z) torch::torch_ones_like(z),
+                               x, factor = 3L, axis = 2L)
+  expect_true(as.logical((out == 1)$all()))
+  # `x` is the same object, mutated -- not a fresh tensor.
+  expect_true(as.logical((x == 1)$all()))
+
+  # And with no factor it is the ordinary out-of-place expression.
+  y <- torch::torch_zeros(c(2L, 6L, 3L))
+  out2 <- chunked_evaluate_axis(function(z) torch::torch_ones_like(z),
+                                y, factor = NULL, axis = 2L)
+  expect_true(as.logical((out2 == 1)$all()))
+  expect_true(as.logical((y == 0)$all()))
+})

@@ -1,0 +1,86 @@
+{
+  "backend": "tabicl",
+  "model_id": "tabicl-v2-classifier",
+  "point": {
+    "n_context": 4000,
+    "n_query": 500,
+    "n_features": 50
+  },
+  "measured_on": "2026-08-12",
+  "machine_total_bytes": 51539607552,
+  "spmf_floor": 1.44638651143512,
+  "points": [
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 8413020160,
+      "loaded_bytes": 576569344,
+      "elapsed_sec": 12.5446,
+      "method": "rss-sampling",
+      "samples": 756,
+      "spmf": 1
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 10131406848,
+      "loaded_bytes": 597508096,
+      "elapsed_sec": 12.9568,
+      "method": "rss-sampling",
+      "samples": 779,
+      "spmf": 2
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 10280566784,
+      "loaded_bytes": 603045888,
+      "elapsed_sec": 14.3388,
+      "method": "rss-sampling",
+      "samples": 872,
+      "spmf": 4
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 10110533632,
+      "loaded_bytes": 583958528,
+      "elapsed_sec": 16.0424,
+      "method": "rss-sampling",
+      "samples": 955,
+      "spmf": 8
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 9468362752,
+      "loaded_bytes": 592986112,
+      "elapsed_sec": 19.8258,
+      "method": "rss-sampling",
+      "samples": 1180,
+      "spmf": 16
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 8826978304,
+      "loaded_bytes": 596934656,
+      "elapsed_sec": 27.0967,
+      "method": "rss-sampling",
+      "samples": 1602,
+      "spmf": 32
+    }
+  ]
+}

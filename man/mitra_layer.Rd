@@ -6,6 +6,21 @@
 \usage{
 mitra_layer(dim, n_heads)
 }
+\arguments{
+\item{save_peak_memory_factor}{Split each of the four sublayers'
+work into this many chunks of rows. Every one of them is
+independent across rows -- a query row attends to the cached
+support and never to another query row, the feature attention is a
+sequence per row, and both MLPs are elementwise -- so this
+reorganises work that was already separate and changes nothing
+about the arithmetic.
+
+The split is on the row axis rather than through
+\code{\link[=chunked_evaluate]{chunked_evaluate()}}'s leading-dimension fold, because
+\code{to_rows()} folds \verb{(batch, features)} into the attention batch:
+flattening \verb{(batch, rows)} first would hand a chunk spanning two
+datasets to a key/value cache indexed by one.}
+}
 \description{
 Pre-norm throughout. The row attention is the only place the query
 rows see the support rows — they attend \emph{to} the support and never to

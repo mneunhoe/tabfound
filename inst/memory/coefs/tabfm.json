@@ -1,20 +1,23 @@
 {
   "backend": "tabfm",
   "source": "measured",
-  "measured_on": "2026-08-11",
+  "measured_on": "2026-08-12",
   "notes": "Fitted by inst/memory/calibrate.R against 11 measured points on Darwin arm64 (rss-sampling), model tabfm-1.0.0-classifier. Constants are for the peak_terms() formulas as they stand; changing either invalidates the other. safety_factor is whatever it takes for no measured point to sit above its own estimate.",
   "devices": {
     "cpu": {
       "float32": {
-        "intercept_bytes": 9540993024,
-        "act_copies": 75.3898305084746,
+        "intercept_bytes": 9529950208,
+        "act_copies": 68.6271186440678,
         "att_copies": 2,
+        "res_copies": 2,
+        "floor_bytes": 17195974656,
         "prep_state_factor": 1,
+        "spmf_floor": 1,
         "ensemble_log2_factor": 2.08686671357098,
         "ensemble_cap": 4.5059648217636,
-        "safety_factor": 1.18274628698179,
-        "weights_fallback_bytes": 6557888408,
-        "ensemble_source": "measured"
+        "ensemble_source": "measured",
+        "safety_factor": 1.22969388208786,
+        "weights_fallback_bytes": 6557888408
       }
     }
   }

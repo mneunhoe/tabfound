@@ -447,7 +447,9 @@ load_ensemble_configs_from_dump <- function(dump_dir) {
 # @keywords internal
 tabpfn_forward <- function(net, x_train, y_train, x_test, col_emb,
                            kv_cache = NULL, return_kv_cache = FALSE,
-                           save_peak_memory_factor = NULL) {
+                           save_peak_memory_factor = NULL,
+                           row_chunk_size = NA_integer_,
+                           col_chunk_size = NA_integer_) {
   args <- list(x_train, y_train, x_test)
   if (isTRUE(net$needs_column_embeddings)) args$column_embeddings <- col_emb
   if (isTRUE(net$supports_kv_cache)) {
@@ -456,6 +458,12 @@ tabpfn_forward <- function(net, x_train, y_train, x_test, col_emb,
   }
   if (isTRUE(net$supports_chunked_eval)) {
     args$save_peak_memory_factor <- save_peak_memory_factor
+  }
+  # `NA` means "the checkpoint's own", so passing it through is how a
+  # caller who said nothing still gets the reference's defaults.
+  if (isTRUE(net$supports_stage_chunking)) {
+    args$row_chunk_size <- row_chunk_size
+    args$col_chunk_size <- col_chunk_size
   }
   do.call(net, args)
 }
@@ -483,7 +491,9 @@ tabpfn_forward <- function(net, x_train, y_train, x_test, col_emb,
 build_member_kv_caches <- function(net, col_emb, X_train, y_train, configs,
                                    member_y, device = "cpu",
                                    categorical_features = integer(),
-                                   save_peak_memory_factor = NULL) {
+                                   save_peak_memory_factor = NULL,
+                                   row_chunk_size = NA_integer_,
+                                   col_chunk_size = NA_integer_) {
   X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
   # A member's pipeline fits on the training rows only, so the test side
   # of this call is a placeholder -- one row, thrown away.
@@ -498,7 +508,9 @@ build_member_kv_caches <- function(net, col_emb, X_train, y_train, configs,
     no_rows <- torch::torch_zeros(c(1L, 0L, x_tr$size(3)), device = device)
     torch::with_no_grad(
       tabpfn_forward(net, x_tr, y_tr, no_rows, col_emb, return_kv_cache = TRUE,
-                     save_peak_memory_factor = save_peak_memory_factor)
+                     save_peak_memory_factor = save_peak_memory_factor,
+                     row_chunk_size = row_chunk_size,
+                     col_chunk_size = col_chunk_size)
     )$kv_cache
   })
 }
@@ -536,7 +548,9 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
                                               trace_dir = NULL,
                                               categorical_features = integer(),
                                               kv_caches = NULL,
-                                              save_peak_memory_factor = NULL) {
+                                              save_peak_memory_factor = NULL,
+                                              row_chunk_size = NA_integer_,
+                                              col_chunk_size = NA_integer_) {
   X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
   storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
   y_raw <- as.numeric(y_train)
@@ -571,7 +585,9 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
     out <- torch::with_no_grad({
       tabpfn_forward(net, X_tr_t, y_tr_t, X_te_t, col_emb,
                      kv_cache = if (is.null(kv_caches)) NULL else kv_caches[[i]],
-                     save_peak_memory_factor = save_peak_memory_factor)
+                     save_peak_memory_factor = save_peak_memory_factor,
+                     row_chunk_size = row_chunk_size,
+                     col_chunk_size = col_chunk_size)
     })
     logits <- out$logits[1, , ]                                 # (n_test, n_bins)
     # The reference divides the raw decoder output by the temperature
@@ -647,7 +663,9 @@ apply_ensemble_predict_classifier <- function(net, col_emb,
                                                trace_dir = NULL,
                                                categorical_features = integer(),
                                                kv_caches = NULL,
-                                               save_peak_memory_factor = NULL) {
+                                               save_peak_memory_factor = NULL,
+                                               row_chunk_size = NA_integer_,
+                                               col_chunk_size = NA_integer_) {
   X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
   storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
   y_int <- as.integer(y_train)
@@ -667,7 +685,9 @@ apply_ensemble_predict_classifier <- function(net, col_emb,
     out <- torch::with_no_grad({
       tabpfn_forward(net, X_tr_t, y_tr_t, X_te_t, col_emb,
                      kv_cache = if (is.null(kv_caches)) NULL else kv_caches[[i]],
-                     save_peak_memory_factor = save_peak_memory_factor)
+                     save_peak_memory_factor = save_peak_memory_factor,
+                     row_chunk_size = row_chunk_size,
+                     col_chunk_size = col_chunk_size)
     })
     logits <- out$logits[1, , 1:n_classes]
     if (softmax_temperature != 1) logits <- logits / softmax_temperature

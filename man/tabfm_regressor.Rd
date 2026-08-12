@@ -19,6 +19,8 @@ tabfm_regressor(
   n_svd_features = 0,
   predict_chunk_size = 512L,
   kv_cache = FALSE,
+  row_chunk_size = NULL,
+  col_chunk_size = NULL,
   trace_dir = NULL
 )
 }

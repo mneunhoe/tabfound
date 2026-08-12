@@ -78,12 +78,12 @@ clf <- tabfound_load("clf.tabfound")
 
 | backend | status | verified against |
 |---|---|---|
-| `tabpfn` (TabPFN v2 / v2.5, Prior-Labs) | working — classifier and regressor, single pass, n-member ensemble, KV cache | `tabpfn` 8.2.0 on PyPI |
+| `tabpfn` (TabPFN v2 / v2.5, Prior-Labs) | working — classifier and regressor, single pass, n-member ensemble, KV cache, chunked forward | `tabpfn` 8.2.0 on PyPI |
 | `tabpfn26` (TabPFN v2.6, Prior-Labs) | working — classifier and regressor, single pass and n-member ensemble | `tabpfn` 8.2.0 on PyPI |
-| `tabpfn3` (TabPFN v3, Prior-Labs) | working — classifier and regressor, single pass and n-member ensemble, KV cache, chunked forward | `tabpfn` 8.2.0 on PyPI |
-| `tabfm` (Google TabFM 1.0.0) | working — classifier and regressor, preprocessing + 32-member ensemble, KV cache | `tabfm` on PyPI, float32 |
-| `tabicl` (TabICL v2, soda-inria) | working — classifier and regressor, preprocessing + 8-member ensemble, KV cache | `tabicl` 2.1.1 on PyPI |
-| `mitra` (Mitra, AutoGluon) | working — classifier and regressor, preprocessing + ensemble, KV cache (inference only, no fine-tuning) | AutoGluon `Tab2D` |
+| `tabpfn3` (TabPFN v3, Prior-Labs) | working — classifier and regressor, single pass and n-member ensemble, KV cache, chunked forward, row/column stage chunking | `tabpfn` 8.2.0 on PyPI |
+| `tabfm` (Google TabFM 1.0.0) | working — classifier and regressor, preprocessing + 32-member ensemble, KV cache, row stage chunking | `tabfm` on PyPI, float32 |
+| `tabicl` (TabICL v2, soda-inria) | working — classifier and regressor, preprocessing + 8-member ensemble, KV cache, row stage chunking | `tabicl` 2.1.1 on PyPI |
+| `mitra` (Mitra, AutoGluon) | working — classifier and regressor, preprocessing + ensemble, KV cache, chunked forward (inference only, no fine-tuning) | AutoGluon `Tab2D` |
 
 `list_backends()` reports what is registered in your install.
 
@@ -802,9 +802,11 @@ clf <- tabular_classifier("tabpfn-v2.6-classifier",
 ```
 
 `kv_cache` works on every backend — `tabpfn` (v2 / v2.5), `tabpfn26`,
-`tabpfn3`, `tabicl`, `tabfm` and `mitra`. `save_peak_memory_factor` is
-`tabpfn26` and `tabpfn3` only. Asking a backend for a path it does not
-have is an error rather than a silent no-op.
+`tabpfn3`, `tabicl`, `tabfm` and `mitra`. `save_peak_memory_factor` works
+everywhere except `tabfm`; `row_chunk_size` and `col_chunk_size` work on
+`tabpfn3`, `tabicl` and `tabfm`. Asking a TabPFN
+backend for a path it does not have is an error rather than a silent
+no-op.
 
 **`kv_cache`** conditions on the training rows once per `predict()` call
 and reuses that for every chunk and every ensemble member. On TabPFN the
@@ -908,13 +910,151 @@ counts the target column. `print()` on the cache reports the figure.
 Either way it is off by default.
 
 **`save_peak_memory_factor`** splits each sublayer's work into that many
-chunks, shrinking the attention score matrix each one materialises. It is
-bit-identical on every fixture — it reorganises work that was already
-independent — so the only cost is a little loop overhead.
-
-It is bit-identical on v2.6. On v3 it is not quite — chunking changes the
-batch shapes the attention kernel sees — but the difference stays at
+chunks, shrinking the temporaries each one materialises. It reorganises
+work that was already independent, so the only cost is a little loop
+overhead: bit-identical on v2.6, and on v3 not quite — chunking changes
+the batch shapes the attention kernel sees — but the difference stays at
 float32 noise, ~1e-6 of the logits' own scale.
+
+What it cannot do is change how the peak *grows*. The tensor it slices is
+a sublayer's input, not its output, so one copy of the state survives
+every factor you pick. Measured on v3 at 50 features, the marginal cost
+of a context row goes from 1.59 MB to 0.549 MB at a factor of 8 — a
+useful 2.9×, and still a straight line.
+
+**`row_chunk_size` and `col_chunk_size`** (v3 only) are the ones that
+bend it. They drive the cell embedding, distribution embedder and column
+aggregator a chunk of rows at a time, so the `(rows, columns, embedding)`
+tensor — 51 KB per row at 100 features — is never resident whole. What
+survives the loop is a quarter of one column's width per row. The column
+chunk bounds the pre-pass that computes the distribution embedder's
+inducing summaries, which is the one part a row-chunked pass cannot do
+for itself.
+
+**TabICL has the row half of the same mechanism**, as `row_chunk_size`,
+off by default. Its column stage summarises the labelled rows into a
+fixed set of inducing points, after which every row's path through the
+column and row stages depends on nothing but itself — the same
+row-independent prefix v3 has, and the reason the design transfers. At
+Measured, three repeats per point, fresh process each:
+
+| TabICL, 90 features | plain | `row_chunk_size = 2048` |
+|---|---|---|
+| 6,426 rows (the fold) | 24.5 GB | **12.0 GB** |
+| 12,000 rows | 37.6 GB | **19.3 GB** |
+| 20,000 rows | — | 35.5 GB |
+
+`col_chunk_size` bounds the other half. A row-chunked pass cannot start
+until the column stage's summaries exist, and building them holds a
+tensor as wide as the whole table — so on a wide table the summaries,
+not the rows, are the ceiling. TabICL at 12,000 × 300:
+
+| | peak |
+|---|---|
+| no chunking | *does not finish* |
+| `row_chunk_size = 2048` | 36.9 GB, 47 s |
+| plus `col_chunk_size = 8` | **29.8 GB, 28 s** |
+
+TabFM is the clearest case, because there the pre-pass *is* the peak:
+its cumulative cost at 4,000 × 90 goes 12.9 GB after the cell embedder
+to 29.2 GB after the column stage. Chunking rows alone buys 6% and still
+cannot finish 8,000 × 90; adding `col_chunk_size = 8` finishes it, at the
+same peak the failing run reached. Same peak, one dies and one does not —
+which is what a ceiling looks like from underneath.
+
+`save_peak_memory_factor` reaches TabICL's in-context stage too, and
+measurably buys nothing there — 1.5% at 12,000 rows, and at the sweep
+point it is 20% *worse*, because the loop's own temporaries cost more
+than the transient it removes. That is the fused attention kernel again:
+the in-context stage attends across every row, but unmasked, so it never
+materialises the scores and there is nothing large to chunk. The knob is
+there for symmetry with the other backends, and the estimator models the
+penalty rather than promising a saving.
+
+Both v3 knobs default to the checkpoint's own values, 2048 and 4, which
+is what the Python reference does on this architecture and nowhere else.
+`NULL` runs every row in one pass. Unlike `save_peak_memory_factor` this is not
+bit-identical — on the package's 2,664-row fixture it moves the logits by
+1.4e-5 of their own scale, which is *less* than the reference's own
+chunked pass moves them.
+
+The two mechanisms attack different terms and neither substitutes for the
+other. Measured, v3 at 50 features, peak resident memory:
+
+| n_context | plain | chunked | chunked + the collect below |
+|---|---|---|---|
+| 8,000 | 17.8 GB | 9.4 GB | **5.6 GB** |
+| 16,000 | 21.2 GB | 12.7 GB | **5.8 GB** |
+
+At 32,768 context rows × 120 features the whole `fit()` + `predict()`
+measures 18.1 GB, where before any of this the same machine could not
+finish 8,192 × 120 at all.
+
+**Letting go between layers.** R torch frees a tensor when R's collector
+runs, not when the last reference leaves scope, so a deep stack
+accumulates every block's intermediates inside one forward pass — v3's
+24-block ICL stack held 3.3 GB to carry a 31 MB state. Every backend's
+layer loop now collects between blocks once the tensor it carries is
+worth it (4 MB, which the measurements place), which costs 1–7% on small
+tables and 2.3–2.9× less memory on large ones:
+
+| backend | dims | without | with |
+|---|---|---|---|
+| `tabicl` | 6,000 × 50 | 21.3 GB | **12.3 GB**, and 21% faster |
+| `tabpfn` (v2.5) | 6,000 × 50 | 15.3 GB | **10.9 GB** |
+| `tabfm` | 500 × 20 | 17.4 GB | **12.9 GB** |
+| `mitra` | 1,000 × 50 | 17.4 GB | **12.8 GB** |
+| `tabpfn26` | 6,000 × 50 | 8.9 GB | **7.8 GB** |
+
+It pays when the peak is accumulation and is a wash when the peak is
+genuinely live data — Mitra at 2,000 × 50, whose 36 GB really is resident
+2-D attention state, comes out 2.7% worse. `options(tabfound.collect_between_layers =)`
+takes `"auto"` (default), `TRUE` or `FALSE`.
+
+**Mitra is the case all of this was worth doing for.** It attends across
+rows *and* columns, so its activation carries every row at full embedding
+width on both axes — the steepest curve in the package, and the reason
+the preflight exists. All four of its sublayers are independent across
+rows, so `save_peak_memory_factor` applies to it too:
+
+| Mitra, 4,000 × 50 | peak |
+|---|---|
+| no factor | 40.8 GB |
+| 2 | 33.6 GB |
+| 4 | 24.3 GB |
+| 8 | 21.4 GB |
+| 32 | **14.8 GB** |
+
+And at the fold from the preflight hand-off — 6,426 × 90, recorded there
+as something Mitra "genuinely cannot do" on this machine — a factor of 32
+completes in **30.9 GB**.
+
+It is not bit-identical the way v2.6's is: the observation attention puts
+rows in the sequence position, so a chunk changes the query length the
+kernel sees, where v2.6 splits a fold of leading dimensions and leaves
+every attention's own shape alone. The gap is 5.4e-7 of the logits'
+scale, an order of magnitude tighter than v3's stage chunking.
+
+**TabPFN v2.5 has it too** — it used to be a v2.6-and-newer path, and
+v2.5's layer turns out to have the same alternating shape and the same
+independent folds. At the 6,426 × 90 fold it takes the peak from
+**15.2 GB to 7.5 GB** at a factor of 2, reproducibly and with identical
+probabilities. Larger factors are slightly *worse* than 2 there, which is
+the argument for sweeping rather than assuming more is better.
+
+This is the tightest of the four numerically: the chunking splits folds
+of *leading* dimensions only, so no attention's own sequence length
+changes — only its batch size, and only when the fold does not divide
+evenly. Exact where it divides, ~1.6e-7 otherwise.
+
+**What the factor buys is now measured, not assumed.** The estimator used
+to model it as `1 + (act_copies - 1) / k` — one copy survives, the rest
+divide — which promised 24× at `k = 32` where Mitra delivers 2.8×, and
+that is an *under*-estimate, the one direction a guard must never err in.
+`inst/memory/calibrate.R --spmf` sweeps the factor and fits the share it
+cannot reach: 0.64 for Mitra, 0.85 for v2.6, and **1.00 for v3**, whose
+stage chunking has already taken the transient away. An unswept backend
+defaults to 1 — no promised saving at all.
 
 ### Knowing before you run
 
@@ -931,8 +1071,8 @@ estimate_peak_memory("mitra-classifier",
 #> 6426 context x 90 features, 714 to predict
 #> * weights 303 MB (artifact file size)
 #> * persistent 9 MB
-#> * transient 204.0 GB, largest stage "attention across rows"
-#> > peak 257.9 GB
+#> * transient 136.3 GB, largest stage "attention across rows"
+#> > peak 170.9 GB
 #> i available 36.7 GB of 51.5 GB
 #> x verdict: EXCEEDS
 #> i Reduce `n_context`: the transient peak grows with the context...
@@ -950,16 +1090,57 @@ estimate_peak_memory(clf, 6426, 714, 90, kv_cache = TRUE)
 estimate_peak_memory(clf, 6426, 714, 90, available = 8e9)  # a 16 GB laptop
 ```
 
-Three things it is careful about, because getting them wrong would make
+The Python reference answers the same question by halving its chunk size
+and retrying when an allocation fails. R cannot: the failure kills the
+process, which is the premise this whole section rests on. So the chunk
+size has to be chosen *before* the run, and `suggest_chunk_sizes()` is
+what chooses it — searching down from the checkpoint's own default and
+returning the largest that still fits, or saying plainly that none does.
+
+```r
+suggest_chunk_sizes("tabpfn-v3-classifier", n_context = 50000,
+                    n_features = 50, available = 32e9)
+#> $row_chunk_size [1] 1024
+#> $peak_bytes     [1] 1.31e+10
+#> $verdict        [1] "ok"
+#> $feasible       [1] TRUE
+#> $note           NULL
+```
+
+When nothing fits it says so — `feasible = FALSE` and a note pointing at
+`n_context`, rather than a chunk size that would only fail later.
+
+
+Six things it is careful about, because getting them wrong would make
 the number useless. A backend's stages have very different peaks, so the
 transient term is the largest one, not their sum. `kv_cache` does not
 save memory, it *moves* it — out of the transient term, into one cache
-per member held for the whole `predict()` call. And an ensemble raises
-the peak, but nothing like `n_estimators ×`: members run sequentially, so
-the live set is one member's, while the resident high-water mark climbs
-roughly with `log2(n_estimators)` as the allocator takes bigger arenas
-and does not give them back. That last one is measured, and it is the
-opposite of what the design brief assumed.
+per member held for the whole `predict()` call. An ensemble raises the
+peak, but nothing like `n_estimators ×`: members run sequentially, so the
+live set is one member's, while the resident high-water mark climbs
+roughly with `log2(n_estimators)` as the allocator takes bigger arenas and
+does not give them back — measured, and the opposite of what the design
+brief assumed.
+
+The fourth is the summary pre-pass. A row-chunked forward cannot start
+until the column stage's summaries exist, and building them reads every
+context row — so on a chunked run it is often the peak, it answers to
+`col_chunk_size` rather than `row_chunk_size`, and it is charged its own
+measured copy count rather than the forward's. Reusing the forward's put
+TabICL at 112 GB against 36.9 GB measured.
+
+The last two are about what attention actually costs. Torch's fused
+scaled-dot-product attention takes a memory-efficient kernel when no mask
+is passed and **never materialises the `(n, n)` score matrix**: at ICL
+shapes, peak resident memory goes 353 → 382 → 448 MB across n = 4,000,
+8,000 and 16,000, where the scores alone would be 488 MB, 1.9 GB and
+7.8 GB, and a hand-written attention at n = 8,000 takes 6.2 GB. Only
+TabFM pays for one, because it is the only backend that restricts context
+by masking rather than slicing. And the estimate has a floor as well as a
+slope, because the measurements have two regimes: above a gigabyte or so
+the peak is the activation and tracks the model, and below it the peak is
+the process and does not fall with the input — TabPFN v2.5 at 8 features
+measures 2.1 GB at 800 rows and 1.1 GB at 1,600, reproducibly.
 
 The verdict is taken against memory **available now**, not installed. The
 run that prompted all this fitted comfortably alone on a 48 GB machine
@@ -977,18 +1158,21 @@ The constants behind the estimate are **measured**, by
 `inst/memory/calibrate.R`, on a grid of real fit/predict runs whose peak
 resident memory was sampled from a watching process. They are set to err
 high: for a guard, a false "tight" costs a warning and a false "ok" costs
-the session. On the calibration grid the estimates land between 1.0× and
-1.5× of measured, never below.
+the session. On the calibration grid no estimate falls below its
+measurement, and where the activation is what was measured the fit stays
+within 1.5× above it.
 
-Two caveats, both in `inst/memory/README.md` in full. The figures are
+Three caveats, all in `inst/memory/README.md` in full. The figures are
 larger than intuition suggests — a 6,426 × 90 TabICL fold measures
-24.5 GB with a single ensemble member — because what is being predicted
+25.7 GB with a single ensemble member — because what is being predicted
 is *resident* memory, which includes what libtorch's allocator has taken
-and not returned, and that is what the OS kills on. And Mitra and TabFM
-are poorly constrained: they are big enough that on a 48 GB machine every
-informative measurement is at the ceiling, so their constants extrapolate
-from a corner. Re-run the harness on a larger machine before trusting
-them.
+and not returned, and that is what the OS kills on. Nothing beyond 32,768
+context rows has been measured, so the envelope past that is
+extrapolation. And Mitra and TabFM are poorly constrained: they are big
+enough that on a 48 GB machine every informative measurement is at the
+ceiling, so their constants extrapolate from a corner — TabFM's grid
+stops at 1,600 rows. Re-run the harness on a larger machine before
+trusting them.
 
 ## Package layout
 
@@ -1111,12 +1295,21 @@ seeds it, so its own flips differ between two of its own runs.
 
 **TabPFN v3.**
 
-- The row and column chunking of `_stages_0_to_2` is not reproduced. It
-  exists to bound peak memory on very large inputs and, because a
-  distribution-embedder block only ever attends to training rows,
-  computes exactly what the unchunked path does; `save_peak_memory_factor`
-  covers the within-sublayer case. On a table large enough to need it,
-  the R port will use more memory than the reference.
+- The row and column chunking of `_stages_0_to_2` **is** reproduced, as
+  `row_chunk_size` / `col_chunk_size`, defaulting to the checkpoint's own
+  2048 and 4 exactly as the reference does. Three things about it are
+  worth knowing. It is not bit-identical — it changes the batch shapes
+  the attention kernel sees, and on the package's 2,664-row fixture moves
+  the logits by 1.4e-5 of their own scale, less than the reference's own
+  chunked pass moves them. The reference's OOM fallback, which halves the
+  chunk size and retries, is *not* ported and cannot be: a libtorch
+  allocation failure kills the R process outright, so there is nothing to
+  catch and nothing to retry from — `suggest_chunk_sizes()` chooses the
+  size beforehand instead. And it does not touch the in-context stage,
+  which stays quadratic in the context row count: chunking makes a large
+  context a wall-clock decision rather than a dead session, and the
+  reachable million-row regime is a million rows *to predict* against a
+  bounded context, via `kv_cache = TRUE`.
 - One dataset per call, as for v2.6: the reference's batch dimension is
   not exercised by any caller here and a batch greater than one is
   rejected.

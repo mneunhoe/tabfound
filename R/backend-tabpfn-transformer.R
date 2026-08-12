@@ -255,10 +255,10 @@ per_feature_transformer <- torch::nn_module(
         n_bar_bins = as.integer(config$n_bar_bins %||% 5000L)
       )
     }
-    # Read by the shared predictors. The chunked forward is a v2.6 path
-    # and is not implemented here, so only the cache is advertised.
+    # Read by the shared predictors.
     self$needs_column_embeddings <- TRUE
     self$supports_kv_cache <- TRUE
+    self$supports_chunked_eval <- TRUE
     # And it is exactly equivalent here, not merely cheaper: every
     # statistic this architecture fits comes from the training rows alone
     # (see `preprocess_x_for_encoder()`), so conditioning once cannot
@@ -278,10 +278,13 @@ per_feature_transformer <- torch::nn_module(
   # @param return_kv_cache Build and return one. `x_test` may be empty,
   #   which is how a cache is built from training rows alone.
   forward = function(x_train, y_train, x_test, column_embeddings = NULL,
-                     kv_cache = NULL, return_kv_cache = FALSE) {
+                     kv_cache = NULL, return_kv_cache = FALSE,
+                     save_peak_memory_factor = NULL) {
     if (!is.null(kv_cache)) {
       return(self$forward_cached(x_test, kv_cache,
-                                 column_embeddings = column_embeddings))
+                                 column_embeddings = column_embeddings,
+                                 save_peak_memory_factor =
+                                   save_peak_memory_factor))
     }
     device <- x_train$device
 
@@ -394,10 +397,12 @@ per_feature_transformer <- torch::nn_module(
       dump_prefix <- if (i == 1L) "layer0_internal" else NULL
       res <- self$transformer_encoder$layers[[i]](
         h, single_eval_pos = single_eval_pos, dump_prefix = dump_prefix,
-        return_kv = isTRUE(return_kv_cache)
+        return_kv = isTRUE(return_kv_cache),
+        save_peak_memory_factor = save_peak_memory_factor
       )
       h <- res$state
       if (isTRUE(return_kv_cache)) kv_out[[i]] <- res$kv
+      collect_between_layers(h)
       if (i %in% dump_layers) {
         nm <- if (i == 1L) "layer0_out"
               else if (i == n_layers) "layer_final_out"
@@ -487,7 +492,8 @@ per_feature_transformer <- torch::nn_module(
   #' projections the test rows attend to, the preprocessing statistics
   #' fitted on them, and the embedded absent-label token.
   #' @keywords internal
-  forward_cached = function(x_test, cache, column_embeddings = NULL) {
+  forward_cached = function(x_test, cache, column_embeddings = NULL,
+                            save_peak_memory_factor = NULL) {
     device <- x_test$device
     dims <- x_test$size()
     B <- dims[1]; n_test <- dims[2]; F_raw <- dims[3]
@@ -536,8 +542,10 @@ per_feature_transformer <- torch::nn_module(
     # No thinking tokens and no training rows: every row is a test row.
     for (i in seq_along(self$transformer_encoder$layers)) {
       h <- self$transformer_encoder$layers[[i]](
-        h, single_eval_pos = 0L, cached_kv = cache$kv[[i]]
+        h, single_eval_pos = 0L, cached_kv = cache$kv[[i]],
+        save_peak_memory_factor = save_peak_memory_factor
       )$state
+      collect_between_layers(h)
     }
 
     out <- self$decode(h, test_start = 0L, n_rows_total = n_test)

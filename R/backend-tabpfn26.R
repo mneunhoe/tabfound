@@ -617,6 +617,7 @@ tabpfn_v2_6_transformer <- torch::nn_module(
       )
       state <- res$state
       if (isTRUE(return_kv_cache)) kv_out[[i]] <- res$kv
+      collect_between_layers(state)
       if (i %in% dump_at) {
         dump_if_enabled(
           if (i == 1L) "layer0_out"
@@ -683,6 +684,7 @@ tabpfn_v2_6_transformer <- torch::nn_module(
         state, single_eval_pos = 0L, cached_kv = cache$kv[[i]],
         save_peak_memory_factor = save_peak_memory_factor
       )$state
+      collect_between_layers(state)
     }
 
     # No thinking or training rows here: every row is a test row.

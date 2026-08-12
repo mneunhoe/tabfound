@@ -454,8 +454,11 @@ tabpfn3_icl_block <- torch::nn_module(
     ln  <- self$layernorm
     kv  <- NULL
     if (isTRUE(return_kv)) {
-      # Building a cache bypasses chunking: the key/value tensors have to
-      # be produced whole, not a slice at a time.
+      # Building a cache bypasses chunking *here*: the key/value tensors
+      # have to be produced whole, not a slice at a time. The reference
+      # does the same, and in both the MLP below is chunked regardless of
+      # which branch produced `x`, so a factor still reaches most of the
+      # block on a cache build.
       res <- att(ln(x), single_eval_pos = single_eval_pos, return_kv = TRUE)
       x <- x + res$out
       kv <- res$kv
@@ -526,9 +529,21 @@ tabpfn3_induced_self_attention_block <- torch::nn_module(
     x_flat <- x$transpose(2L, 3L)$contiguous()$reshape(c(B * C, R, E))
 
     if (isTRUE(return_hidden) || !is.null(cached_hidden)) {
-      # Chunking splits along `B * C`, which would mean slicing a supplied
-      # or returned hidden state to match. Neither path is the hot one, so
-      # both run whole.
+      # Both run whole, which is what the reference does too, though it
+      # takes a longer route to the same place: its `return_hidden` branch
+      # calls the unchunked path outright, and its `cached_hidden` branch
+      # goes through `chunked_evaluate_maybe_inplace` but is only ever
+      # reached with `save_peak_memory_factor = None` -- `_process_row_chunk`
+      # withholds it on exactly this path. Which is as well: chunking
+      # splits along `B * C`, and the reference hands each chunk the
+      # *whole* hidden state, so a caller that did pass a factor would get
+      # a shape mismatch rather than a smaller peak.
+      #
+      # Nothing is lost by it. What bounds this stage on a large table is
+      # `stages_0_to_2()`'s row chunking, which caps `R` before the fold
+      # into `B * C` ever happens; measured on a 8,000-row cache build, it
+      # takes the peak from 16.9 GB to 8.7 GB where a factor of 8 here
+      # reaches 12.4 GB, and the two together add nothing to the first.
       hidden <- cached_hidden %||% self$inducing_hidden(x_flat, n_train)
       out <- self$cross_attn_block2(x_flat, hidden)
       hidden_out <- if (isTRUE(return_hidden)) hidden$detach() else NULL
@@ -588,6 +603,7 @@ tabpfn3_feature_distribution_embedder <- torch::nn_module(
       )
       x <- res$state
       if (isTRUE(return_hidden)) hidden[[i]] <- res$hidden
+      collect_between_layers(x)
     }
     list(state = x, hidden = hidden)
   }
@@ -649,6 +665,7 @@ tabpfn3_column_aggregator <- torch::nn_module(
       for (i in seq_len(n - 1L)) {
         x <- self$blocks[[i]](x, rope = r,
                               save_peak_memory_factor = save_peak_memory_factor)
+        collect_between_layers(x)
       }
     }
     cls_out <- self$blocks[[n]]$forward_cross(
@@ -951,11 +968,22 @@ tabpfn_v3_transformer <- torch::nn_module(
     n_bins <- as.integer(config$n_bar_bins %||% config$num_buckets %||% 5000L)
     self$register_buffer("regression_borders", torch::torch_zeros(n_bins + 1L))
 
+    # The reference's own stage-0-2 chunk sizes, which it applies by
+    # default on v3 and nowhere else. Carried on the module so a caller
+    # that says nothing gets what the Python estimator would do, and an
+    # older `config.json` written before the converter emitted them still
+    # lands on the same numbers.
+    self$inference_row_chunk_size <-
+      as.integer(config$inference_row_chunk_size %||% 2048L)
+    self$inference_col_chunk_size <-
+      as.integer(config$inference_col_chunk_size %||% 4L)
+
     # Read by the shared predictor helpers. There is no feature positional
     # embedding table to hand in: stage 2's RoPE does that job.
     self$needs_column_embeddings <- FALSE
     self$supports_kv_cache <- TRUE
     self$supports_chunked_eval <- TRUE
+    self$supports_stage_chunking <- TRUE
   },
 
   # @param x_train `(B, n_train, F)`; @param y_train `(B, n_train)`;
@@ -965,11 +993,21 @@ tabpfn_v3_transformer <- torch::nn_module(
   # @param return_kv_cache Build and return one. `x_test` may be empty,
   #   which is the usual way to build from training rows alone.
   # @param save_peak_memory_factor Chunk count for [chunked_evaluate()].
+  # @param row_chunk_size,col_chunk_size Stage-0-2 chunking; see
+  #   `stages_0_to_2()`. Left alone they take the checkpoint's own values,
+  #   which is what the reference does by default on this architecture;
+  #   `NULL` runs every row in one pass.
   forward = function(x_train, y_train, x_test, kv_cache = NULL,
-                     return_kv_cache = FALSE, save_peak_memory_factor = NULL) {
+                     return_kv_cache = FALSE, save_peak_memory_factor = NULL,
+                     row_chunk_size = NA_integer_, col_chunk_size = NA_integer_) {
+    row_chunk_size <- .tabpfn3_chunk_arg(row_chunk_size,
+                                         self$inference_row_chunk_size)
+    col_chunk_size <- .tabpfn3_chunk_arg(col_chunk_size,
+                                         self$inference_col_chunk_size)
     if (!is.null(kv_cache)) {
       return(self$forward_cached(
-        x_test, kv_cache, save_peak_memory_factor = save_peak_memory_factor
+        x_test, kv_cache, save_peak_memory_factor = save_peak_memory_factor,
+        row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
       ))
     }
     B <- x_train$size(1)
@@ -998,27 +1036,16 @@ tabpfn_v3_transformer <- torch::nn_module(
     dump_if_enabled("input_x_raw", x_RiBC)
 
     y_BN <- self$prepare_targets(y_train, n_train)
-    pre <- self$preprocess(x_RiBC, n_train = n_train)
-    x_emb <- self$embed_cells(pre$x_BRiC, pre$indicators)
-    dump_if_enabled("embedded_x", x_emb)
-
-    y_col <- self$embed_col_targets(y_BN)
-    x_emb <- .tabpfn3_add_to_train_rows(x_emb, y_col$unsqueeze(3L), n_train)
-
-    dist <- self$feature_distribution_embedder(
-      x_emb, n_train = n_train, return_hidden = isTRUE(return_kv_cache),
+    s02 <- self$stages_0_to_2(
+      x_RiBC, y_BN, n_train,
+      return_hidden = isTRUE(return_kv_cache),
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       save_peak_memory_factor = save_peak_memory_factor
     )
-    dump_if_enabled("dist_embedder_out", dist$state)
-
-    rows <- self$column_aggregator(
-      dist$state, save_peak_memory_factor = save_peak_memory_factor
-    )
-    dump_if_enabled("column_aggregator_out", rows)
 
     # (B, Ri, n_cls, E) -> (B, Ri, n_cls * E): the CLS tokens concatenated
     # are the row embedding.
-    x <- rows$flatten(start_dim = 3L)
+    x <- s02$state$flatten(start_dim = 3L)
     x <- .tabpfn3_add_to_train_rows(x, self$embed_icl_targets(y_BN), n_train)
     dump_if_enabled("icl_input", x)
 
@@ -1037,7 +1064,7 @@ tabpfn_v3_transformer <- torch::nn_module(
     )
     if (isTRUE(return_kv_cache)) {
       res$kv_cache <- tabpfn3_kv_cache(
-        kv = icl$kv, scaler = pre$scaler, inducing_hidden = dist$hidden,
+        kv = icl$kv, scaler = s02$scaler, inducing_hidden = s02$hidden,
         train_embeddings = train_emb$detach(), y_train = y_BN$detach(),
         n_train = n_train
       )
@@ -1047,7 +1074,13 @@ tabpfn_v3_transformer <- torch::nn_module(
 
   #' Predict test rows against a prebuilt cache.
   #' @keywords internal
-  forward_cached = function(x_test, cache, save_peak_memory_factor = NULL) {
+  forward_cached = function(x_test, cache, save_peak_memory_factor = NULL,
+                            row_chunk_size = NA_integer_,
+                            col_chunk_size = NA_integer_) {
+    row_chunk_size <- .tabpfn3_chunk_arg(row_chunk_size,
+                                         self$inference_row_chunk_size)
+    col_chunk_size <- .tabpfn3_chunk_arg(col_chunk_size,
+                                         self$inference_col_chunk_size)
     B <- x_test$size(1); n_test <- x_test$size(2)
     if (B != 1L) {
       cli::cli_abort("The TabPFN v3 backend runs one dataset at a time.")
@@ -1055,18 +1088,16 @@ tabpfn_v3_transformer <- torch::nn_module(
     x_RiBC <- x_test$transpose(1L, 2L)$contiguous()
 
     # `n_train = 0` here is not "no training rows": the scaler carries
-    # their statistics, and it is also what imputation draws on.
-    pre <- self$preprocess(x_RiBC, n_train = 0L, scaler = cache$scaler)
-    x_emb <- self$embed_cells(pre$x_BRiC, pre$indicators)
-
-    dist <- self$feature_distribution_embedder(
-      x_emb, n_train = 0L, cached_hidden = cache$inducing_hidden,
+    # their statistics, and it is also what imputation draws on. Every
+    # row is a test row, so there is no target to embed and the inducing
+    # summaries come from the cache rather than from this pass.
+    s02 <- self$stages_0_to_2(
+      x_RiBC, y_BN = NULL, n_train = 0L, scaler = cache$scaler,
+      cached_hidden = cache$inducing_hidden,
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       save_peak_memory_factor = save_peak_memory_factor
     )
-    rows <- self$column_aggregator(
-      dist$state, save_peak_memory_factor = save_peak_memory_factor
-    )
-    x <- rows$flatten(start_dim = 3L)
+    x <- s02$state$flatten(start_dim = 3L)
     # No ICL target embedding: every row here is a test row.
     icl <- self$run_icl(x, single_eval_pos = 0L, cached_kv = cache$kv,
                         save_peak_memory_factor = save_peak_memory_factor)
@@ -1078,6 +1109,110 @@ tabpfn_v3_transformer <- torch::nn_module(
         self$decode(train_emb, test_emb,
                     cache$y_train$to(device = test_emb$device)) else NULL,
       test_hidden = test_emb, train_hidden = train_emb
+    )
+  },
+
+  #' Stages 0 to 2, optionally a row chunk at a time
+  #'
+  #' Mirrors the reference's `_stages_0_to_2`, and carries the same three
+  #' paths in one function: consuming a cache, chunked, and whole.
+  #'
+  #' The point of the chunking is what it *avoids*: `(B, Ri, C, E)`, which
+  #' at 128 embedding channels is 51 KB per row per 100 columns and is the
+  #' term that decides how large a table fits. Between preprocessing and
+  #' the cell embedding the state is only `(B, Ri, C, G)`, `G` = 6, so the
+  #' loop starts there, and what survives it is `(B, Ri, n_cls, E)` -- a
+  #' quarter of a column's width rather than every column's. Neither
+  #' bound involves the row count, which is why this changes the shape of
+  #' the curve rather than its constant.
+  #'
+  #' `save_peak_memory_factor` is the within-sublayer counterpart and
+  #' composes with this; it cannot substitute for it, because the tensor
+  #' it chunks is the temporaries and not the state they are made from.
+  #'
+  #' @param x_RiBC `(Ri, B, C)` raw input, train rows first.
+  #' @param y_BN `(B, N)` cleaned training targets, or `NULL` when there
+  #'   are none (the cache-consuming path).
+  #' @param n_train Leading rows of `x_RiBC` that are training rows.
+  #' @param scaler Fitted scaler to reuse, or `NULL` to fit one.
+  #' @param cached_hidden Per-block inducing summaries from a cache.
+  #' @param return_hidden Return them, for building one.
+  #' @param row_chunk_size Rows per pass through stages 0-2, or `NULL` for
+  #'   all at once. Ignored when it is not smaller than the row count.
+  #' @param col_chunk_size Columns per chunk of the inducing-summary
+  #'   pre-pass, or `NULL` for all at once.
+  #' @return `list(state, hidden, scaler)`, `state` being
+  #'   `(B, Ri, n_cls, E)`.
+  #' @keywords internal
+  stages_0_to_2 = function(x_RiBC, y_BN, n_train, scaler = NULL,
+                           cached_hidden = NULL, return_hidden = FALSE,
+                           row_chunk_size = NULL, col_chunk_size = NULL,
+                           save_peak_memory_factor = NULL) {
+    pre <- self$preprocess(x_RiBC, n_train = n_train, scaler = scaler)
+    grouped <- self$group_features(pre$x_BRiC, pre$indicators)
+    n_rows <- grouped$size(2)
+    y_col <- if (!is.null(y_BN) && n_train > 0L)
+      self$embed_col_targets(y_BN) else NULL
+
+    size <- suppressWarnings(as.integer(row_chunk_size %||% NA_integer_))
+    use_chunks <- !is.na(size) && size >= 1L && size < n_rows
+    if (!use_chunks) size <- n_rows
+
+    # The summaries have to exist before the first row chunk can run.
+    # Consuming a cache means they already do.
+    hidden <- cached_hidden
+    if (use_chunks && is.null(hidden)) {
+      hidden <- self$all_inducing_hidden(grouped, y_col, n_train,
+                                         col_chunk_size)
+    }
+    # "Full" is the path that owns its own summaries: one pass over every
+    # row, computing them as it goes. Only there can a block be asked to
+    # hand them back, and only there does chunking a sublayer of it apply
+    # -- the other two paths take the branch that runs whole.
+    full <- !use_chunks && is.null(hidden)
+    dump <- !use_chunks
+
+    parts <- vector("list", length(seq(1L, n_rows, by = size)))
+    own_hidden <- NULL
+    j <- 0L
+    for (s in seq(1L, n_rows, by = size)) {
+      j <- j + 1L
+      len <- min(s + size - 1L, n_rows) - s + 1L
+      x_emb <- self$embed_cells(grouped$narrow(2L, s, len))
+      if (dump) dump_if_enabled("embedded_x", x_emb)
+
+      # How many rows of *this* chunk are training rows. The train/test
+      # boundary falls inside a chunk in general, and a chunk past it has
+      # none at all.
+      n_tr_chunk <- max(0L, min(n_train - (s - 1L), len))
+      if (!is.null(y_col) && n_tr_chunk > 0L) {
+        x_emb <- .tabpfn3_add_to_train_rows(
+          x_emb, y_col$narrow(2L, s, n_tr_chunk)$unsqueeze(3L), n_tr_chunk)
+      }
+
+      dist <- self$feature_distribution_embedder(
+        x_emb, n_train = n_tr_chunk, cached_hidden = hidden,
+        return_hidden = isTRUE(return_hidden) && full,
+        save_peak_memory_factor = if (full) save_peak_memory_factor else NULL
+      )
+      if (dump) dump_if_enabled("dist_embedder_out", dist$state)
+      if (!is.null(dist$hidden)) own_hidden <- dist$hidden
+
+      parts[[j]] <- self$column_aggregator(
+        dist$state, save_peak_memory_factor = save_peak_memory_factor
+      )
+      if (dump) dump_if_enabled("column_aggregator_out", parts[[j]])
+      # A finished chunk leaves everything but `parts[[j]]` dead, and the
+      # whole point of the loop is not to be holding it when the next one
+      # allocates. Gated on the chunk's own embedded width rather than on
+      # the part kept, which is 25x smaller.
+      if (use_chunks) collect_between_layers(x_emb)
+    }
+
+    list(
+      state = if (j == 1L) parts[[1L]] else torch::torch_cat(parts, dim = 2L),
+      hidden = if (use_chunks) hidden else own_hidden,
+      scaler = pre$scaler
     )
   },
 
@@ -1096,6 +1231,9 @@ tabpfn_v3_transformer <- torch::nn_module(
       )
       x <- res$state
       if (isTRUE(return_kv)) kv[[i]] <- res$kv
+      # 24 blocks deep, this is where the package's largest single
+      # accumulation is; see [collect_between_layers()].
+      collect_between_layers(x)
     }
     list(state = x, kv = kv)
   },
@@ -1151,15 +1289,22 @@ tabpfn_v3_transformer <- torch::nn_module(
     list(x_BRiC = x$transpose(1L, 2L), indicators = indicators, scaler = scaler)
   },
 
-  #' Group the columns and embed each group into one token.
+  #' Group the columns, without embedding them.
   #'
   #' Every column becomes a token carrying the values of the columns 1, 2
   #' and 4 places to its right, wrapping around. Not its own value: the
   #' shifts are `2^i` for `i = 0..group_size-1`, and none of them is zero.
   #' The column count is preserved, unlike v2's packing, which divided it
   #' by the group size.
+  #'
+  #' Kept separate from `embed_cells()` because this is where the pipeline
+  #' can be cut: the grouped tensor is `(B, Ri, C, G)` with `G` 6, and the
+  #' embedded one is `(B, Ri, C, E)` with `E` 128, so everything that runs
+  #' a chunk of rows at a time has to start on this side of the boundary.
+  #' The reference splits it the same way (`_group_features` vs the
+  #' `x_embed` call inside `_process_row_chunk`).
   #' @keywords internal
-  embed_cells = function(x_BRiC, indicators) {
+  group_features = function(x_BRiC, indicators) {
     g <- self$feature_group_size
     roll_stack <- function(z) {
       torch::torch_stack(
@@ -1174,7 +1319,80 @@ tabpfn_v3_transformer <- torch::nn_module(
       grouped <- torch::torch_cat(list(grouped, roll_stack(indicators)), dim = 4L)
     }
     dump_if_enabled("x_grouped", grouped)
+    grouped
+  },
+
+  #' Embed each column group into one token.
+  #'
+  #' @param grouped `(B, Ri, C, G)` from `group_features()`, or a slice of
+  #'   one along the row axis.
+  #' @keywords internal
+  embed_cells = function(grouped) {
     self$x_embed(grouped)
+  },
+
+  #' Every distribution-embedder block's inducing summary, in column chunks
+  #'
+  #' Mirrors the reference's `_compute_all_inducing_hidden` /
+  #' `_process_col_chunk`. This is the half of stage 1 that a row-chunked
+  #' pass cannot do for itself: block `l`'s inducing summary is a function
+  #' of the *training* rows' state after blocks `1..l-1`, so it has to
+  #' exist before any row chunk starts. Chunking it along columns instead
+  #' is free -- every column is embedded on its own -- and holds
+  #' `(B * Cj, n_train, E)` rather than `(B * C, n_train, E)`.
+  #'
+  #' What comes back is small whatever the table: `num_inducing_points`
+  #' rows per column per block, so 3 x 100 x 128 x 128 floats is 20 MB at
+  #' 100 features. It is the same object [tabpfn3_kv_cache()] stores.
+  #'
+  #' @param grouped `(B, Ri, C, G)` for train and test rows together; only
+  #'   the leading `n_train` are read.
+  #' @param y_col `(B, N, E)` target embedding, added to every column of a
+  #'   training row, or `NULL`.
+  #' @param col_chunk_size Columns per chunk, or `NULL` for all at once.
+  #' @return One `(B * C, num_inducing_points, E)` tensor per block, in the
+  #'   column-major order [tabpfn3_induced_self_attention_block()] folds
+  #'   its columns into the batch with.
+  #' @keywords internal
+  all_inducing_hidden = function(grouped, y_col, n_train,
+                                 col_chunk_size = NULL) {
+    if (n_train <= 0L) {
+      cli::cli_abort("The inducing summaries are built from training rows.")
+    }
+    layers <- self$feature_distribution_embedder$layers
+    n_blocks <- length(layers)
+    B <- grouped$size(1); C <- grouped$size(3)
+    train <- if (n_train >= grouped$size(2)) grouped
+             else grouped$narrow(2L, 1L, n_train)
+    cc <- if (is.null(col_chunk_size)) C
+          else max(1L, min(as.integer(col_chunk_size), C))
+
+    parts <- replicate(n_blocks, list(), simplify = FALSE)
+    for (s in seq(1L, C, by = cc)) {
+      cj <- min(s + cc - 1L, C) - s + 1L
+      x_emb <- self$embed_cells(train$narrow(3L, s, cj))
+      if (!is.null(y_col)) x_emb <- x_emb + y_col$unsqueeze(3L)
+      E <- x_emb$size(4)
+      # Same fold as the block's own forward: (B, N, Cj, E) -> (B, Cj, N,
+      # E) -> (B * Cj, N, E), so `b` varies slowest and the chunks
+      # concatenate back into the whole in the right order.
+      x_flat <- x_emb$transpose(2L, 3L)$contiguous()$
+        reshape(c(B * cj, n_train, E))
+      for (i in seq_len(n_blocks)) {
+        blk <- layers[[i]]
+        hidden <- blk$inducing_hidden(x_flat, n_train)
+        parts[[i]][[length(parts[[i]]) + 1L]] <-
+          hidden$reshape(c(B, cj, -1L, E))
+        # The next block's summary is taken from this one's output on the
+        # training rows, which is exactly what the unchunked path feeds
+        # forward. The last block's is never needed.
+        if (i < n_blocks) x_flat <- blk$cross_attn_block2(x_flat, hidden)
+      }
+    }
+    lapply(parts, function(p) {
+      h <- if (length(p) == 1L) p[[1L]] else torch::torch_cat(p, dim = 2L)
+      h$flatten(start_dim = 1L, end_dim = 2L)$detach()
+    })
   },
 
   #' Clean the training targets and put them in `(B, N)`.
@@ -1245,6 +1463,20 @@ tabpfn3_class_embedding <- torch::nn_module(
          .tabpfn3_row_slice(x, n_train + 1L, Ri)),
     dim = 2L
   )
+}
+
+# Resolve a stage-chunking argument against the checkpoint's own value.
+#
+# Three states, because there are three things a caller can mean. `NA`
+# (the default) is "whatever the checkpoint says", which for every
+# released v3 is the reference's 2048/4 and is what the Python estimator
+# would do. `NULL` is "off", which is how the parity harness asks for the
+# unchunked pass. An integer is an integer.
+# @keywords internal
+.tabpfn3_chunk_arg <- function(x, default) {
+  if (is.null(x)) return(NULL)
+  if (length(x) == 1L && is.na(x)) return(as.integer(default))
+  as.integer(x)
 }
 
 # Slice rows `from:to` out of a 3-D or 4-D tensor whose second axis is the
@@ -1449,12 +1681,19 @@ tabpfn3_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   n_est <- max(1, as.numeric(opts$n_estimators %||% 1))
   nq <- .resident_query(n_query, opts)
 
+  # One token per *column*, not per group of them: v3 groups by rolling
+  # and stacking, which preserves the column count where v2's packing
+  # divided it. Getting this wrong understates stages 0-2 by the group
+  # size and lets the fitted `act_copies` absorb the difference, which
+  # hides it at one shape and is wrong at every other.
+  g <- as.numeric(config$feature_group_size %||% 3)
+
   terms <- .icl_family_terms(
     n_context    = n_context,
     n_query      = nq,
     n_features   = n_features,
     embed_dim    = e,
-    group_size   = as.numeric(config$feature_group_size %||% 3),
+    group_size   = 1,
     n_cls        = n_cls,
     col_heads    = as.numeric(config$dist_embed_num_heads %||% 8),
     row_heads    = as.numeric(config$feat_agg_num_heads %||% 8),
@@ -1462,7 +1701,14 @@ tabpfn3_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     col_inducing = as.numeric(config$dist_embed_num_inducing_points %||% 128),
     icl_blocks   = l,
     kv_cache     = FALSE,
-    n_estimators = n_est
+    n_estimators = n_est,
+    # v3 is the only backend that bounds the row axis of stages 0-2.
+    row_chunk    = .stage_row_chunk(opts, config),
+    col_chunk    = .stage_col_chunk(opts, config),
+    # The grouped input the row loop slices from: `feature_group_size`
+    # values per column, doubled when the checkpoint carries NaN/Inf
+    # indicators.
+    group_channels = g * (if (isTRUE(config$use_nan_indicators %||% TRUE)) 2 else 1)
   )
 
   # v3's cached path keeps `icl_num_kv_heads_test` heads rather than all

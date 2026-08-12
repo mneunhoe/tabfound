@@ -96,23 +96,35 @@ tabpfn_task_of <- function(config) {
 # Capability guard
 # ---------------------------------------------------------------------------
 
-# The predictors here serve both TabPFN generations. Only v2.6's network
-# has the cached and chunked forward paths, so asking the v2 / v2.5 one
-# for either has to fail rather than be silently dropped -- a caller who
-# set `kv_cache = TRUE` for the speed would otherwise never learn they did
-# not get it.
+# The predictors here serve all three TabPFN generations, and each one
+# added a memory path the ones before it do not have. Asking an older
+# network for a newer path has to fail rather than be silently dropped --
+# a caller who set `kv_cache = TRUE` for the speed, or a chunk size to
+# survive a large table, would otherwise never learn they did not get it.
+#
+# `NA` is not "asked for": it is the default, meaning "whatever the
+# checkpoint says", and on a backend without stage chunking that is
+# nothing.
 # @keywords internal
-.require_kv_cache_support <- function(ctx, kv_cache, save_peak_memory_factor) {
+.require_kv_cache_support <- function(ctx, kv_cache, save_peak_memory_factor,
+                                      row_chunk_size = NA_integer_,
+                                      col_chunk_size = NA_integer_) {
+  asked <- function(x) !is.null(x) && !(length(x) == 1L && is.na(x))
   missing <- c(
     if (isTRUE(kv_cache) && !isTRUE(ctx$net$supports_kv_cache)) "kv_cache",
     if (!is.null(save_peak_memory_factor) &&
-        !isTRUE(ctx$net$supports_chunked_eval)) "save_peak_memory_factor"
+        !isTRUE(ctx$net$supports_chunked_eval)) "save_peak_memory_factor",
+    if ((asked(row_chunk_size) || asked(col_chunk_size)) &&
+        !isTRUE(ctx$net$supports_stage_chunking))
+      c(if (asked(row_chunk_size)) "row_chunk_size",
+        if (asked(col_chunk_size)) "col_chunk_size")
   )
   if (!length(missing)) return(invisible(TRUE))
   cli::cli_abort(c(
     "The {.val {ctx$backend$name}} backend does not support {.arg {missing}}.",
-    i = "{.arg kv_cache} needs TabPFN v2.5 or newer; \\
-         {.arg save_peak_memory_factor} needs v2.6 or newer."
+    i = "{.arg kv_cache} and {.arg save_peak_memory_factor} need \\
+         TabPFN v2.5 or newer; {.arg row_chunk_size} and \\
+         {.arg col_chunk_size} need v3."
   ))
   invisible(TRUE)
 }
@@ -182,6 +194,20 @@ tabpfn_task_of <- function(config) {
 #'   attention score matrix each one materialises. Bit-identical output,
 #'   lower peak memory, slightly more overhead. Supported by the
 #'   `tabpfn26` and `tabpfn3` backends.
+#' @param row_chunk_size,col_chunk_size Stage-0-2 chunking, `tabpfn3`
+#'   only. The first drives the cell embedding, distribution embedder and
+#'   column aggregator a chunk of rows at a time, so the
+#'   `(rows, columns, embedding)` tensor is never resident whole; the
+#'   second bounds the column-wise pre-pass that builds the distribution
+#'   embedder's inducing summaries. Left alone, both take the checkpoint's
+#'   own values -- 2048 and 4, which is what the Python reference does by
+#'   default on this architecture. `NULL` runs every row in one pass,
+#'   which is what this package did before the chunking landed.
+#'
+#'   Unlike `save_peak_memory_factor` this is not bit-identical: it
+#'   changes the batch shapes the attention kernel sees, and on the
+#'   package's large fixture it moves the logits by 1.4e-5 of their own
+#'   scale -- less than the reference's own chunked pass moves them.
 #' @keywords internal
 tabpfn_classifier <- function(ctx,
                               ensemble_configs_dir = NULL,
@@ -190,8 +216,11 @@ tabpfn_classifier <- function(ctx,
                               trace_dir = NULL,
                               categorical_features = NULL,
                               kv_cache = FALSE,
-                              save_peak_memory_factor = NULL) {
-  .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor)
+                              save_peak_memory_factor = NULL,
+                              row_chunk_size = NA_integer_,
+                              col_chunk_size = NA_integer_) {
+  .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
+                            row_chunk_size, col_chunk_size)
   net     <- ctx$net
   dev     <- ctx$device
   col_emb <- .column_embeddings_for(net, dev)
@@ -230,11 +259,13 @@ tabpfn_classifier <- function(ctx,
       )$squeeze(-1L)$unsqueeze(1L)
       torch::with_no_grad(tabpfn_forward(
         net, x_tr, y_tr, x_te, col_emb,
-        save_peak_memory_factor = save_peak_memory_factor))
+        save_peak_memory_factor = save_peak_memory_factor,
+        row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     } else {
       torch::with_no_grad(tabpfn_forward(
         net, NULL, NULL, x_te, col_emb, kv_cache = cache[[1L]],
-        save_peak_memory_factor = save_peak_memory_factor))
+        save_peak_memory_factor = save_peak_memory_factor,
+        row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     }
     logits <- out$logits[1, , 1:length(state$class_levels)]
     if (softmax_temperature != 1) logits <- logits / softmax_temperature
@@ -249,7 +280,8 @@ tabpfn_classifier <- function(ctx,
       n_classes = length(state$class_levels), device = dev,
       softmax_temperature = softmax_temperature, trace_dir = trace_dir,
       categorical_features = state$categorical_features %||% integer(),
-      kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor
+      kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor,
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
     )
   }
 
@@ -268,7 +300,8 @@ tabpfn_classifier <- function(ctx,
       no_rows <- torch::torch_zeros(c(1L, 0L, x_tr$size(3)), device = dev)
       return(list(torch::with_no_grad(tabpfn_forward(
         net, x_tr, y_tr, no_rows, col_emb, return_kv_cache = TRUE,
-        save_peak_memory_factor = save_peak_memory_factor
+        save_peak_memory_factor = save_peak_memory_factor,
+        row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
       ))$kv_cache))
     }
     build_member_kv_caches(
@@ -276,7 +309,8 @@ tabpfn_classifier <- function(ctx,
       member_y = function(cfg, y) cfg$class_perm[as.integer(y) + 1L],
       device = dev,
       categorical_features = state$categorical_features %||% integer(),
-      save_peak_memory_factor = save_peak_memory_factor
+      save_peak_memory_factor = save_peak_memory_factor,
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
     )
   }
 
@@ -311,8 +345,11 @@ tabpfn_regressor <- function(ctx,
                              trace_dir = NULL,
                              categorical_features = NULL,
                              kv_cache = FALSE,
-                             save_peak_memory_factor = NULL) {
-  .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor)
+                             save_peak_memory_factor = NULL,
+                             row_chunk_size = NA_integer_,
+                             col_chunk_size = NA_integer_) {
+  .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
+                            row_chunk_size, col_chunk_size)
   net     <- ctx$net
   dev     <- ctx$device
   col_emb <- .column_embeddings_for(net, dev)
@@ -347,11 +384,13 @@ tabpfn_regressor <- function(ctx,
                               device = dev)$squeeze(-1L)$unsqueeze(1L)
       torch::with_no_grad(tabpfn_forward(
         net, x_tr, y_tr, x_te, col_emb,
-        save_peak_memory_factor = save_peak_memory_factor))
+        save_peak_memory_factor = save_peak_memory_factor,
+        row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     } else {
       torch::with_no_grad(tabpfn_forward(
         net, NULL, NULL, x_te, col_emb, kv_cache = cache[[1L]],
-        save_peak_memory_factor = save_peak_memory_factor))
+        save_peak_memory_factor = save_peak_memory_factor,
+        row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     }
     logits <- out$logits[1, , ]
     if (softmax_temperature != 1) logits <- logits / softmax_temperature
@@ -370,7 +409,8 @@ tabpfn_regressor <- function(ctx,
       quantiles = quantiles, device = dev,
       softmax_temperature = softmax_temperature, trace_dir = trace_dir,
       categorical_features = state$categorical_features %||% integer(),
-      kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor
+      kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor,
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
     )
   }
 
@@ -387,7 +427,8 @@ tabpfn_regressor <- function(ctx,
       no_rows <- torch::torch_zeros(c(1L, 0L, x_tr$size(3)), device = dev)
       return(list(torch::with_no_grad(tabpfn_forward(
         net, x_tr, y_tr, no_rows, col_emb, return_kv_cache = TRUE,
-        save_peak_memory_factor = save_peak_memory_factor
+        save_peak_memory_factor = save_peak_memory_factor,
+        row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
       ))$kv_cache))
     }
     build_member_kv_caches(
@@ -399,7 +440,8 @@ tabpfn_regressor <- function(ctx,
       },
       device = dev,
       categorical_features = state$categorical_features %||% integer(),
-      save_peak_memory_factor = save_peak_memory_factor
+      save_peak_memory_factor = save_peak_memory_factor,
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
     )
   }
 
@@ -605,10 +647,16 @@ tabpfn_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     stages = list(
       list(name = "attention between items",
            act = n * fg * e,
-           att = fg * h * n_context * n),
+           # No mask, so torch's fused SDPA takes a memory-efficient
+           # kernel and the `(n, n)` scores are never materialised. See
+           # the note in `.icl_family_terms()` for the measurement.
+           att = 0),
       list(name = "attention between features",
            act = n * fg * e,
-           att = n * h * fg * fg)
+           # Unmasked as well, and over the feature axis rather than the
+           # row axis, so its scores would be `fg x fg` even if they were
+           # materialised. They are not.
+           att = 0)
     ),
     # The cache keeps head 0's keys and values only -- the test-row branch
     # broadcasts one head across all of them -- which is why this is

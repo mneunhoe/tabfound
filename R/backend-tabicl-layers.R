@@ -47,9 +47,21 @@ tabicl_mab <- torch::nn_module(
   #   slicing, not by masking.
   # @param cached_kv Optional `list(key, value)` from [cache_kv()],
   #   covering exactly the positions `train_size` would have sliced to.
+  # @param save_peak_memory_factor Split the attention and the feed
+  #   forward into this many chunks of queries. Only the two branches
+  #   whose keys and values are fixed independently of the query are
+  #   chunked -- the cache, and the `train_size` slice, which is taken
+  #   from the *whole* normalized input before the loop starts. Plain
+  #   self-attention is not: there the keys *are* the queries, so a chunk
+  #   would change what each row attends over, which is a different
+  #   answer rather than a cheaper one. The factor is ignored there
+  #   rather than silently doing that.
   forward = function(q, k = NULL, v = NULL, attn_mask = NULL,
-                     train_size = NULL, rope = NULL, cached_kv = NULL) {
+                     train_size = NULL, rope = NULL, cached_kv = NULL,
+                     save_peak_memory_factor = NULL) {
     q_n <- self$norm1(q)
+    spmf <- save_peak_memory_factor
+    chunkable <- FALSE
 
     if (!is.null(cached_kv)) {
       if (!is.null(k) || !is.null(v) || !is.null(train_size)) {
@@ -58,26 +70,45 @@ tabicl_mab <- torch::nn_module(
            {.arg cached_kv} is given."
         )
       }
-      attn <- self$attn(q_n, attn_mask = attn_mask, rope = rope,
-                        cached_kv = cached_kv)
+      attn_of <- function(z) self$attn(z, attn_mask = attn_mask, rope = rope,
+                                       cached_kv = cached_kv)
+      chunkable <- TRUE
     } else if (!is.null(train_size)) {
       if (!is.null(k) || !is.null(v)) {
         cli::cli_abort("{.arg k}/{.arg v} must be NULL when {.arg train_size} is given.")
       }
+      # Taken from the whole normalized input, so it is the same tensor
+      # whatever the chunking does below.
       k_n <- q_n[.., 1:train_size, ]
-      attn <- self$attn(q_n, k_n, k_n, attn_mask = attn_mask, rope = rope)
+      attn_of <- function(z) self$attn(z, k_n, k_n, attn_mask = attn_mask,
+                                       rope = rope)
+      chunkable <- TRUE
     } else if (is.null(k) && is.null(v)) {
-      attn <- self$attn(q_n, attn_mask = attn_mask, rope = rope)
+      attn_of <- function(z) self$attn(z, attn_mask = attn_mask, rope = rope)
     } else {
       k_n <- self$norm1(k)
       # The reference reuses the normalized key for the value whenever
       # they are the same object, which every call site here satisfies.
       v_n <- if (identical(v, k)) k_n else self$norm1(v)
-      attn <- self$attn(q_n, k_n, v_n, attn_mask = attn_mask, rope = rope)
+      attn_of <- function(z) self$attn(z, k_n, v_n, attn_mask = attn_mask,
+                                       rope = rope)
+      chunkable <- TRUE
     }
 
-    x <- q + attn
-    x + self$feed_forward(self$norm2(x))
+    ax <- q$dim() - 1L
+    x <- if (is.null(spmf) || !chunkable) {
+      q + attn_of(q_n)
+    } else {
+      out <- q$contiguous()
+      n <- out$size(ax)
+      ss <- as.integer(ceiling(n / as.integer(spmf)))
+      qs <- torch::torch_split(q_n, ss, dim = ax)
+      xs <- torch::torch_split(out, ss, dim = ax)
+      for (j in seq_along(xs)) xs[[j]]$add_(attn_of(qs[[j]]))
+      out
+    }
+    chunked_evaluate_axis(function(z) self$feed_forward(self$norm2(z)),
+                          x, if (chunkable) spmf else NULL, axis = ax)
   },
 
   #' Key/value projections of `k`, for a KV cache.
@@ -213,6 +244,7 @@ tabicl_set_transformer <- torch::nn_module(
         src, train_size = if (is.null(hidden)) train_size else NULL,
         hidden = if (is.null(hidden)) NULL else hidden[[i]]
       )
+      collect_between_layers(src)
     }
     src
   },
@@ -238,7 +270,9 @@ tabicl_set_transformer <- torch::nn_module(
           "Cannot build a column-stage cache for this checkpoint.",
           i = "A column of the labelled rows is uniformly \\
                {blk$skip_value}, which the set transformer passes through \\
-               rather than attending over. Predict without {.arg kv_cache}."
+               rather than attending over. Predict without \\
+               {.arg kv_cache} and without {.arg row_chunk_size} -- both \\
+               go through these summaries."
         ))
       }
       h <- blk$induce(src)
@@ -276,15 +310,17 @@ tabicl_encoder <- torch::nn_module(
   # @param cached_kv List of per-block `list(key, value)` from
   #   [build_kv()], or NULL.
   forward = function(x, attn_mask = NULL, train_size = NULL,
-                     cached_kv = NULL) {
+                     cached_kv = NULL, save_peak_memory_factor = NULL) {
     rp <- if (self$use_rope) self$rope else NULL
     for (i in seq_along(self$blocks)) {
       x <- self$blocks[[i]](
         x, attn_mask = attn_mask,
         train_size = if (is.null(cached_kv)) train_size else NULL,
         rope = rp,
-        cached_kv = if (is.null(cached_kv)) NULL else cached_kv[[i]]
+        cached_kv = if (is.null(cached_kv)) NULL else cached_kv[[i]],
+        save_peak_memory_factor = save_peak_memory_factor
       )
+      collect_between_layers(x)
     }
     x
   },
@@ -308,6 +344,7 @@ tabicl_encoder <- torch::nn_module(
     for (i in seq_along(self$blocks)) {
       kv[[i]] <- self$blocks[[i]]$cache_kv(x, rope = rp)
       x <- self$blocks[[i]](x, train_size = full, rope = rp)
+      collect_between_layers(x)
     }
     kv
   }

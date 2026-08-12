@@ -1,0 +1,43 @@
+{
+  "backend": "tabicl",
+  "model_id": "tabicl-v2-classifier",
+  "point": {
+    "n_context": 8000,
+    "n_query": 500,
+    "n_features": 200
+  },
+  "measured_on": "2026-08-12",
+  "machine_total_bytes": 51539607552,
+  "prepass_copies": 71.1550508474576,
+  "safety_factor": 2.25364492310169,
+  "points": [
+    {
+      "n_context": 8000,
+      "n_query": 500,
+      "n_features": 200,
+      "status": "ok",
+      "peak_bytes": 42083827712,
+      "loaded_bytes": 583663616,
+      "elapsed_sec": 95.9123,
+      "method": "rss-sampling",
+      "samples": 4603,
+      "row_chunk_size": 2048,
+      "col_chunk_size": "NA",
+      "label": "row only"
+    },
+    {
+      "n_context": 8000,
+      "n_query": 500,
+      "n_features": 200,
+      "status": "ok",
+      "peak_bytes": 24888213504,
+      "loaded_bytes": 571260928,
+      "elapsed_sec": 102.3405,
+      "method": "rss-sampling",
+      "samples": 4985,
+      "row_chunk_size": 2048,
+      "col_chunk_size": 8,
+      "label": "row + col 8"
+    }
+  ]
+}

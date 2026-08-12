@@ -119,11 +119,16 @@ tabicl_col_embedding <- torch::nn_module(
     }
   },
 
-  # Steps 1-4 of `forward()`: group, reserve the CLS columns, and project
-  # each cell. Nothing here looks past a single row, so it is the same
-  # whether the batch holds training rows, test rows, or both.
+  # Steps 1-3 of `forward()`: group the columns and reserve the CLS
+  # slots, stopping short of the projection.
+  #
+  # This is where the pipeline can be cut. What comes out is
+  # `(B, HC, T, group_size)` -- three floats per cell -- where the
+  # projection that follows makes it `(B, HC, T, embed_dim)`, forty-odd
+  # times wider. Anything that wants to work a column slice at a time has
+  # to start on this side of that.
   # @keywords internal
-  embed_cells = function(x) {
+  group_cells = function(x) {
     xg <- if (self$feature_group) {
       tabicl_group_features(x, self$group_size)
     } else {
@@ -136,7 +141,15 @@ tabicl_col_embedding <- torch::nn_module(
       )
       xg <- torch::torch_cat(list(pad, xg), dim = 3L)
     }
-    features <- xg$permute(c(1L, 3L, 2L, 4L))$contiguous()   # (B, HC, T, size)
+    xg$permute(c(1L, 3L, 2L, 4L))$contiguous()               # (B, HC, T, size)
+  },
+
+  # Steps 1-4: the grouping above, then the per-cell projection. Nothing
+  # here looks past a single row, so it is the same whether the batch
+  # holds training rows, test rows, or both.
+  # @keywords internal
+  embed_cells = function(x) {
+    features <- self$group_cells(x)
     list(features = features, src = self$in_linear(features))
   },
 
@@ -171,20 +184,85 @@ tabicl_col_embedding <- torch::nn_module(
   },
 
   # Run the labelled rows through, keeping each block's summary.
-  # @return `list(out, hidden)` -- the labelled rows' column embeddings,
-  #   and the per-block summaries a later test-only pass needs.
-  build_hidden = function(x_train, y_train) {
-    ce <- self$embed_cells(x_train)
-    src <- self$add_target(ce$src, ce$features, y_train)
-    built <- self$tf_col$build_hidden(src)
-    list(out = built$src$permute(c(1L, 3L, 2L, 4L))$contiguous(),
-         hidden = built$hidden)
+  #
+  # @param col_chunk_size Columns per pass, or `NULL` for all at once.
+  #   Every column is embedded on its own -- the set transformer folds
+  #   `(B, HC)` into its batch -- so this changes nothing about the
+  #   answer and bounds the `(B, HC, T, embed_dim)` tensor the pre-pass
+  #   would otherwise hold whole. That tensor is the ceiling: a row-
+  #   chunked forward cannot start until the summaries exist, so on a
+  #   backend where the pre-pass dominates, chunking rows alone buys
+  #   nothing. Measured on TabFM at 4,000 x 90, the pre-pass alone was
+  #   36.4 GB of a 35.6 GB chunked forward.
+  # @param want_out Keep the labelled rows' column embeddings. A cache
+  #   build needs them -- they feed the row interactor -- but a chunked
+  #   forward wants only the summaries, and accumulating the full-width
+  #   `(B, HC, T, E)` output just to discard it defeats the point of
+  #   chunking the columns in the first place.
+  # @return `list(out, hidden)`; `out` is `NULL` when not wanted.
+  build_hidden = function(x_train, y_train, col_chunk_size = NULL,
+                          want_out = TRUE) {
+    features <- self$group_cells(x_train)
+    hc <- features$size(2)
+    cc <- suppressWarnings(as.integer(col_chunk_size %||% NA_integer_))
+    if (is.na(cc) || cc < 1L || cc >= hc) {
+      src <- self$add_target(self$in_linear(features), features, y_train)
+      built <- self$tf_col$build_hidden(src)
+      return(list(
+        out = if (isTRUE(want_out))
+          built$src$permute(c(1L, 3L, 2L, 4L))$contiguous() else NULL,
+        hidden = built$hidden))
+    }
+
+    outs <- list()
+    hids <- NULL
+    for (s in seq(1L, hc, by = cc)) {
+      len <- min(s + cc - 1L, hc) - s + 1L
+      f <- features$narrow(2L, s, len)
+      built <- self$tf_col$build_hidden(
+        self$add_target(self$in_linear(f), f, y_train)
+      )
+      if (isTRUE(want_out)) outs[[length(outs) + 1L]] <- built$src
+      # Concatenated on the column axis, in slice order, so the whole
+      # lines up with what an unchunked pass would have produced. Get
+      # this wrong and every column carries another column's summary,
+      # which is finite, plausible and silent.
+      if (is.null(hids)) {
+        hids <- lapply(built$hidden, list)
+      } else {
+        for (i in seq_along(hids)) {
+          hids[[i]][[length(hids[[i]]) + 1L]] <- built$hidden[[i]]
+        }
+      }
+      collect_between_layers(built$src)
+    }
+    out <- if (!isTRUE(want_out)) NULL else {
+      src <- if (length(outs) == 1L) outs[[1L]] else
+        torch::torch_cat(outs, dim = 2L)
+      src$permute(c(1L, 3L, 2L, 4L))$contiguous()
+    }
+    list(
+      out = out,
+      hidden = lapply(hids, function(h) {
+        if (length(h) == 1L) h[[1L]] else torch::torch_cat(h, dim = 2L)
+      })
+    )
   },
 
-  #' Column-embed test rows against a prebuilt set of block summaries.
+  #' Column-embed rows against a prebuilt set of block summaries.
+  #'
+  #' @param y_train Targets for the *leading* rows of `x`, when some of
+  #'   them are labelled. A prediction against a cache passes `NULL` --
+  #'   every row there is a test row. A row-chunked uncached pass does
+  #'   not: a chunk that straddles the train/test boundary carries both
+  #'   kinds, and the labelled ones must get the target embedding the
+  #'   unchunked pass would have given them. Silently omitting it leaves
+  #'   the shapes intact and the answer wrong.
   #' @keywords internal
-  forward_cached = function(x, hidden) {
-    src <- self$embed_cells(x)$src
+  forward_cached = function(x, hidden, y_train = NULL) {
+    ce <- self$embed_cells(x)
+    src <- if (is.null(y_train)) ce$src
+           else self$add_target(ce$src, ce$features, y_train)
     src <- self$tf_col(src, hidden = hidden)
     src$permute(c(1L, 3L, 2L, 4L))$contiguous()
   },
@@ -251,6 +329,7 @@ tabicl_row_interaction <- torch::nn_module(
     n_blocks <- length(self$tf_row$blocks)
     for (i in seq_len(n_blocks - 1L)) {
       x <- self$tf_row$blocks[[i]](x, rope = rp)
+      collect_between_layers(x)
     }
     # Last block: queries are the CLS columns, keys/values the whole row.
     cls_out <- self$tf_row$blocks[[n_blocks]](
@@ -339,17 +418,19 @@ tabicl_ic_learning <- torch::nn_module(
 
   #' Decode test rows against a prebuilt per-block key/value cache.
   #' @keywords internal
-  forward_cached = function(reps, cached_kv) {
+  forward_cached = function(reps, cached_kv, save_peak_memory_factor = NULL) {
     # No target is added: every row here is a test row, and the uncached
     # pass leaves those untouched too.
-    src <- self$tf_icl(reps, cached_kv = cached_kv)
+    src <- self$tf_icl(reps, cached_kv = cached_kv,
+                       save_peak_memory_factor = save_peak_memory_factor)
     self$decoder(self$ln(src))
   },
 
   # @param reps `(B, T, d_model)`; @param y_train `(B, train_size)`.
-  forward = function(reps, y_train) {
+  forward = function(reps, y_train, save_peak_memory_factor = NULL) {
     r <- self$add_target(reps, y_train)
-    src <- self$tf_icl(r, train_size = y_train$size(2))
+    src <- self$tf_icl(r, train_size = y_train$size(2),
+                       save_peak_memory_factor = save_peak_memory_factor)
     self$decoder(self$ln(src))
   }
 )
@@ -374,6 +455,8 @@ tabicl_model <- torch::nn_module(
     # Read by the predictors; see `tabicl_kv_cache()` for why the cache is
     # exact rather than merely cheaper here.
     self$supports_kv_cache <- TRUE
+    self$supports_stage_chunking <- TRUE
+    self$supports_chunked_eval <- TRUE
     self$kv_cache_is_exact <- TRUE
   },
 
@@ -381,8 +464,8 @@ tabicl_model <- torch::nn_module(
   #
   # @param x `(B, train_size, H)` — the labelled rows only.
   # @param y_train `(B, train_size)`.
-  build_kv_cache = function(x, y_train) {
-    built <- self$col_embedder$build_hidden(x, y_train)
+  build_kv_cache = function(x, y_train, col_chunk_size = NULL) {
+    built <- self$col_embedder$build_hidden(x, y_train, col_chunk_size)
     reps <- self$row_interactor(built$out)
     tabicl_kv_cache(
       col_hidden = built$hidden,
@@ -392,35 +475,117 @@ tabicl_model <- torch::nn_module(
     )
   },
 
+  #' The column and row stages, optionally a chunk of rows at a time
+  #'
+  #' What this avoids is the `(B, T, HC, E)` column embedding, which
+  #' carries every row at every column at full embedding width and is the
+  #' term that decides how large a table fits. What survives the loop is
+  #' `(B, T, num_cls * E)` -- a fixed handful of vectors per row however
+  #' wide the table.
+  #'
+  #' The prefix is row-independent once the column stage's per-block
+  #' summaries exist, which is what makes the loop legitimate: a row's
+  #' path through the column stage depends on the summaries and on
+  #' itself, and the row stage is a sequence over one row's columns.
+  #'
+  #' @section The invariant this must not break:
+  #' Only the inducing half of a column block carries scalable softmax,
+  #' and its scale depends on the *source* length -- the number of rows
+  #' being read. So the summaries are built once, from all the labelled
+  #' rows, and chunks only ever pass through the second half, whose keys
+  #' and values are the fixed inducing set. If a chunk ever reached the
+  #' first half, the answer would depend on the chunk size, and it would
+  #' look entirely reasonable.
+  #'
+  #' @param x `(B, T, H)`, labelled rows first.
+  #' @param y_train `(B, train_size)`, or `NULL` when every row is a test
+  #'   row (the cache-consuming path).
+  #' @param col_hidden Per-block summaries from a cache, or `NULL` to
+  #'   build them from the labelled rows.
+  #' @param row_chunk_size Rows per pass, or `NULL` for all at once.
+  #' @param col_chunk_size Columns per pass of the summary pre-pass. The
+  #'   row loop cannot start until the summaries exist, so on a wide
+  #'   table this is what decides whether row chunking helps at all.
+  #' @return `(B, T, num_cls * E)` row representations.
+  #' @keywords internal
+  stages_0_to_1 = function(x, y_train, col_hidden = NULL,
+                           row_chunk_size = NULL, col_chunk_size = NULL) {
+    n_rows <- x$size(2)
+    n_train <- if (is.null(y_train)) 0L else y_train$size(2)
+    size <- suppressWarnings(as.integer(row_chunk_size %||% NA_integer_))
+    use_chunks <- !is.na(size) && size >= 1L && size < n_rows
+
+    hidden <- col_hidden
+    if (use_chunks && is.null(hidden)) {
+      if (n_train <= 0L) {
+        cli::cli_abort("Row chunking needs either labelled rows or a cache.")
+      }
+      hidden <- self$col_embedder$build_hidden(
+        x[, 1:n_train, ], y_train, col_chunk_size, want_out = FALSE
+      )$hidden
+    }
+
+    if (!use_chunks) {
+      emb <- if (is.null(hidden)) self$col_embedder(x, y_train)
+             else self$col_embedder$forward_cached(x, hidden)
+      dump_if_enabled("tabicl_col", emb)
+      return(self$row_interactor(emb))
+    }
+
+    parts <- vector("list", length(seq(1L, n_rows, by = size)))
+    j <- 0L
+    for (s in seq(1L, n_rows, by = size)) {
+      j <- j + 1L
+      len <- min(s + size - 1L, n_rows) - s + 1L
+      # How many rows of *this* chunk are labelled. The boundary falls
+      # inside a chunk in general, and a chunk past it has none.
+      n_tr_chunk <- max(0L, min(n_train - (s - 1L), len))
+      y_chunk <- if (n_tr_chunk > 0L) y_train$narrow(2L, s, n_tr_chunk) else NULL
+      emb <- self$col_embedder$forward_cached(
+        x$narrow(2L, s, len), hidden, y_chunk
+      )
+      parts[[j]] <- self$row_interactor(emb)
+      collect_between_layers(emb)
+    }
+    if (j == 1L) parts[[1L]] else torch::torch_cat(parts, dim = 2L)
+  },
+
   # @param x `(B, T, H)` with the labelled rows first.
   # @param y_train `(B, train_size)`.
   # @param kv_cache A [tabicl_kv_cache()] to predict against. When given,
   #   `y_train` is ignored and every row of `x` is a row to predict.
+  # @param row_chunk_size Rows per pass through the column and row
+  #   stages; see `stages_0_to_1()`.
   # @return `(B, T, out_dim)` — logits over classes, or quantile levels.
-  forward = function(x, y_train, kv_cache = NULL) {
-    if (!is.null(kv_cache)) return(self$forward_cached(x, kv_cache))
-    emb <- self$col_embedder(x, y_train)
-    dump_if_enabled("tabicl_col", emb)
-    reps <- self$row_interactor(emb)
+  forward = function(x, y_train, kv_cache = NULL, row_chunk_size = NULL,
+                     save_peak_memory_factor = NULL, col_chunk_size = NULL) {
+    if (!is.null(kv_cache)) {
+      return(self$forward_cached(x, kv_cache, row_chunk_size,
+                                 save_peak_memory_factor))
+    }
+    reps <- self$stages_0_to_1(x, y_train, row_chunk_size = row_chunk_size,
+                               col_chunk_size = col_chunk_size)
     dump_if_enabled("tabicl_reps", reps)
-    out <- self$icl_predictor(reps, y_train)
+    out <- self$icl_predictor(reps, y_train, save_peak_memory_factor)
     dump_if_enabled("tabicl_logits", out)
     out
   },
 
   #' @keywords internal
-  forward_cached = function(x, kv_cache) {
+  forward_cached = function(x, kv_cache, row_chunk_size = NULL,
+                            save_peak_memory_factor = NULL) {
     if (x$size(3) != kv_cache$n_features) {
       cli::cli_abort(
         "This cache was built for {kv_cache$n_features} feature{?s}; \\
          got {x$size(3)}."
       )
     }
-    emb <- self$col_embedder$forward_cached(x, kv_cache$col_hidden)
-    dump_if_enabled("tabicl_col", emb)
-    reps <- self$row_interactor(emb)
+    reps <- self$stages_0_to_1(x, y_train = NULL,
+                               col_hidden = kv_cache$col_hidden,
+                               row_chunk_size = row_chunk_size)
     dump_if_enabled("tabicl_reps", reps)
-    out <- self$icl_predictor$forward_cached(reps, kv_cache$icl_kv)
+    out <- self$icl_predictor$forward_cached(reps, kv_cache$icl_kv,
+                                             save_peak_memory_factor)
     dump_if_enabled("tabicl_logits", out)
     out
   }
@@ -550,20 +715,30 @@ tabicl_task_of <- function(config) {
 # the training rows are left out of the batch entirely, so the forward
 # pass is over the test chunk alone and its whole output is wanted.
 # @keywords internal
-.tabicl_member_out <- function(net, dev, mem, n_train, cache_store, i) {
+.tabicl_member_out <- function(net, dev, mem, n_train, cache_store, i,
+                               row_chunk_size = NULL,
+                               save_peak_memory_factor = NULL,
+                               col_chunk_size = NULL) {
   X_train <- mem$X[seq_len(n_train), , drop = FALSE]
   X_test  <- mem$X[-seq_len(n_train), , drop = FALSE]
   if (is.null(cache_store)) {
     b <- .tabicl_batch(X_train, mem$y, X_test, dev)
-    out <- torch::with_no_grad({ net(b$x, b$y) })
+    out <- torch::with_no_grad({
+      net(b$x, b$y, row_chunk_size = row_chunk_size,
+          save_peak_memory_factor = save_peak_memory_factor,
+          col_chunk_size = col_chunk_size)
+    })
     return(out[1, (b$n_train + 1L):out$size(2), ])
   }
   cache <- member_cache(cache_store, i, function() {
     b <- .tabicl_batch(X_train, mem$y, X_train[0L, , drop = FALSE], dev)
-    torch::with_no_grad({ net$build_kv_cache(b$x, b$y) })
+    torch::with_no_grad({ net$build_kv_cache(b$x, b$y, col_chunk_size) })
   })
   x_te <- as_float_tensor(as.matrix(X_test), device = dev)$unsqueeze(1L)
-  out <- torch::with_no_grad({ net(x_te, NULL, kv_cache = cache) })
+  out <- torch::with_no_grad({
+    net(x_te, NULL, kv_cache = cache, row_chunk_size = row_chunk_size,
+        save_peak_memory_factor = save_peak_memory_factor)
+  })
   out[1, , ]
 }
 
@@ -662,7 +837,10 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                               random_state = 42L,
                               quantile_subsample = NULL,
                               predict_chunk_size = 1024L,
-                              kv_cache = FALSE) {
+                              kv_cache = FALSE,
+                              row_chunk_size = NULL,
+                              save_peak_memory_factor = NULL,
+                              col_chunk_size = NULL) {
   net <- ctx$net; dev <- ctx$device
   opts <- .tabicl_opts(n_estimators, norm_methods, feat_shuffle_method,
                        class_shuffle_method, outlier_threshold, random_state,
@@ -692,7 +870,9 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     acc <- NULL
     for (i in seq_along(members)) {
       mem <- members[[i]]
-      blk <- .tabicl_member_out(net, dev, mem, state$n_train, caches, i)
+      blk <- .tabicl_member_out(net, dev, mem, state$n_train, caches, i,
+                                row_chunk_size, save_peak_memory_factor,
+                                col_chunk_size)
       logits <- as.matrix(blk[, 1:n_cls]$cpu())
       # Column `p` of the member's output is P(permuted class p), and the
       # permutation mapped original class k to `class_shuffle[k]`, so
@@ -750,7 +930,10 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                              random_state = 42L,
                              quantile_subsample = NULL,
                              predict_chunk_size = 1024L,
-                             kv_cache = FALSE) {
+                             kv_cache = FALSE,
+                             row_chunk_size = NULL,
+                             save_peak_memory_factor = NULL,
+                             col_chunk_size = NULL) {
   net <- ctx$net; dev <- ctx$device
   n_q <- as.integer(ctx$config$num_quantiles)
   # Level k of the grid is the (k / (n_q + 1))-th quantile.
@@ -773,7 +956,9 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     members <- tabicl_ensemble_transform(state$gen, X_test)
     acc <- NULL
     for (i in seq_along(members)) {
-      blk <- .tabicl_member_out(net, dev, members[[i]], state$n_train, caches, i)
+      blk <- .tabicl_member_out(net, dev, members[[i]], state$n_train, caches,
+                                i, row_chunk_size, save_peak_memory_factor,
+                                col_chunk_size)
       grid <- as.matrix(blk$cpu())
       stat <- quantile_dist_stat(grid, levels_, type, quantiles)
       stat <- invert_target_scaler(stat, state$scaler)
@@ -973,7 +1158,12 @@ tabicl_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     col_inducing = as.numeric(config$col_num_inds %||% 128),
     icl_blocks   = as.numeric(config$icl_num_blocks %||% 12),
     kv_cache     = isTRUE(opts$kv_cache),
-    n_estimators = n_est
+    n_estimators = n_est,
+    # TabICL gained both axes with the stage-chunking port; neither is on
+    # unless asked for, which is what `Inf` comes back as.
+    row_chunk    = .stage_row_chunk(opts, config),
+    col_chunk    = .stage_col_chunk(opts, config),
+    group_channels = as.numeric(config$col_feature_group_size %||% 3)
   )
 }
 

@@ -11,7 +11,8 @@ mitra_regressor(
   random_mirror_regression = TRUE,
   random_state = 42L,
   predict_chunk_size = 1024L,
-  kv_cache = FALSE
+  kv_cache = FALSE,
+  save_peak_memory_factor = NULL
 )
 }
 \arguments{
@@ -38,6 +39,15 @@ re-encoding the whole support set for each. Off by default, and the
 memory it costs is the reason -- see \code{\link[=mitra_kv_cache]{mitra_kv_cache()}}. It answers
 the same question an uncached pass does: the support half of this
 architecture never looks at a query row.}
+
+\item{save_peak_memory_factor}{Integer, or \code{NULL} (default) to
+disable. Splits each of a layer's four sublayers into this many
+chunks of rows. Every one of them is already independent across
+rows, so the output is bit-identical and the only cost is loop
+overhead. This is the knob Mitra most needs: it is the one backend
+that attends across rows \emph{and} columns, so its activation carries
+every row at full embedding width on both axes and is the steepest
+in the package.}
 }
 \description{
 Mitra's regressor emits a single value per row, so there is no

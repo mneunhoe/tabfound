@@ -6,6 +6,15 @@
 \usage{
 tabicl_col_embedding(config)
 }
+\arguments{
+\item{y_train}{Targets for the \emph{leading} rows of \code{x}, when some of
+them are labelled. A prediction against a cache passes \code{NULL} --
+every row there is a test row. A row-chunked uncached pass does
+not: a chunk that straddles the train/test boundary carries both
+kinds, and the labelled ones must get the target embedding the
+unchunked pass would have given them. Silently omitting it leaves
+the shapes intact and the answer wrong.}
+}
 \description{
 Each column becomes an independent sequence over rows. Cells are
 projected, the embedded target is added to the labelled rows, and a
@@ -29,4 +38,3 @@ these checkpoints and is not built.
 \keyword{rows}
 \keyword{set}
 \keyword{summaries.}
-\keyword{test}
