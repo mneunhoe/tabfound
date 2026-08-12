@@ -251,6 +251,21 @@ reporting confidence-interval coverage for a battery of analysis models
 under improper and bootstrapped contexts at several *m*. Until that
 exists, treat `lm.synds()` intervals from this synthesiser as
 provisional.
+
+The imputation side has now run that experiment for *its* use of the same
+correction, and the answer there was unwelcome: the bootstrap repaired
+coverage and cost an order of magnitude in bias, because a resampled
+context keeps only 63% distinct rows and a PFN's fit *is* its context, so
+what looks like parameter variation is partly a degraded model. See
+`inst/simulation/README.md`; `tabfound_impute()` ships with
+`proper = FALSE` as a result.
+
+That does not transfer directly — synthesis needs the properness its
+variance estimators assume, in a way estimation does not — but note the
+direction in the numbers above: the bootstrapped slope (0.4046) sits
+farther from the real one (0.4158) than the improper slope (0.4108) does.
+One example at *m* = 10 is not evidence, and it is the direction the
+imputation study measured at scale.
 :::
 
 ## Missing and special values

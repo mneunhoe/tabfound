@@ -964,11 +964,15 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
 
   .chunk <- function(state, X_test_chunk, caches) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
-    members <- tabfm_ensemble_transform(state$gen, X_test)
+    members <- tabfm_ensemble_iter(state$gen, X_test)
     n_cls <- length(state$class_levels)
     acc <- NULL
-    for (i in seq_along(members)) {
-      mem <- members[[i]]
+    for (i in seq_len(members$n)) {
+      # Between members: a whole forward pass' worth of torch
+      # allocations, which R's collector cannot see. The member's own
+      # view is built here and dropped at the end of the iteration.
+      if (i > 1L) collect_between_chunks()
+      mem <- members$get(i)
       res <- .tabfm_member_out(net, dev, mem, nrow(X_test), mem$cat_mask,
                                caches, i, row_chunk_size, col_chunk_size)
       if (!is.null(trace_dir)) trace_tensor(trace_dir, "logits", res$out)
@@ -981,12 +985,15 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
         .softmax_rows(logits, softmax_temperature)
       acc <- if (is.null(acc)) contrib else acc + contrib
     }
-    avg <- acc / length(members)
+    avg <- acc / members$n
     if (average_logits) .softmax_rows(avg, softmax_temperature) else avg
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
-    caches <- if (isTRUE(kv_cache)) member_cache_store() else NULL
+    # A cache carried on the fitted state was built once, possibly in
+    # another session; otherwise build lazily as before.
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     probs <- chunk_apply(as.matrix(newdata), predict_chunk_size,
                          function(chunk) .chunk(state, chunk, caches))
     colnames(probs) <- as.character(state$class_levels)
@@ -994,7 +1001,22 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
-  list(fit = fit_fn, predict = predict_fn)
+  # Building every member's cache is exactly what one forward pass over a
+  # single query row does, so ask for that rather than duplicating the
+  # builders: the store comes back full.
+  .build_all_caches <- function(state) {
+    store <- member_cache_store()
+    # Any single query row will do -- the caches are a function of the
+    # training context, and this row's own prediction is thrown away.
+    # These backends keep a fitted imputer rather than the training
+    # matrix, so the width comes from that.
+    one <- matrix(0, nrow = 1L, ncol = length(state$imputer$keep))
+    .chunk(state, one, store)
+    member_cache_list(store)
+  }
+
+  list(fit = fit_fn, predict = predict_fn,
+       build_cache = .build_all_caches)
 }
 
 
@@ -1039,26 +1061,45 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
 
   .chunk <- function(state, X_test_chunk, caches) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
-    members <- tabfm_ensemble_transform(state$gen, X_test)
+    members <- tabfm_ensemble_iter(state$gen, X_test)
     acc <- NULL
-    for (i in seq_along(members)) {
-      mem <- members[[i]]
+    for (i in seq_len(members$n)) {
+      if (i > 1L) collect_between_chunks()
+      mem <- members$get(i)
       res <- .tabfm_member_out(net, dev, mem, nrow(X_test), mem$cat_mask,
                                caches, i, row_chunk_size, col_chunk_size)
       if (!is.null(trace_dir)) trace_tensor(trace_dir, "logits", res$out)
       preds <- as.numeric(res$block[, 1]$cpu())
       acc <- if (is.null(acc)) preds else acc + preds
     }
-    matrix(invert_target_scaler(acc / length(members), state$scaler), ncol = 1L)
+    matrix(invert_target_scaler(acc / members$n, state$scaler), ncol = 1L)
   }
 
   predict_fn <- function(state, newdata, type = "mean", ...) {
-    caches <- if (isTRUE(kv_cache)) member_cache_store() else NULL
+    # A cache carried on the fitted state was built once, possibly in
+    # another session; otherwise build lazily as before.
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     as.numeric(chunk_apply(as.matrix(newdata), predict_chunk_size,
                            function(chunk) .chunk(state, chunk, caches)))
   }
 
-  list(fit = fit_fn, predict = predict_fn, types = "mean")
+  # Building every member's cache is exactly what one forward pass over a
+  # single query row does, so ask for that rather than duplicating the
+  # builders: the store comes back full.
+  .build_all_caches <- function(state) {
+    store <- member_cache_store()
+    # Any single query row will do -- the caches are a function of the
+    # training context, and this row's own prediction is thrown away.
+    # These backends keep a fitted imputer rather than the training
+    # matrix, so the width comes from that.
+    one <- matrix(0, nrow = 1L, ncol = length(state$imputer$keep))
+    .chunk(state, one, store)
+    member_cache_list(store)
+  }
+
+  list(fit = fit_fn, predict = predict_fn, types = "mean",
+       build_cache = .build_all_caches)
 }
 
 
@@ -1289,8 +1330,13 @@ register_tabfm_backend <- function() {
     regressor     = tabfm_regressor,
     peak_terms    = tabfm_peak_terms,
     aliases       = c("tabfm-1.0.0" = "google/tabfm-1.0.0-pytorch"),
-    # `nan_to_num(x, nan = -100)` at the top of the forward pass.
-    handles_missing = TRUE,
+    # Both: `nan_to_num(x, nan = -100)` at the top of the forward pass,
+    # and the predictor mean-imputes first anyway -- the reference's
+    # `CustomStandardScaler` takes a plain column mean, so one NaN would
+    # otherwise turn a whole column NaN before the sentinel is reached.
+    kv_cache_capable   = TRUE,
+    handles_missing    = TRUE,
+    imputes_internally = TRUE,
     description   = "TabFM 1.0.0 column/row/ICL transformer (Google Research)",
     parity        = "tabfm (PyPI)"
   )

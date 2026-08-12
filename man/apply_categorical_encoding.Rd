@@ -2,9 +2,15 @@
 % Please edit documentation in R/backend-tabpfn-pipelines.R
 \name{apply_categorical_encoding}
 \alias{apply_categorical_encoding}
+\alias{fit_categorical_encoding}
+\alias{transform_categorical_encoding}
 \title{Apply a member's categorical encoding}
 \usage{
 apply_categorical_encoding(X_train, X_test, cat_ix, cfg, draw_missing = FALSE)
+
+fit_categorical_encoding(X_train, cat_ix, cfg, draw_missing = FALSE)
+
+transform_categorical_encoding(X, fitted)
 }
 \arguments{
 \item{X_train, X_test}{Numeric matrices.}
@@ -22,6 +28,10 @@ categories each has, without reimplementing the pipeline.}
 }
 \value{
 \code{list(X_train, X_test, cat_ix, cat_mappings)}.
+
+For \code{fit_categorical_encoding()}, the encoder plus the column
+indices \code{\link[=transform_categorical_encoding]{transform_categorical_encoding()}} needs; the fit reads the
+training rows (level counts, category sets) and nothing else.
 }
 \description{
 \code{numeric} and \code{none} leave the matrix alone -- the difference between

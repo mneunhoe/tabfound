@@ -184,11 +184,17 @@ mice::complete(imp, "long")   # registered on mice's own generic, no conversion
 ```
 
 The `mids` is built from a real `mice(maxit = 0)` skeleton rather than
-assembled by hand: mice owns the invariants of its own object. What does
-*not* carry over is the diagnostic history mice's own sampler records —
-`chainMean` and `chainVar` are empty, so `plot()` on the result has
-nothing to draw. Everything that depends on the imputed values works
-normally.
+assembled by hand: mice owns the invariants of its own object. The
+convergence trace comes with it — `tabfound_impute()` records the mean
+and variance of each variable's imputed cells at every sweep, in mice's
+own `variable x iteration x imputation` layout — so `plot()` draws the
+chains the way it does for a `mice()` fit, and `maxit` is something you
+can actually watch converge:
+
+```{r}
+#| eval: false
+plot(as_mids(imp))
+```
 
 ### Handing it to Amelia
 
@@ -276,19 +282,59 @@ a binary covariate essentially none. Use the TabPFN backend for
 imputation; why TabICL falls short is an open question, and the numbers
 are in `inst/simulation/README.md`.
 
+## Properness
+
+A PFN draws each query row independently given a fixed context. Condition
+`m` chains on the same observed rows and they differ only in the noise of
+the draw: the between-imputation variance carries no *parameter*
+uncertainty, which is the defect that makes an imputer improper under
+Rubin's rules and makes pooled standard errors too small.
+
+`proper = TRUE` applies the standard correction: resample the observed
+rows once per imputation, the nonparametric stand-in for drawing new
+parameters, which is what mice's own `norm.boot` / `polyreg.boot` methods
+do and what `tabfound_syn()` does by default.
+
+```{r}
+#| eval: false
+imp_proper <- tabfound_impute(aq, m = 5, models = mods, proper = TRUE)
+```
+
+**It is off by default**, which is not what the theory says. The
+simulation above was run both ways, on the same 200 data sets:
+
+| | bias `x1` | CI width `x1` | coverage `x2` |
+|---|---|---|---|
+| complete cases | −0.111 | 0.355 | 0.880 |
+| MI, default | −0.008 | 0.314 | 0.900 |
+| MI, `proper = TRUE` | **−0.062** | **0.547** | **0.955** |
+| MI, `lm` imputer, default | +0.003 | 0.283 | 0.910 |
+| MI, `lm` imputer, `proper = TRUE` | +0.003 | 0.325 | 0.935 |
+
+The correction does what the textbook promises for the correctly
+specified parametric imputer: coverage moves up, intervals widen 15%,
+bias does not move. Applied to TabPFN it fixes coverage the same way and
+costs an order of magnitude in bias — most of what the imputation was
+worth, since the complete-case bias it exists to remove is −0.111.
+
+The reason is that a bootstrap of the context is not the same model with
+different parameters. It is a *worse model*: only 63% of its rows are
+distinct, and for a learner whose entire fit is its context, that is a
+third of the training data thrown away, with ties the network never saw
+during pre-training. The draws come back no wider but less informative —
+their correlation with the values that were deleted drops — and that
+attenuates every coefficient. Coverage improves because the intervals
+grow faster than the error does.
+
+Leave it off to estimate; turn it on if you need nominal coverage more
+than you need the point estimate. Whether properness can be had for an
+in-context learner without degrading the context is open: every
+resampling scheme duplicates rows.
+
 ## What this is not
 
-It is a *use* of the fitted models, not a claim about them, and it has
-two limits worth stating before you rely on it.
-
-**No properness bootstrap.** Between-imputation variability comes
-entirely from the posterior predictive — the in-context prior carries
-the epistemic uncertainty a parametric imputer would get by drawing new
-coefficients. The context rows are not bootstrapped. The coverage
-numbers above suggest this is adequate in practice for TabPFN; it is not
-the same thing as a proof. (`tabfound_syn()`, the synthesis sibling,
-*does* bootstrap by default, because the synthetic-data variance
-estimators assume it — see `vignette("synthetic-data", "tabfound")`.)
+It is a *use* of the fitted models, not a claim about them, and one limit
+is worth stating before you rely on it.
 
 **No bounds.** Draws come off the predictive distribution as it is,
 tails included. On the example above that is not hypothetical:

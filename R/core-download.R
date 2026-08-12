@@ -255,14 +255,44 @@ tabfound_home <- function(create = FALSE) {
 # @keywords internal
 .model_dir <- function(id) file.path(tabfound_home(), "models", id)
 
+# What a completed download left behind, keyed by path relative to the
+# model directory. Recorded in `SOURCE.json` so an interrupted download
+# can be told from a finished one.
+# @keywords internal
+.artifact_sizes <- function(dest) {
+  rel <- list.files(dest, recursive = TRUE)
+  rel <- rel[basename(rel) != "SOURCE.json"]
+  if (!length(rel)) return(list())
+  stats::setNames(as.list(as.numeric(file.size(file.path(dest, rel)))), rel)
+}
+
 # @keywords internal
 .model_is_downloaded <- function(id) {
   d <- .model_dir(id)
   e <- .model_catalog()[[id]]
   sub <- e$subfolder
   rel <- function(f) if (is.null(sub)) f else file.path(sub, f)
-  file.exists(file.path(d, rel("model.safetensors"))) &&
-    file.exists(file.path(d, rel("config.json")))
+  if (!file.exists(file.path(d, rel("model.safetensors"))) ||
+      !file.exists(file.path(d, rel("config.json")))) {
+    return(FALSE)
+  }
+  # Names alone pass forever once an interrupted download has created the
+  # files: a truncated `model.safetensors` is still a `model.safetensors`.
+  # Sizes are recorded on completion, so compare against them when they
+  # are there (they are not, for stores written before this check).
+  src <- file.path(d, "SOURCE.json")
+  if (!file.exists(src) || !requireNamespace("jsonlite", quietly = TRUE)) {
+    return(TRUE)
+  }
+  recorded <- tryCatch(jsonlite::fromJSON(src)$files, error = function(e) NULL)
+  if (is.null(recorded) || !length(recorded)) return(TRUE)
+  got <- .artifact_sizes(d)
+  for (nm in names(recorded)) {
+    want <- as.numeric(recorded[[nm]])
+    have <- got[[nm]]
+    if (is.null(have) || !isTRUE(all.equal(as.numeric(have), want))) return(FALSE)
+  }
+  TRUE
 }
 
 #' List the models this package can download
@@ -390,12 +420,137 @@ list_models <- function() {
   invisible(to)
 }
 
+# ---------------------------------------------------------------------------
+# Hub access: tokens, offline, and what a 401 actually means
+# ---------------------------------------------------------------------------
+#
+# Everything that reaches the Hub goes through `.hub_download()`. It
+# exists for three failures that all present as something other than what
+# they are.
+
+# `hfhub::hub_headers()` reads `HUGGING_FACE_HUB_TOKEN` and
+# `HUGGINGFACE_HUB_TOKEN`, and nothing else. The Python ecosystem has
+# moved on: `HF_TOKEN` is what the docs tell you to set, and
+# `huggingface-cli login` writes a file rather than an environment
+# variable at all. So access granted through the normal flow is invisible
+# from R, and a gated repo 401s -- which hfhub reports as "Connection
+# error... cannot find the requested files in the disk cache".
+# @keywords internal
+.hf_token <- function() {
+  for (v in c("HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_TOKEN")) {
+    tok <- Sys.getenv(v, unset = "")
+    if (nzchar(tok)) return(tok)
+  }
+  home <- Sys.getenv("HF_HOME", unset = "")
+  files <- c(if (nzchar(home)) file.path(home, "token"),
+             path.expand("~/.cache/huggingface/token"))
+  for (p in files) {
+    if (file.exists(p)) {
+      tok <- trimws(paste(readLines(p, warn = FALSE), collapse = ""))
+      if (nzchar(tok)) return(tok)
+    }
+  }
+  ""
+}
+
+# Put the resolved token where hfhub will look, for one call only.
+# @keywords internal
+.with_hf_token <- function(expr) {
+  tok <- .hf_token()
+  if (nzchar(tok) && !nzchar(Sys.getenv("HUGGING_FACE_HUB_TOKEN", unset = ""))) {
+    old <- Sys.getenv("HUGGING_FACE_HUB_TOKEN", unset = NA_character_)
+    Sys.setenv(HUGGING_FACE_HUB_TOKEN = tok)
+    on.exit({
+      if (is.na(old)) Sys.unsetenv("HUGGING_FACE_HUB_TOKEN")
+      else Sys.setenv(HUGGING_FACE_HUB_TOKEN = old)
+    }, add = TRUE)
+  }
+  force(expr)
+}
+
+# @keywords internal
+.hf_offline <- function() {
+  opt <- getOption("tabfound.offline", NULL)
+  if (!is.null(opt)) return(isTRUE(opt))
+  env <- Sys.getenv("HF_HUB_OFFLINE", unset = "")
+  nzchar(env) && !identical(env, "0") && !identical(tolower(env), "false")
+}
+
+#' Fetch one file from the Hub, cache-first
+#'
+#' Every Hub-referenced load pays a network round trip before consulting
+#' the cache -- a HEAD when online, a timeout when not -- even though the
+#' file is already on disk. So ask the cache first and only go to the
+#' network when it misses. `options(tabfound.offline = TRUE)` (or
+#' `HF_HUB_OFFLINE`) says never to go at all.
+#'
+#' @param repo Hub repo id.
+#' @param file Path within the repo.
+#' @return A local path.
+#' @keywords internal
+.hub_download <- function(repo, file) {
+  require_suggested("hfhub")
+  cached <- tryCatch(
+    hfhub::hub_download(repo, file, local_files_only = TRUE),
+    error = function(e) NULL
+  )
+  if (!is.null(cached) && file.exists(cached)) return(cached)
+
+  if (.hf_offline()) {
+    cli::cli_abort(c(
+      "{.path {file}} from {.val {repo}} is not in the Hub cache, and \\
+       tabfound is in offline mode.",
+      i = "Unset {.envvar HF_HUB_OFFLINE} / \\
+           {.code options(tabfound.offline = FALSE)} to fetch it.",
+      i = "The cache is {.path {Sys.getenv('HUGGINGFACE_HUB_CACHE',
+                                           '~/.cache/huggingface/hub')}}."
+    ))
+  }
+  .with_hf_token(tryCatch(
+    hfhub::hub_download(repo, file),
+    error = function(e) .hub_download_abort(e, repo, file)
+  ))
+}
+
+# hfhub reports an authorization failure as a cache miss, which sends
+# everybody looking in the wrong place. Say what it is and what to do.
+# @keywords internal
+.hub_download_abort <- function(e, repo, file) {
+  msg <- conditionMessage(e)
+  looks_gated <- grepl("401|403|cannot find the requested files|Connection error",
+                       msg, ignore.case = TRUE)
+  if (!looks_gated) {
+    cli::cli_abort(c("Could not download {.path {file}} from {.val {repo}}.",
+                     x = msg))
+  }
+  have_token <- nzchar(.hf_token())
+  cli::cli_abort(c(
+    "Could not download {.path {file}} from {.val {repo}}.",
+    x = "This usually means the repo is gated and the request was \\
+         unauthorized -- hfhub reports that as a cache miss.",
+    i = if (have_token)
+          "A token was found and sent. Accept the model's terms at \\
+           {.url https://huggingface.co/{repo}} with the same account."
+        else
+          "No token was found. Set {.envvar HF_TOKEN}, or run \\
+           {.code huggingface-cli login}, after accepting the terms at \\
+           {.url https://huggingface.co/{repo}}.",
+    i = "Or convert a checkpoint you already have locally: \\
+         {.path inst/python/tabpfn_convert_ckpt.py}.",
+    x = msg
+  ))
+}
+
+
 # Ask the Hub how big this really is. Best-effort: offline is normal.
 # @keywords internal
 .remote_size_mb <- function(entry) {
+  if (.hf_offline()) return(NA_real_)
   if (!requireNamespace("hfhub", quietly = TRUE)) return(NA_real_)
-  info <- tryCatch(hfhub::hub_repo_info(entry$repo, files_metadata = TRUE),
-                   error = function(e) NULL)
+  info <- .with_hf_token(tryCatch(
+    hfhub::hub_repo_info(entry$repo, files_metadata = TRUE),
+    error = function(e) NULL
+  ))
   if (is.null(info) || is.null(info$siblings)) return(NA_real_)
   wanted <- if (!is.null(entry$file)) entry$file else {
     rel <- function(f) if (is.null(entry$subfolder)) f else
@@ -478,23 +633,26 @@ download_model <- function(model, task = NULL, force = FALSE, python = NULL,
     rel <- function(f) if (is.null(entry$subfolder)) f else
       file.path(entry$subfolder, f)
     for (f in c("model.safetensors", "config.json")) {
-      got <- hfhub::hub_download(entry$repo, rel(f))
+      got <- .hub_download(entry$repo, rel(f))
       .place_file(got, file.path(dest, rel(f)))
     }
   } else {
-    src <- hfhub::hub_download(entry$repo, entry$file)
+    src <- .hub_download(entry$repo, entry$file)
     py  <- .find_python(python)
     .convert_ckpt(entry, src, dest, py, quiet = quiet)
   }
 
-  # Provenance, so a store directory can say where it came from.
+  # Provenance, so a store directory can say where it came from -- plus
+  # the file sizes, which is what makes "is it downloaded?" answerable
+  # after an interrupted run.
   writeLines(
     jsonlite::toJSON(list(
       id = id, repo = entry$repo, file = entry$file %||% NA_character_,
       subfolder = entry$subfolder %||% NA_character_,
       converted = !is.null(entry$convert),
       tabfound_version = as.character(utils::packageVersion("tabfound")),
-      downloaded_at = format(Sys.time(), tz = "UTC", usetz = TRUE)
+      downloaded_at = format(Sys.time(), tz = "UTC", usetz = TRUE),
+      files = .artifact_sizes(dest)
     ), auto_unbox = TRUE, pretty = TRUE),
     file.path(dest, "SOURCE.json")
   )

@@ -2,6 +2,8 @@
 % Please edit documentation in R/backend-tabpfn-pipelines.R
 \name{apply_member_pipeline}
 \alias{apply_member_pipeline}
+\alias{fit_member_pipeline}
+\alias{transform_member_pipeline}
 \title{Build one ensemble member's model inputs}
 \usage{
 apply_member_pipeline(
@@ -11,6 +13,15 @@ apply_member_pipeline(
   categorical_features = integer(),
   draw_missing = FALSE
 )
+
+fit_member_pipeline(
+  X_train,
+  cfg,
+  categorical_features = integer(),
+  draw_missing = FALSE
+)
+
+transform_member_pipeline(X, fitted)
 }
 \arguments{
 \item{X_train, X_test}{Numeric matrices of raw inputs.}
@@ -26,11 +37,30 @@ Empty means every column is numeric, which reduces the whole
 categorical path to a no-op.}
 
 \item{draw_missing}{Passed to \code{\link[=apply_categorical_encoding]{apply_categorical_encoding()}}.}
+
+\item{X}{Query rows to put through the fitted pipeline.}
+
+\item{fitted}{The result of \code{\link[=fit_member_pipeline]{fit_member_pipeline()}}.}
 }
 \value{
 \code{list(X_train, X_test)}, ready for the network.
+
+For \code{fit_member_pipeline()}, the transformed training matrix
+plus the fitted steps; feed both to \code{\link[=transform_member_pipeline]{transform_member_pipeline()}}.
 }
 \description{
-Build one ensemble member's model inputs
+\code{\link[=fit_member_pipeline]{fit_member_pipeline()}} does everything that depends on the training
+rows -- every step's fit, and the transformed training matrix -- and
+\code{\link[=transform_member_pipeline]{transform_member_pipeline()}} replays it on query rows.
+}
+\details{
+The split is what keeps prediction linear in the number of chunks.
+Every step here is fitted on train and applied to both, and none of it
+depends on the query rows, so a fit inside the chunk loop is executed
+\code{n_members * n_chunks} times where \code{n_members} would do: at 8 members
+and 20K test rows that is 160 quantile transformers (a per-column sort
+of the whole training matrix each) in place of 8. \code{apply_member_pipeline()}
+remains as the fit-and-transform-both convenience for callers holding
+a single pair -- the config generator, and the tests.
 }
 \keyword{internal}

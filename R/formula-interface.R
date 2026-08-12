@@ -93,12 +93,22 @@
 # reference implementation's imputation and is not covered by the parity
 # harness -- it exists so that a backend which cannot see NaN at all is
 # still usable on real data frames.
+#
+# A factor's ordinal codes are not a scale to average over: the mean of a
+# three-level factor is 0.83, which is not a level of anything. Those
+# columns get the modal code instead, which is at least a value the
+# variable can take.
 # @keywords internal
-.fit_imputer <- function(x) {
+.fit_imputer <- function(x, categorical = integer()) {
   vapply(seq_len(ncol(x)), function(j) {
     v <- x[, j]
     v <- v[is.finite(v)]
-    if (!length(v)) 0 else mean(v)
+    if (!length(v)) return(0)
+    if (j %in% categorical) {
+      tab <- table(v)
+      return(as.numeric(names(tab)[which.max(tab)]))
+    }
+    mean(v)
   }, numeric(1))
 }
 
@@ -111,13 +121,20 @@
   x
 }
 
+# "Handled" is two different guarantees, and `auto` reads their
+# disjunction: a network that conditions on missingness and a predictor
+# that mean-fills before the network both mean this layer need not
+# impute. What they do not mean is the same thing to the caller -- see
+# `?register_backend` -- which is why the flags are separate and
+# `list_backends()` names which one applies.
 # @keywords internal
 .resolve_na_action <- function(na_action, backend_name, x) {
-  handles <- isTRUE(get_backend(backend_name)$handles_missing)
+  spec <- get_backend(backend_name)
+  covered <- .backend_covers_missing(spec)
   if (identical(na_action, "auto")) {
-    na_action <- if (handles) "pass" else "impute"
+    na_action <- if (covered) "pass" else "impute"
   }
-  if (identical(na_action, "pass") && !handles && anyNA(x)) {
+  if (identical(na_action, "pass") && !covered && anyNA(x)) {
     cli::cli_warn(c(
       "The {.val {backend_name}} backend has no missing-value handling.",
       x = "Predictions for rows with {.val NA} will be {.val NaN}.",
@@ -151,9 +168,17 @@
 #'   `NULL`.
 #' @param device One of `"cpu"`, `"cuda"`, `"mps"`.
 #' @param na_action What to do about missing predictors. `"auto"`
-#'   (default) passes them through for backends that handle them
-#'   (TabPFN, TabFM) and imputes for those that do not (TabICL).
-#'   `"pass"`, `"impute"` and `"fail"` force the choice.
+#'   (default) passes them through whenever the backend deals with them
+#'   itself -- which every backend in the package currently does, by one
+#'   of two different routes. TabPFN encodes missingness in the network,
+#'   as an is-missing channel beside the value, so the model conditions
+#'   on it; TabICL, Mitra and TabFM run their reference wrapper's mean
+#'   imputer first, so the model never learns a value was missing.
+#'   `list_backends()` names which. `"impute"` puts this package's own
+#'   column-mean imputer in front instead (modal code for factors),
+#'   `"fail"` refuses, and `"pass"` forces the data through as it is --
+#'   which warns, and produces `NaN` predictions, on a backend that
+#'   handles neither.
 #' @param ... Passed to [tabular_classifier()] / [tabular_regressor()].
 #' @return An object of class `tabfound_fit`.
 #' @examples
@@ -241,10 +266,9 @@ tabfound.default <- function(x, ...) {
   # reference's own cardinality heuristic would only catch the columns
   # with fewer than four levels.
   dots <- list(...)
+  cat_idx <- unname(.categorical_predictor_indices(processed$predictors))
   if (!"categorical_features" %in% names(dots)) {
-    dots$categorical_features <- unname(
-      .categorical_predictor_indices(processed$predictors)
-    )
+    dots$categorical_features <- cat_idx
   }
   ctor_args <- c(list(model, backend = backend, device = device), dots)
 
@@ -265,7 +289,7 @@ tabfound.default <- function(x, ...) {
   }
   imputer <- NULL
   if (identical(na_action, "impute")) {
-    imputer <- .fit_imputer(x)
+    imputer <- .fit_imputer(x, cat_idx)
     x <- .apply_imputer(x, imputer)
   }
 

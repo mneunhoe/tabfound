@@ -865,11 +865,15 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
 
   .chunk <- function(state, X_test_chunk, caches) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
-    members <- tabicl_ensemble_transform(state$gen, X_test)
+    members <- tabicl_ensemble_iter(state$gen, X_test)
     n_cls <- length(state$class_levels)
     acc <- NULL
-    for (i in seq_along(members)) {
-      mem <- members[[i]]
+    for (i in seq_len(members$n)) {
+      # Between members: a whole forward pass' worth of torch
+      # allocations, which R's collector cannot see. The member's own
+      # view is built here and dropped at the end of the iteration.
+      if (i > 1L) collect_between_chunks()
+      mem <- members$get(i)
       blk <- .tabicl_member_out(net, dev, mem, state$n_train, caches, i,
                                 row_chunk_size, save_peak_memory_factor,
                                 col_chunk_size)
@@ -883,13 +887,16 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
         .softmax_rows(logits, softmax_temperature)
       acc <- if (is.null(acc)) contrib else acc + contrib
     }
-    avg <- acc / length(members)
+    avg <- acc / members$n
     if (average_logits) avg <- .softmax_rows(avg, softmax_temperature)
     avg / rowSums(avg)
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
-    caches <- if (isTRUE(kv_cache)) member_cache_store() else NULL
+    # A cache carried on the fitted state was built once, possibly in
+    # another session; otherwise build lazily as before.
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     probs <- chunk_apply(as.matrix(newdata), predict_chunk_size,
                          function(chunk) .chunk(state, chunk, caches))
     colnames(probs) <- as.character(state$class_levels)
@@ -897,7 +904,22 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
-  list(fit = fit_fn, predict = predict_fn)
+  # Building every member's cache is exactly what one forward pass over a
+  # single query row does, so ask for that rather than duplicating the
+  # builders: the store comes back full.
+  .build_all_caches <- function(state) {
+    store <- member_cache_store()
+    # Any single query row will do -- the caches are a function of the
+    # training context, and this row's own prediction is thrown away.
+    # These backends keep a fitted imputer rather than the training
+    # matrix, so the width comes from that.
+    one <- matrix(0, nrow = 1L, ncol = length(state$imputer$keep))
+    .chunk(state, one, store)
+    member_cache_list(store)
+  }
+
+  list(fit = fit_fn, predict = predict_fn,
+       build_cache = .build_all_caches)
 }
 
 # Row-wise temperature-scaled softmax, max-subtracted as the reference
@@ -953,10 +975,11 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
 
   .chunk <- function(state, X_test_chunk, type, quantiles, caches) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
-    members <- tabicl_ensemble_transform(state$gen, X_test)
+    members <- tabicl_ensemble_iter(state$gen, X_test)
     acc <- NULL
-    for (i in seq_along(members)) {
-      blk <- .tabicl_member_out(net, dev, members[[i]], state$n_train, caches,
+    for (i in seq_len(members$n)) {
+      if (i > 1L) collect_between_chunks()
+      blk <- .tabicl_member_out(net, dev, members$get(i), state$n_train, caches,
                                 i, row_chunk_size, save_peak_memory_factor,
                                 col_chunk_size)
       grid <- as.matrix(blk$cpu())
@@ -964,13 +987,16 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
       stat <- invert_target_scaler(stat, state$scaler)
       acc <- if (is.null(acc)) stat else acc + stat
     }
-    acc / length(members)
+    acc / members$n
   }
 
   predict_fn <- function(state, newdata, type = "mean",
                          quantiles = c(0.1, 0.5, 0.9), ...) {
     if (identical(type, "grid")) type <- "raw_quantiles"
-    caches <- if (isTRUE(kv_cache)) member_cache_store() else NULL
+    # A cache carried on the fitted state was built once, possibly in
+    # another session; otherwise build lazily as before.
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     res <- chunk_apply(as.matrix(newdata), predict_chunk_size,
                        function(chunk) .chunk(state, chunk, type, quantiles,
                                               caches))
@@ -981,7 +1007,22 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     res
   }
 
+  # Building every member's cache is exactly what one forward pass over a
+  # single query row does, so ask for that rather than duplicating the
+  # builders: the store comes back full.
+  .build_all_caches <- function(state) {
+    store <- member_cache_store()
+    # Any single query row will do -- the caches are a function of the
+    # training context, and this row's own prediction is thrown away.
+    # These backends keep a fitted imputer rather than the training
+    # matrix, so the width comes from that.
+    one <- matrix(0, nrow = 1L, ncol = length(state$imputer$keep))
+    .chunk(state, one, "mean", 0.5, store)
+    member_cache_list(store)
+  }
+
   list(fit = fit_fn, predict = predict_fn,
+       build_cache = .build_all_caches,
        types = c("mean", "median", "quantiles", "grid"),
        quantile_levels = levels_)
 }
@@ -1184,13 +1225,15 @@ register_tabicl_backend <- function() {
     classifier    = tabicl_classifier,
     regressor     = tabicl_regressor,
     peak_terms    = tabicl_peak_terms,
-    # The *network* still has no missing-value handling -- NaN in, NaN
-    # logits out. The predictors do: they run the reference wrapper's
-    # mean `SimpleImputer` before the ensemble, so the network never sees
-    # one. `tabfound()` therefore leaves imputation to the backend rather
-    # than applying its own, which would be a different (unverified)
-    # imputer in front of the verified one.
-    handles_missing = TRUE,
+    # The network has no missing-value handling -- NaN in, NaN logits
+    # out. The predictors do: they run the reference wrapper's mean
+    # `SimpleImputer` before the ensemble, so the network never sees one.
+    # `tabfound()` therefore leaves imputation to the backend rather than
+    # applying its own, which would be a different (unverified) imputer
+    # in front of the verified one.
+    kv_cache_capable   = TRUE,
+    handles_missing    = FALSE,
+    imputes_internally = TRUE,
     description   = "TabICL v2 column/row/ICL transformer (soda-inria)",
     parity        = "tabicl (PyPI)"
   )

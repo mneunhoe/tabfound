@@ -2,7 +2,8 @@
 #
 #   Rscript inst/simulation/run-mi-sim.R [--backend=lm] [--reps=200]
 #                                        [--n=400] [--m=5] [--maxit=3]
-#                                        [--seed=20260807] [--save]
+#                                        [--proper=TRUE] [--seed=20260807]
+#                                        [--save]
 #
 # The MI code has no Python reference to be checked against, so this is
 # what stands in for the parity harness: a simulation where the right
@@ -50,6 +51,15 @@ REPS    <- as.integer(opt("reps", 200L))
 N       <- as.integer(opt("n", 400L))
 M       <- as.integer(opt("m", 5L))
 MAXIT   <- as.integer(opt("maxit", 3L))
+# Coverage is the reason this argument exists, so the harness has to be
+# able to run both sides of it. The default matches the package's:
+# `--proper=TRUE` bootstraps the context once per imputation,
+# `--proper=bayes` uses Dirichlet weights instead. This is the switch the
+# properness section of README.md was measured with.
+PROPER  <- local({
+  v <- opt("proper", "FALSE")
+  if (toupper(v) %in% c("TRUE", "FALSE")) as.logical(toupper(v)) else v
+})
 SEED    <- as.integer(opt("seed", 20260807L))
 SAVE    <- "--save" %in% args
 WITH_MICE <- requireNamespace("mice", quietly = TRUE)
@@ -229,7 +239,7 @@ one_rep <- function(models, i) {
   )
 
   imp <- tabfound_impute(obs, m = M, models = models, maxit = MAXIT,
-                         verbose = FALSE)
+                         proper = PROPER, verbose = FALSE)
   out$MI <- tidy_pool(with(imp, stats::lm(y ~ x1 + x2 + g)))
 
   if (WITH_MICE) {
@@ -251,8 +261,8 @@ one_rep <- function(models, i) {
 # Run
 # ---------------------------------------------------------------------------
 
-cat(sprintf("MAR simulation: backend=%s reps=%d n=%d m=%d maxit=%d seed=%d\n",
-            BACKEND, REPS, N, M, MAXIT, SEED))
+cat(sprintf("MAR simulation: backend=%s reps=%d n=%d m=%d maxit=%d proper=%s seed=%d\n",
+            BACKEND, REPS, N, M, MAXIT, as.character(PROPER), SEED))
 if (!WITH_MICE) cat("  (mice not installed: no PMM arm, no MI pooling)\n")
 stopifnot(WITH_MICE)
 
@@ -300,7 +310,12 @@ cat("MI should sit near FULL's estimate with coverage near 0.95.\n")
 
 if (SAVE) {
   dir.create("inst/simulation/results", showWarnings = FALSE, recursive = TRUE)
-  f <- sprintf("inst/simulation/results/mi-mar-%s.csv", BACKEND)
+  # The default regime owns the plain name; anything else says so in the
+  # filename, so the coverage regimes can sit side by side.
+  tag <- if (isFALSE(PROPER)) BACKEND
+         else sprintf("%s-%s", BACKEND,
+                      if (isTRUE(PROPER)) "proper" else as.character(PROPER))
+  f <- sprintf("inst/simulation/results/mi-mar-%s.csv", tag)
   utils::write.csv(res, f, row.names = FALSE)
   cat(sprintf("\nwrote %s\n", f))
 
@@ -314,7 +329,7 @@ if (SAVE) {
       x <- r[[a]]; x$arm <- a; x$rep <- i; x
     }))
   }))
-  f2 <- sprintf("inst/simulation/results/mi-mar-%s-reps.csv", BACKEND)
+  f2 <- sprintf("inst/simulation/results/mi-mar-%s-reps.csv", tag)
   utils::write.csv(long, f2, row.names = FALSE)
   cat(sprintf("wrote %s\n", f2))
 }

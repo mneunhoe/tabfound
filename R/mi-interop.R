@@ -25,10 +25,11 @@
 #' whole mice toolchain -- `with()`, `pool()`, `complete()`,
 #' `densityplot()`, `stripplot()` -- applies unchanged.
 #'
-#' What is *not* carried over is the diagnostic history mice's own
-#' sampler records: `chainMean` and `chainVar` are empty, so
-#' `plot()` on the result has nothing to draw. Everything that depends on
-#' the imputed values themselves works normally.
+#' The convergence trace comes with it: [tabfound_impute()] records the
+#' mean and variance of each variable's imputed cells at every sweep, in
+#' mice's own `variable x iteration x imputation` layout, so `plot()` on
+#' the result draws the chains the way it does for a `mice()` fit. The
+#' `where` matrix travels too.
 #'
 #' @param x A `tabfound_mi` object from [tabfound_impute()].
 #' @param ... Unused.
@@ -65,6 +66,17 @@ as_mids.tabfound_mi <- function(x, ...) {
   if (identical(dim(skel$predictorMatrix), dim(x$predictors))) {
     skel$predictorMatrix[] <- x$predictors[rownames(skel$predictorMatrix),
                                            colnames(skel$predictorMatrix)]
+  }
+  # mice's own sampler records these per sweep; so does ours, in the same
+  # layout, so `plot(mids)` draws a real convergence trace instead of an
+  # empty frame.
+  if (!is.null(x$chain_mean)) {
+    dn <- list(rownames(x$chain_mean), NULL, paste("Chain", seq_len(x$m)))
+    skel$chainMean <- array(x$chain_mean, dim(x$chain_mean), dimnames = dn)
+    skel$chainVar  <- array(x$chain_var,  dim(x$chain_var),  dimnames = dn)
+  }
+  if (!is.null(x$where) && identical(dim(skel$where), dim(x$where))) {
+    skel$where[] <- x$where
   }
   skel$visitSequence <- x$visit_sequence
   skel$iteration <- x$maxit
@@ -185,6 +197,11 @@ as_amelia.tabfound_mi <- function(x, ...) {
 #' @param models A [tabfound_models()] handle. Defaults to
 #'   `getOption("tabfound.models")`.
 #' @param draw Passed to the regressor draw; see [tabfound_impute()].
+#' @param proper Resample the observed rows before fitting, the way
+#'   mice's own `norm.boot` / `polyreg.boot` do. Same argument, same
+#'   default (`FALSE`) and same rationale as [tabfound_impute()], whose
+#'   *Properness* section explains why the correction is off by default
+#'   for these models.
 #' @param ... Unused; absorbs the rest of what mice passes down.
 #' @return A vector of length `sum(wy)`, in `y`'s own type.
 #' @examples
@@ -196,8 +213,9 @@ as_amelia.tabfound_mi <- function(x, ...) {
 #' }
 #' @export
 mice.impute.tabfound <- function(y, ry, x, wy = NULL, models = NULL,
-                                 draw = "auto", ...) {
+                                 draw = "auto", proper = FALSE, ...) {
   if (is.null(wy)) wy <- !ry
+  proper <- .mi_resolve_proper(proper)
   models <- models %||% getOption("tabfound.models")
   if (is.null(models)) {
     cli::cli_abort(c(
@@ -208,20 +226,23 @@ mice.impute.tabfound <- function(y, ry, x, wy = NULL, models = NULL,
   }
   models <- .as_models(models)
 
-  x <- as.matrix(x)
-  storage.mode(x) <- "double"
-  X_obs <- x[ry, , drop = FALSE]
+  # mice hands over a numeric design matrix, but it is a data frame often
+  # enough (blocks, `where`) that `as.matrix()` on it would be the same
+  # silent character-matrix trap `fit()` guards against.
+  x <- .as_model_matrix(x, "x")
+  ctx   <- .mi_context_rows(which(ry), proper)
+  X_obs <- x[ctx, , drop = FALSE]
   X_mis <- x[wy, , drop = FALSE]
 
   if (is.numeric(y) && !is.factor(y)) {
-    out <- mi_draw_numeric(models$get("regression"), X_obs, as.numeric(y[ry]),
+    out <- mi_draw_numeric(models$get("regression"), X_obs, as.numeric(y[ctx]),
                            X_mis, draw = draw)
     return(if (is.integer(y)) as.integer(round(out)) else out)
   }
   # Factor, character or logical: draw a category and hand it back in the
   # type mice put in, which is what mice writes into the data.
   lab <- mi_draw_factor(models$get("classification"), X_obs,
-                        as.factor(y[ry]), X_mis)
+                        as.factor(y[ctx]), X_mis)
   if (is.logical(y)) return(lab == "TRUE")
   if (is.character(y)) return(lab)
   factor(lab, levels = levels(y))

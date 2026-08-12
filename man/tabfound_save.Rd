@@ -10,7 +10,7 @@ tabfound_save(object, file)
 tabfound_load(file, device = NULL)
 }
 \arguments{
-\item{object}{A \code{tabfound_model}, fitted or not.}
+\item{object}{A \code{tabfound_model} or a \code{tabfound_fit}, fitted or not.}
 
 \item{file}{Path to write to.}
 
@@ -19,7 +19,8 @@ tabfound_load(file, device = NULL)
 \value{
 \code{file}, invisibly.
 
-For \code{tabfound_load()}, a \code{tabfound_model}.
+For \code{tabfound_load()}, whichever of the two object types was
+saved.
 }
 \description{
 \code{saveRDS()} does not work on these objects: a torch module survives
@@ -36,6 +37,12 @@ already the same file the object was built from; duplicating them
 would mean writing 6.5 GB per saved TabFM model. \code{\link[=tabfound_load]{tabfound_load()}}
 re-resolves them from that reference, so the artifacts (or the
 HuggingFace cache) must still be reachable.
+
+Both object types are supported: the engine-level \code{tabfound_model}
+from \code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\link[=tabular_regressor]{tabular_regressor()}}, and the
+\code{tabfound_fit} that \code{\link[=tabfound]{tabfound()}} returns. For the latter the hardhat
+blueprint travels with it, so the reloaded object re-applies the same
+encoding and the same factor levels to new data.
 }
 \examples{
 \dontrun{

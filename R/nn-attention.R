@@ -13,6 +13,100 @@
 # learned softplus scaling for TabFM; scalable-softmax for TabICL) get
 # added here as those backends land.
 
+# ---------------------------------------------------------------------------
+# The one place that calls SDPA
+# ---------------------------------------------------------------------------
+
+#' Scaled dot-product attention
+#'
+#' R torch registers `torch_scaled_dot_product_attention` but does not
+#' export it, and every backend here wants it: the fused kernel is what
+#' makes this package's float32 rounding match the reference's, since a
+#' hand-written `softmax(QK'/sqrt(d)) V` accumulates differently.
+#'
+#' Reaching into another package's namespace is also a CRAN blocker, and
+#' a hard dependency on an unexported function is a real fragility --
+#' torch is free to rename it. So there is one call site instead of ten,
+#' the lookup is resolved once and cached, and the package still works
+#' when it is gone: `.sdpa_fallback()` is the same operation written in
+#' public API, differing only in float rounding (~1e-7 relative on the
+#' package's fixtures, checked in the tests).
+#'
+#' @param query,key,value `(B, H, L, D)` tensors.
+#' @param attn_mask Optional additive or boolean mask.
+#' @param dropout_p Kept for signature parity; always 0 here (inference).
+#' @param is_causal Passed through.
+#' @param scale Optional override for `1/sqrt(D)`.
+#' @section Options:
+#' `tabfound.sdpa` is `"auto"` (default: the fused kernel when torch has
+#' it), `"torch"` (require it, error if absent) or `"r"` (always the
+#' fallback -- what the agreement test runs).
+#' @keywords internal
+sdpa <- function(query, key, value, attn_mask = NULL, dropout_p = 0,
+                 is_causal = FALSE, scale = NULL) {
+  mode <- getOption("tabfound.sdpa", "auto")
+  fn <- if (identical(mode, "r")) NULL else .torch_sdpa()
+  if (is.null(fn)) {
+    if (identical(mode, "torch")) {
+      cli::cli_abort(c(
+        "This build of {.pkg torch} has no \\
+         {.fn torch_scaled_dot_product_attention}.",
+        i = "Use {.code options(tabfound.sdpa = \"auto\")} for the pure-R \\
+             fallback."
+      ))
+    }
+    return(.sdpa_fallback(query, key, value, attn_mask, is_causal, scale))
+  }
+  args <- list(query = query, key = key, value = value,
+               attn_mask = attn_mask, dropout_p = dropout_p,
+               is_causal = is_causal)
+  if (!is.null(scale)) args$scale <- scale
+  do.call(fn, args)
+}
+
+# Resolved once per session: `getFromNamespace()` on every attention call
+# of every layer of every member would be a measurable tax.
+.sdpa_cache <- new.env(parent = emptyenv())
+
+# @keywords internal
+.torch_sdpa <- function() {
+  if (!is.null(.sdpa_cache$fn)) return(.sdpa_cache$fn)
+  if (isTRUE(.sdpa_cache$missing)) return(NULL)
+  fn <- tryCatch(
+    utils::getFromNamespace("torch_scaled_dot_product_attention", "torch"),
+    error = function(e) NULL
+  )
+  if (is.null(fn)) .sdpa_cache$missing <- TRUE else .sdpa_cache$fn <- fn
+  fn
+}
+
+# The same operation in public API. Not the default: it materialises the
+# `(B, H, Lq, Lk)` score matrix that the fused kernel avoids, and its
+# rounding differs in the last couple of float32 digits.
+# @keywords internal
+.sdpa_fallback <- function(query, key, value, attn_mask = NULL,
+                           is_causal = FALSE, scale = NULL) {
+  d <- as.numeric(query$size(query$dim()))
+  s <- scale %||% (1 / sqrt(d))
+  scores <- torch::torch_matmul(query, key$transpose(-2L, -1L)) * s
+  if (isTRUE(is_causal)) {
+    Lq <- query$size(query$dim() - 1L)
+    Lk <- key$size(key$dim() - 1L)
+    causal <- torch::torch_ones(c(Lq, Lk), dtype = torch::torch_bool(),
+                                device = query$device)$tril()
+    scores <- scores$masked_fill(causal$logical_not(), -Inf)
+  }
+  if (!is.null(attn_mask)) {
+    scores <- if (attn_mask$dtype == torch::torch_bool()) {
+      scores$masked_fill(attn_mask$logical_not(), -Inf)
+    } else {
+      scores + attn_mask
+    }
+  }
+  torch::torch_matmul(torch::nnf_softmax(scores, dim = -1L), value)
+}
+
+
 #' Scaled-dot-product multi-head attention with fused per-head weights
 #' @keywords internal
 mha_fused_qkv <- torch::nn_module(
@@ -81,7 +175,7 @@ mha_fused_qkv <- torch::nn_module(
       q <- torch::torch_einsum("ble,hde->bhld", list(x, w_qkv[1, , , ]))
       k <- cached_kv$key$expand(c(B, H, Lk, D))
       v <- cached_kv$value$expand(c(B, H, Lk, D))
-      ctx <- torch:::torch_scaled_dot_product_attention(
+      ctx <- sdpa(
         query = q, key = k, value = v, dropout_p = 0
       )
       out <- torch::torch_einsum("bhld,hde->ble", list(ctx, self$`_w_out`))
@@ -123,10 +217,10 @@ mha_fused_qkv <- torch::nn_module(
       }
     }
 
-    # Use the fused SDPA kernel to match Python's
+    # The fused SDPA kernel, to match Python's
     # `torch.nn.functional.scaled_dot_product_attention` numerics exactly.
-    # R torch registers this function but doesn't export it, hence `:::`.
-    ctx <- torch:::torch_scaled_dot_product_attention(
+    # See `sdpa()` for why it is reached through a wrapper.
+    ctx <- sdpa(
       query = q, key = k, value = v, dropout_p = 0
     )   # (B, H, Lq, D)
 
@@ -251,7 +345,7 @@ mha_qk_norm <- torch::nn_module(
       v <- cached_kv$value
     }
 
-    ctx <- torch:::torch_scaled_dot_product_attention(
+    ctx <- sdpa(
       query = q, key = k, value = v, attn_mask = attn_mask,
       dropout_p = 0, scale = 1.0
     )
@@ -441,7 +535,7 @@ mha_fused_inproj <- torch::nn_module(
 
     # Default scale (1 / sqrt(head_dim)); the ssmax factor is folded into
     # the query rather than replacing the scale.
-    ctx <- torch:::torch_scaled_dot_product_attention(
+    ctx <- sdpa(
       query = q4, key = k4, value = v4, attn_mask = m4, dropout_p = 0
     )
     ctx <- ctx$reshape(qs)

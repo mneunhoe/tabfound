@@ -17,7 +17,9 @@ register_backend(
   peak_terms = NULL,
   aliases = character(),
   description = "",
+  kv_cache_capable = FALSE,
   handles_missing = FALSE,
+  imputes_internally = FALSE,
   parity = NA_character_
 )
 }
@@ -65,10 +67,30 @@ shorthands to local paths or Hub repo ids.}
 
 \item{description}{One-line human description.}
 
-\item{handles_missing}{Logical. Does the network itself tolerate
-\code{NA}/\code{NaN} in the predictors? TabPFN encodes them explicitly and
-TabFM maps them to a sentinel; TabICL propagates them to NaN
-output, so \code{\link[=tabfound]{tabfound()}} imputes by default for that backend.}
+\item{kv_cache_capable}{Logical. Can this backend hand back a
+conditioned state for the training rows that a later \code{predict()} can
+start from? That is what \code{\link[=tabfound_cache]{tabfound_cache()}} persists. An
+architecture that re-fits statistics over train and test together
+has nothing to hand over.}
+
+\item{handles_missing}{Logical. Does the \strong{network} tolerate
+\code{NA}/\code{NaN} in the predictors? TabPFN encodes them explicitly, as an
+is-missing channel beside the value, and TabFM maps them to a
+sentinel. TabICL propagates them to \code{NaN} output and Mitra silently
+collapses the column, so for those it is \code{FALSE}.}
+
+\item{imputes_internally}{Logical. Does the \strong{predictor} fill them in
+before the network sees them? TabICL, Mitra and TabFM all run their
+reference wrapper's mean imputer as the first preprocessing step.
+
+The two flags used to be one, which conflated guarantees that are
+not the same. Either means \code{\link[=tabfound]{tabfound()}} need not impute, so
+\code{na_action = "auto"} reads their disjunction; but a network that
+\emph{conditions on} missingness treats it as information, while a
+wrapper that mean-fills has thrown that information away before the
+model is reached. For imputation and synthesis, where the
+missingness pattern is the object of study, that difference is the
+whole question -- see \code{\link[=tabfound_impute]{tabfound_impute()}}.}
 
 \item{parity}{Optional character. Reference Python package + version
 this backend has been checked against.}

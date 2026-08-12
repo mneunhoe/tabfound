@@ -41,35 +41,35 @@ resolve_append_original <- function(append_original, n_features,
   isTRUE(append_original)
 }
 
-#' Apply a member's primary column transform
+#' Fit a member's primary column transform
 #'
-#' Fitted on train, applied to both. Returns the transformed pair; the
-#' caller decides whether it replaces the originals or is appended.
+#' Fitted on train, applied to train and to every prediction chunk. The
+#' fit is the expensive half -- the quantile transformer sorts every
+#' column of the training matrix -- and it depends on nothing but the
+#' training rows, so it is separated from the application and done once.
+#'
+#' @return A list with `kind` and whatever that kind needs;
+#'   [transform_primary_reshape()] consumes it.
 #' @keywords internal
-apply_primary_reshape <- function(X_train, X_test, preset) {
+fit_primary_reshape <- function(X_train, preset) {
   # Every column categorical and the member not transforming those: there
   # is nothing left to reshape.
-  if (ncol(X_train) == 0L) return(list(train = X_train, test = X_test))
-  if (identical(preset, "none")) {
-    return(list(train = X_train, test = X_test))
+  if (ncol(X_train) == 0L || identical(preset, "none")) {
+    return(list(kind = "identity"))
   }
   if (identical(preset, "squashing_scaler_default") ||
       identical(preset, "squashing_scaler_max10")) {
-    fit <- fit_squashing_scaler(
+    return(list(kind = "squashing", fit = fit_squashing_scaler(
       X_train,
       max_absolute_value = if (identical(preset, "squashing_scaler_max10")) 10 else 3
-    )
-    return(list(train = transform_squashing_scaler(X_train, fit),
-                test  = transform_squashing_scaler(X_test, fit)))
+    )))
   }
   if (startsWith(preset, "quantile_uni")) {
-    fit <- fit_quantile_transformer(
+    return(list(kind = "quantile", fit = fit_quantile_transformer(
       X_train,
       n_quantiles = quantile_preset_n_quantiles(preset, nrow(X_train)),
       extrapolate_ratio = quantile_preset_extrapolate_ratio(preset)
-    )
-    return(list(train = transform_quantile_transformer(X_train, fit),
-                test  = transform_quantile_transformer(X_test, fit)))
+    )))
   }
   cli::cli_abort(c(
     "Preprocessing preset {.val {preset}} is not implemented.",
@@ -78,6 +78,26 @@ apply_primary_reshape <- function(X_train, X_test, preset) {
                                'quantile_uni_coarse', 'quantile_uni_fine',
                                'quantile_uni_extrapolate')}}."
   ))
+}
+
+#' @rdname fit_primary_reshape
+#' @keywords internal
+transform_primary_reshape <- function(X, fitted) {
+  switch(fitted$kind,
+         identity  = X,
+         squashing = transform_squashing_scaler(X, fitted$fit),
+         quantile  = transform_quantile_transformer(X, fitted$fit),
+         cli::cli_abort("Unknown primary reshape {.val {fitted$kind}}."))
+}
+
+#' Apply a member's primary column transform
+#'
+#' Fit-and-transform-both, for callers that have the pair in hand.
+#' @keywords internal
+apply_primary_reshape <- function(X_train, X_test, preset) {
+  fitted <- fit_primary_reshape(X_train, preset)
+  list(train = transform_primary_reshape(X_train, fitted),
+       test  = transform_primary_reshape(X_test, fitted))
 }
 
 #' Which categorical columns an encoder actually touches
@@ -139,10 +159,23 @@ select_encoded_categoricals <- function(X_train, cat_ix, name) {
 #' @keywords internal
 apply_categorical_encoding <- function(X_train, X_test, cat_ix, cfg,
                                        draw_missing = FALSE) {
+  fitted <- fit_categorical_encoding(X_train, cat_ix, cfg, draw_missing)
+  list(X_train = transform_categorical_encoding(X_train, fitted),
+       X_test  = transform_categorical_encoding(X_test, fitted),
+       cat_ix  = fitted$cat_ix,
+       cat_mappings = fitted$cat_mappings)
+}
+
+#' @rdname apply_categorical_encoding
+#' @return For `fit_categorical_encoding()`, the encoder plus the column
+#'   indices [transform_categorical_encoding()] needs; the fit reads the
+#'   training rows (level counts, category sets) and nothing else.
+#' @keywords internal
+fit_categorical_encoding <- function(X_train, cat_ix, cfg,
+                                     draw_missing = FALSE) {
   name <- cfg$categorical_name %||% "numeric"
   if (name %in% c("numeric", "none")) {
-    return(list(X_train = X_train, X_test = X_test, cat_ix = cat_ix,
-                cat_mappings = NULL))
+    return(list(kind = "identity", cat_ix = cat_ix, cat_mappings = NULL))
   }
   if (identical(name, "onehot")) {
     cli::cli_abort(c(
@@ -160,8 +193,7 @@ apply_categorical_encoding <- function(X_train, X_test, cat_ix, cfg,
 
   sel <- select_encoded_categoricals(X_train, cat_ix, name)
   if (!length(sel)) {
-    return(list(X_train = X_train, X_test = X_test, cat_ix = integer(),
-                cat_mappings = list()))
+    return(list(kind = "identity", cat_ix = integer(), cat_mappings = list()))
   }
 
   enc <- fit_ordinal_encoder(X_train, sel)
@@ -198,19 +230,38 @@ apply_categorical_encoding <- function(X_train, X_test, cat_ix, cfg,
   }
 
   # `[encoded, remainder]` -- the remainder keeps its original order.
-  rest <- setdiff(seq_len(ncol(X_train)), sel)
   list(
-    X_train = cbind(transform_ordinal_encoder(X_train, enc, mappings),
-                    X_train[, rest, drop = FALSE]),
-    X_test  = cbind(transform_ordinal_encoder(X_test, enc, mappings),
-                    X_test[, rest, drop = FALSE]),
-    cat_ix  = seq_along(sel),
+    kind = "ordinal",
+    enc = enc, mappings = mappings,
+    rest = setdiff(seq_len(ncol(X_train)), sel),
+    cat_ix = seq_along(sel),
     cat_mappings = mappings
   )
 }
 
+#' @rdname apply_categorical_encoding
+#' @keywords internal
+transform_categorical_encoding <- function(X, fitted) {
+  if (identical(fitted$kind, "identity")) return(X)
+  cbind(transform_ordinal_encoder(X, fitted$enc, fitted$mappings),
+        X[, fitted$rest, drop = FALSE])
+}
+
 
 #' Build one ensemble member's model inputs
+#'
+#' [fit_member_pipeline()] does everything that depends on the training
+#' rows -- every step's fit, and the transformed training matrix -- and
+#' [transform_member_pipeline()] replays it on query rows.
+#'
+#' The split is what keeps prediction linear in the number of chunks.
+#' Every step here is fitted on train and applied to both, and none of it
+#' depends on the query rows, so a fit inside the chunk loop is executed
+#' `n_members * n_chunks` times where `n_members` would do: at 8 members
+#' and 20K test rows that is 160 quantile transformers (a per-column sort
+#' of the whole training matrix each) in place of 8. `apply_member_pipeline()`
+#' remains as the fit-and-transform-both convenience for callers holding
+#' a single pair -- the config generator, and the tests.
 #'
 #' @param X_train,X_test Numeric matrices of raw inputs.
 #' @param cfg One member spec from [load_ensemble_configs_from_dump()] or
@@ -227,8 +278,23 @@ apply_categorical_encoding <- function(X_train, X_test, cat_ix, cfg,
 apply_member_pipeline <- function(X_train, X_test, cfg,
                                   categorical_features = integer(),
                                   draw_missing = FALSE) {
-  X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
+  fitted <- fit_member_pipeline(X_train, cfg, categorical_features,
+                                draw_missing)
+  list(X_train = fitted$X_train,
+       X_test  = transform_member_pipeline(X_test, fitted),
+       cat_mappings = fitted$cat_mappings)
+}
+
+#' @rdname apply_member_pipeline
+#' @return For `fit_member_pipeline()`, the transformed training matrix
+#'   plus the fitted steps; feed both to [transform_member_pipeline()].
+#' @keywords internal
+fit_member_pipeline <- function(X_train, cfg,
+                                categorical_features = integer(),
+                                draw_missing = FALSE) {
+  X_tr <- as.matrix(X_train)
   cat_ix <- as.integer(categorical_features)
+  steps <- list()
 
   # --- Polynomial features (TabPFN v2.6's regressor; "no" elsewhere).
   # The step rescales the base columns in place and appends the products
@@ -248,15 +314,15 @@ apply_member_pipeline <- function(X_train, X_test, cfg,
     }
     pf <- fit_polynomial_features(X_tr, cfg$poly_factor_1, cfg$poly_factor_2)
     X_tr <- transform_polynomial_features(X_tr, pf)
-    X_te <- transform_polynomial_features(X_te, pf)
+    steps$poly <- pf
   }
 
   # --- RemoveConstant, fitted on train. Surviving categorical columns
   # keep their identity, at their new positions.
   keep_cols <- remove_constant_features_fit(X_tr)
   X_tr <- X_tr[, keep_cols, drop = FALSE]
-  X_te <- X_te[, keep_cols, drop = FALSE]
   cat_ix <- match(cat_ix[cat_ix %in% keep_cols], keep_cols)
+  steps$keep_cols <- keep_cols
 
   max_feats <- cfg$max_features_per_estimator %||% 500L
   if (ncol(X_tr) > max_feats) {
@@ -288,14 +354,18 @@ apply_member_pipeline <- function(X_train, X_test, cfg,
               else if (apply_to_cat) integer()
               else seq_along(cat_ix)
 
-  reshaped <- apply_primary_reshape(X_tr[, trans_ix, drop = FALSE],
-                                    X_te[, trans_ix, drop = FALSE], cfg$preset)
-  X_tr <- cbind(X_tr[, pass_ix, drop = FALSE], reshaped$train)
-  X_te <- cbind(X_te[, pass_ix, drop = FALSE], reshaped$test)
+  steps$trans_ix <- trans_ix
+  steps$pass_ix  <- pass_ix
+  steps$reshape  <- fit_primary_reshape(X_tr[, trans_ix, drop = FALSE],
+                                        cfg$preset)
+  X_tr <- cbind(X_tr[, pass_ix, drop = FALSE],
+                transform_primary_reshape(X_tr[, trans_ix, drop = FALSE],
+                                          steps$reshape))
 
   # --- EncodeCategorical.
-  enc <- apply_categorical_encoding(X_tr, X_te, cat_ix, cfg, draw_missing)
-  X_tr <- enc$X_train; X_te <- enc$X_test; cat_ix <- enc$cat_ix
+  enc <- fit_categorical_encoding(X_tr, cat_ix, cfg, draw_missing)
+  X_tr <- transform_categorical_encoding(X_tr, enc)
+  steps$encode <- enc
 
   # --- SVD global transformer, appended.
   gt <- cfg$global_transformer_name
@@ -303,27 +373,49 @@ apply_member_pipeline <- function(X_train, X_test, cfg,
     svd_fit <- fit_transform_svd_features(X_tr, global_name = gt)
     if (!isTRUE(svd_fit$is_no_op)) {
       X_tr <- cbind(X_tr, transform_svd_features(X_tr, svd_fit))
-      X_te <- cbind(X_te, transform_svd_features(X_te, svd_fit))
+      steps$svd <- svd_fit
     }
   }
 
   # --- Fingerprint: one hash column per row, salted with the train shape.
+  # The salt is the *train* shape wherever it is applied, so it is fixed
+  # here and the query rows inherit it.
   if (!identical(cfg$add_fingerprint %||% TRUE, FALSE)) {
-    salt <- nrow(X_tr) * ncol(X_tr)
-    X_tr <- cbind(X_tr, apply_fingerprint(X_tr, salt, is_test = FALSE))
-    X_te <- cbind(X_te, apply_fingerprint(X_te, salt, is_test = TRUE))
+    steps$fingerprint_salt <- nrow(X_tr) * ncol(X_tr)
+    X_tr <- cbind(X_tr, apply_fingerprint(X_tr, steps$fingerprint_salt,
+                                          is_test = FALSE))
   }
 
   # --- Shuffle. `cat_mappings` comes back out so the generator can record
   # what it drew; the network itself is not told which columns are
   # categorical (both architectures ignore that argument), so the schema
   # stops mattering here.
-  if (is.null(cfg$shuffle_perm)) {
-    return(list(X_train = X_tr, X_test = X_te, cat_mappings = enc$cat_mappings))
+  steps$shuffle_perm <- cfg$shuffle_perm
+  if (!is.null(cfg$shuffle_perm)) {
+    X_tr <- apply_feature_shift(X_tr, cfg$shuffle_perm)
   }
-  list(X_train = apply_feature_shift(X_tr, cfg$shuffle_perm),
-       X_test  = apply_feature_shift(X_te, cfg$shuffle_perm),
-       cat_mappings = enc$cat_mappings)
+
+  c(list(X_train = X_tr, cat_mappings = enc$cat_mappings), steps)
+}
+
+#' @rdname apply_member_pipeline
+#' @param fitted The result of [fit_member_pipeline()].
+#' @param X Query rows to put through the fitted pipeline.
+#' @keywords internal
+transform_member_pipeline <- function(X, fitted) {
+  X <- as.matrix(X)
+  if (!is.null(fitted$poly)) X <- transform_polynomial_features(X, fitted$poly)
+  X <- X[, fitted$keep_cols, drop = FALSE]
+  X <- cbind(X[, fitted$pass_ix, drop = FALSE],
+             transform_primary_reshape(X[, fitted$trans_ix, drop = FALSE],
+                                       fitted$reshape))
+  X <- transform_categorical_encoding(X, fitted$encode)
+  if (!is.null(fitted$svd)) X <- cbind(X, transform_svd_features(X, fitted$svd))
+  if (!is.null(fitted$fingerprint_salt)) {
+    X <- cbind(X, apply_fingerprint(X, fitted$fingerprint_salt, is_test = TRUE))
+  }
+  if (!is.null(fitted$shuffle_perm)) X <- apply_feature_shift(X, fitted$shuffle_perm)
+  X
 }
 
 
@@ -469,6 +561,37 @@ tabpfn_forward <- function(net, x_train, y_train, x_test, col_emb,
 }
 
 
+#' Fit each member's pipeline once, for one `predict()` call
+#'
+#' The counterpart of [member_cache_store()], and for the same reason:
+#' what a member's pipeline is fitted on -- the training rows and that
+#' member's config -- does not change between prediction chunks, so
+#' fitting it inside the chunk loop multiplies the cost by the chunk
+#' count. Built per `predict()` call rather than kept on the fitted
+#' object, so nothing outlives the answer or goes stale against a refit.
+#'
+#' The KV-cache builder and the prediction path share one store, which
+#' also removes the duplicate fit between them.
+#'
+#' @param X_train Raw training predictors.
+#' @param configs Member specs.
+#' @param categorical_features Passed to [fit_member_pipeline()].
+#' @return A function of the member index returning its fitted pipeline.
+#' @keywords internal
+member_pipeline_store <- function(X_train, configs,
+                                  categorical_features = integer()) {
+  X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
+  cache <- new.env(parent = emptyenv())
+  function(i) {
+    key <- as.character(i)
+    hit <- cache[[key]]
+    if (!is.null(hit)) return(hit)
+    fitted <- fit_member_pipeline(X_tr, configs[[i]], categorical_features)
+    assign(key, fitted, envir = cache)
+    fitted
+  }
+}
+
 #' Build one KV cache per ensemble member
 #'
 #' Every member sees a differently preprocessed view of the same training
@@ -493,14 +616,16 @@ build_member_kv_caches <- function(net, col_emb, X_train, y_train, configs,
                                    categorical_features = integer(),
                                    save_peak_memory_factor = NULL,
                                    row_chunk_size = NA_integer_,
-                                   col_chunk_size = NA_integer_) {
+                                   col_chunk_size = NA_integer_,
+                                   pipelines = NULL) {
   X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
-  # A member's pipeline fits on the training rows only, so the test side
-  # of this call is a placeholder -- one row, thrown away.
-  dummy <- X_tr[1L, , drop = FALSE]
+  # A member's pipeline fits on the training rows only -- there is no
+  # test side to this call at all.
+  pipelines <- pipelines %||%
+    member_pipeline_store(X_tr, configs, categorical_features)
   lapply(seq_along(configs), function(i) {
     cfg <- configs[[i]]
-    mem <- apply_member_pipeline(X_tr, dummy, cfg, categorical_features)
+    mem <- pipelines(i)
     x_tr <- as_float_tensor(mem$X_train, device = device)$unsqueeze(1L)
     y_tr <- as_float_tensor(
       matrix(as.numeric(member_y(cfg, y_train)), ncol = 1L), device = device
@@ -550,9 +675,12 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
                                               kv_caches = NULL,
                                               save_peak_memory_factor = NULL,
                                               row_chunk_size = NA_integer_,
-                                              col_chunk_size = NA_integer_) {
+                                              col_chunk_size = NA_integer_,
+                                              pipelines = NULL) {
   X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
   storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
+  pipelines <- pipelines %||%
+    member_pipeline_store(X_tr, configs, categorical_features)
   y_raw <- as.numeric(y_train)
   y_mean <- mean(y_raw)
   y_std  <- sqrt(mean((y_raw - y_mean) ^ 2)) + 1e-20   # population std + eps
@@ -563,7 +691,10 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
 
   for (i in seq_along(configs)) {
     cfg <- configs[[i]]
-    mem <- apply_member_pipeline(X_tr, X_te, cfg, categorical_features)
+    # Between members: this iteration's transients are dead but R's gc
+    # cannot see the torch allocations holding them.
+    if (i > 1L) collect_between_chunks()
+    mem <- pipelines(i)
 
     # Per-member y: optional target_transform (yeojohnson + StandardScaler)
     tt_state <- NULL
@@ -573,18 +704,27 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
       y_for_model <- apply_target_transform(y_z, tt_state)
     }
 
-    X_tr_t <- torch::torch_tensor(mem$X_train,
+    # With a cache the network never looks at the training rows, so
+    # transforming and uploading them is work whose whole result is
+    # discarded -- which is the cost `kv_cache = TRUE` exists to avoid.
+    # The trace hook is the one consumer that still wants them.
+    cache <- if (is.null(kv_caches)) NULL else kv_caches[[i]]
+    want_train <- is.null(cache) || !is.null(trace_dir)
+    X_tr_t <- if (want_train) {
+      torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
+                          device = device)$unsqueeze(1L)
+    }
+    X_te_t <- torch::torch_tensor(transform_member_pipeline(X_te, mem),
                                    dtype = torch::torch_float(),
                                    device = device)$unsqueeze(1L)
-    X_te_t <- torch::torch_tensor(mem$X_test,
-                                   dtype = torch::torch_float(),
-                                   device = device)$unsqueeze(1L)
-    y_tr_t <- torch::torch_tensor(y_for_model,
-                                   dtype = torch::torch_float(),
-                                   device = device)$unsqueeze(1L)
+    y_tr_t <- if (want_train) {
+      torch::torch_tensor(y_for_model, dtype = torch::torch_float(),
+                          device = device)$unsqueeze(1L)
+    }
     out <- torch::with_no_grad({
-      tabpfn_forward(net, X_tr_t, y_tr_t, X_te_t, col_emb,
-                     kv_cache = if (is.null(kv_caches)) NULL else kv_caches[[i]],
+      tabpfn_forward(net, if (is.null(cache)) X_tr_t else NULL,
+                     if (is.null(cache)) y_tr_t else NULL, X_te_t, col_emb,
+                     kv_cache = cache,
                      save_peak_memory_factor = save_peak_memory_factor,
                      row_chunk_size = row_chunk_size,
                      col_chunk_size = col_chunk_size)
@@ -665,26 +805,38 @@ apply_ensemble_predict_classifier <- function(net, col_emb,
                                                kv_caches = NULL,
                                                save_peak_memory_factor = NULL,
                                                row_chunk_size = NA_integer_,
-                                               col_chunk_size = NA_integer_) {
+                                               col_chunk_size = NA_integer_,
+                                               pipelines = NULL) {
   X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
   storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
+  pipelines <- pipelines %||%
+    member_pipeline_store(X_tr, configs, categorical_features)
   y_int <- as.integer(y_train)
   acc <- array(0, dim = c(nrow(X_te), n_classes))
 
   for (i in seq_along(configs)) {
     cfg <- configs[[i]]
-    mem <- apply_member_pipeline(X_tr, X_te, cfg, categorical_features)
+    if (i > 1L) collect_between_chunks()
+    mem <- pipelines(i)
     y_perm <- cfg$class_perm[y_int + 1L]
-    X_tr_t <- torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
-                                   device = device)$unsqueeze(1L)
-    X_te_t <- torch::torch_tensor(mem$X_test,  dtype = torch::torch_float(),
-                                   device = device)$unsqueeze(1L)
-    y_tr_t <- torch::torch_tensor(as.numeric(y_perm),
+    # See the regressor: with a cache the training side is discarded.
+    cache <- if (is.null(kv_caches)) NULL else kv_caches[[i]]
+    want_train <- is.null(cache) || !is.null(trace_dir)
+    X_tr_t <- if (want_train) {
+      torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
+                          device = device)$unsqueeze(1L)
+    }
+    X_te_t <- torch::torch_tensor(transform_member_pipeline(X_te, mem),
                                    dtype = torch::torch_float(),
                                    device = device)$unsqueeze(1L)
+    y_tr_t <- if (want_train) {
+      torch::torch_tensor(as.numeric(y_perm), dtype = torch::torch_float(),
+                          device = device)$unsqueeze(1L)
+    }
     out <- torch::with_no_grad({
-      tabpfn_forward(net, X_tr_t, y_tr_t, X_te_t, col_emb,
-                     kv_cache = if (is.null(kv_caches)) NULL else kv_caches[[i]],
+      tabpfn_forward(net, if (is.null(cache)) X_tr_t else NULL,
+                     if (is.null(cache)) y_tr_t else NULL, X_te_t, col_emb,
+                     kv_cache = cache,
                      save_peak_memory_factor = save_peak_memory_factor,
                      row_chunk_size = row_chunk_size,
                      col_chunk_size = col_chunk_size)

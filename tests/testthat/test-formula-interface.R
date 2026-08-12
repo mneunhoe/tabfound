@@ -172,6 +172,38 @@ test_that("the imputer fills only non-finite cells, with column means", {
 })
 
 
+test_that("categorical columns are imputed with the modal code, not the mean", {
+  # The codes of a factor are labels, not a scale: the mean of a
+  # three-level factor is 0.83, which is not a level of anything, and the
+  # network reads it as a category between two others.
+  x <- cbind(num = c(1, NA, 3, 10),
+             fac = c(0, 2, 2, NA))
+  plain <- .fit_imputer(x)
+  expect_equal(plain[[2]], mean(c(0, 2, 2)))
+
+  modal <- .fit_imputer(x, categorical = 2L)
+  expect_equal(modal[[1]], plain[[1]])       # numeric column unchanged
+  expect_equal(modal[[2]], 2)
+  filled <- .apply_imputer(x, modal)
+  expect_true(all(filled[, "fac"] %in% c(0, 2)))
+})
+
+
+test_that("na_action = \"impute\" uses the modal code end to end", {
+  dir <- local_fake_backend()
+  d <- data.frame(
+    num = c(1, 2, NA, 4, 5, 6, 7, 8),
+    fac = factor(c("a", "b", "b", "b", "c", NA, "b", "a")),
+    y   = factor(rep(c("p", "q"), 4))
+  )
+  f <- tabfound(y ~ ., data = d, model = dir, na_action = "impute")
+  expect_identical(f$na_action, "impute")
+  # "b" is the mode of `fac`, code 1; its mean code would be 1.17.
+  fac_col <- match("fac", names(f$blueprint$ptypes$predictors))
+  expect_equal(f$imputer[[fac_col]], 1)
+})
+
+
 # --- tests that need weights ----------------------------------------------
 
 model_dir <- function(var) {
@@ -229,7 +261,7 @@ test_that("regression goes through the same path and reports .pred", {
 })
 
 
-test_that("missing predictors are imputed for tabicl and passed for tabpfn", {
+test_that("missing predictors reach both backends without this layer imputing", {
   icl <- model_dir("TABFOUND_TABICL_CLF_DIR")
   pfn <- model_dir("TABFOUND_TABPFN_CLF_DIR")
   skip_if(is.null(icl) || is.null(pfn), "model dirs not configured")
@@ -238,10 +270,21 @@ test_that("missing predictors are imputed for tabicl and passed for tabpfn", {
   tr <- sort(sample.int(150, 100)); te <- setdiff(seq_len(150), tr)
   d <- iris; d[tr[1:5], "Sepal.Width"] <- NA
 
+  # TabICL's *network* cannot see an NA, but its predictor mean-imputes
+  # first, exactly as the reference wrapper does. So `tabfound()` passes
+  # the data through rather than putting a second, unverified imputer in
+  # front of the verified one -- and `list_backends()` says which of the
+  # two routes each backend takes, because they are not the same
+  # guarantee to anyone studying the missingness.
   f_icl <- tabfound(Species ~ ., data = d[tr, ], model = icl)
-  expect_identical(f_icl$na_action, "impute")
+  expect_identical(f_icl$na_action, "pass")
+  expect_null(f_icl$imputer)
   p <- predict(f_icl, d[te, ], type = "prob")
   expect_false(anyNA(p))
+
+  handling <- list_backends()
+  expect_identical(handling$missing[handling$name == "tabicl"], "imputed")
+  expect_identical(handling$missing[handling$name == "tabpfn"], "encoded")
 
   f_pfn <- tabfound(Species ~ ., data = d[tr, ], model = pfn)
   expect_identical(f_pfn$na_action, "pass")

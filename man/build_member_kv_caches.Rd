@@ -15,7 +15,8 @@ build_member_kv_caches(
   categorical_features = integer(),
   save_peak_memory_factor = NULL,
   row_chunk_size = NA_integer_,
-  col_chunk_size = NA_integer_
+  col_chunk_size = NA_integer_,
+  pipelines = NULL
 )
 }
 \arguments{

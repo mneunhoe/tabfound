@@ -306,39 +306,72 @@ tabicl_ensemble_fit <- function(X, y, classification,
   )
 }
 
-#' Materialise TabICL's ensemble views for a test set
+#' TabICL's ensemble views for a test set, one at a time
 #'
-#' Returns a flat list of members, each `list(X, y)` with `X` the
-#' train-then-test rows in that member's feature order and `y` its
-#' relabelled training targets. Flattened in the same
-#' method-then-member order the class permutations are stored in.
+#' Each member is a `list(X, y)` with `X` the train-then-test rows in
+#' that member's feature order and `y` its relabelled training targets,
+#' in the same flattened method-then-member order the class permutations
+#' are stored in.
+#'
+#' The iterator exists because the eager version holds every member's
+#' full `(n_train + n_test) x p` matrix in one list -- eight for TabICL,
+#' thirty-two for TabFM, hundreds of megabytes on a table of any size --
+#' when the consumer only ever looks at one. What is genuinely shared
+#' between members of a normalisation method, the transformed matrix
+#' itself, is still computed once and held; only the per-member column
+#' slice is deferred. Members are cheapest to visit in order, which is
+#' what every caller does.
 #'
 #' @param gen Result of [tabicl_ensemble_fit()].
 #' @param X_test Numeric matrix of test predictors, already imputed.
+#' @return `list(n, get)`: the member count, and a function of the member
+#'   index.
+#' @keywords internal
+tabicl_ensemble_iter <- function(gen, X_test) {
+  X_test <- transform_unique_feature_filter(as.matrix(X_test), gen$filter)
+  index <- .ensemble_flat_index(gen)
+  cur_m <- NULL; cur_X <- NULL
+
+  get <- function(i) {
+    m <- index$method[[i]]
+    if (!identical(cur_m, m)) {
+      pp <- gen$preprocessors[[m]]
+      # Drop the previous method's matrix before building the next.
+      cur_X <<- NULL
+      cur_X <<- rbind(pp$X_transformed,
+                      transform_preprocessing_pipeline(X_test, pp))
+      cur_m <<- m
+    }
+    cfg <- gen$ensemble[[m]][[index$j[[i]]]]
+    feat <- cfg[[1L]]; y_pattern <- cfg[[2L]]
+    list(
+      X = cur_X[, feat + 1L, drop = FALSE],
+      y = if (gen$classification) y_pattern[as.integer(gen$y) + 1L] else gen$y,
+      class_shuffle = y_pattern,
+      feat = feat,
+      norm = m
+    )
+  }
+  list(n = nrow(index), get = get)
+}
+
+# The (method, member) pairs in flattened order, which is the order the
+# class permutations were stored in.
+# @keywords internal
+.ensemble_flat_index <- function(gen) {
+  rows <- lapply(gen$norm_methods, function(m) {
+    k <- length(gen$ensemble[[m]])
+    if (!k) return(NULL)
+    data.frame(method = rep(m, k), j = seq_len(k), stringsAsFactors = FALSE)
+  })
+  do.call(rbind, rows)
+}
+
+#' @rdname tabicl_ensemble_iter
 #' @keywords internal
 tabicl_ensemble_transform <- function(gen, X_test) {
-  X_test <- transform_unique_feature_filter(as.matrix(X_test), gen$filter)
-  out <- list()
-  for (m in gen$norm_methods) {
-    pp <- gen$preprocessors[[m]]
-    X_variant <- rbind(pp$X_transformed, transform_preprocessing_pipeline(X_test, pp))
-    for (cfg in gen$ensemble[[m]]) {
-      feat <- cfg[[1L]]; y_pattern <- cfg[[2L]]
-      y_member <- if (gen$classification) {
-        y_pattern[as.integer(gen$y) + 1L]
-      } else {
-        gen$y
-      }
-      out[[length(out) + 1L]] <- list(
-        X = X_variant[, feat + 1L, drop = FALSE],
-        y = y_member,
-        class_shuffle = y_pattern,
-        feat = feat,
-        norm = m
-      )
-    }
-  }
-  out
+  it <- tabicl_ensemble_iter(gen, X_test)
+  lapply(seq_len(it$n), it$get)
 }
 
 
@@ -493,41 +526,59 @@ tabfm_ensemble_fit <- function(X, y, task = "classification",
   }
 }
 
-#' Materialise TabFM's ensemble views for a test set
+#' TabFM's ensemble views for a test set, one at a time
+#'
+#' The 32-member counterpart of [tabicl_ensemble_iter()]; see there for
+#' why the members are produced on demand rather than as a list.
 #'
 #' @param gen Result of [tabfm_ensemble_fit()].
 #' @param X_test Numeric matrix of test predictors.
-#' @return A flat list of members, each with `X`, `y`, `shift` and the
+#' @return `list(n, get)`. Each member has `X`, `y`, `shift` and the
 #'   `cat_mask` for its own column order.
 #' @keywords internal
-tabfm_ensemble_transform <- function(gen, X_test) {
+tabfm_ensemble_iter <- function(gen, X_test) {
   X_test <- transform_unique_feature_filter(as.matrix(X_test), gen$filter)
   cat_flag <- rep(FALSE, gen$n_features)
   if (length(gen$cat_features)) cat_flag[gen$cat_features + 1L] <- TRUE
+  index <- .ensemble_flat_index(gen)
+  cur_m <- NULL; cur_test <- NULL
 
-  out <- list()
-  for (m in gen$norm_methods) {
-    pp <- gen$preprocessors[[m]]
-    X_test_pp <- transform_preprocessing_pipeline(X_test, pp)
-    for (cfg in gen$ensemble[[m]]) {
-      rows <- if (is.null(cfg$rows)) seq_len(nrow(gen$X)) else cfg$rows + 1L
-      X_variant <- rbind(pp$X_transformed[rows, , drop = FALSE], X_test_pp)
-      y_train <- gen$y[rows]
-      out[[length(out) + 1L]] <- list(
-        X = X_variant[, cfg$feat + 1L, drop = FALSE],
-        y = if (gen$classification) {
-          (as.integer(y_train) + cfg$shift) %% gen$n_classes
-        } else {
-          y_train
-        },
-        shift = cfg$shift,
-        cat_mask = cat_flag[cfg$feat + 1L],
-        feat = cfg$feat,
-        norm = m
-      )
+  get <- function(i) {
+    m <- index$method[[i]]
+    if (!identical(cur_m, m)) {
+      cur_test <<- NULL
+      cur_test <<- transform_preprocessing_pipeline(X_test,
+                                                    gen$preprocessors[[m]])
+      cur_m <<- m
     }
+    cfg <- gen$ensemble[[m]][[index$j[[i]]]]
+    # Each member may subsample rows, so unlike TabICL the train block is
+    # per-member too; what is shared is the transformed *test* block.
+    rows <- if (is.null(cfg$rows)) seq_len(nrow(gen$X)) else cfg$rows + 1L
+    X_variant <- rbind(gen$preprocessors[[m]]$X_transformed[rows, , drop = FALSE],
+                       cur_test)
+    y_train <- gen$y[rows]
+    list(
+      X = X_variant[, cfg$feat + 1L, drop = FALSE],
+      y = if (gen$classification) {
+        (as.integer(y_train) + cfg$shift) %% gen$n_classes
+      } else {
+        y_train
+      },
+      shift = cfg$shift,
+      cat_mask = cat_flag[cfg$feat + 1L],
+      feat = cfg$feat,
+      norm = m
+    )
   }
-  out
+  list(n = nrow(index), get = get)
+}
+
+#' @rdname tabfm_ensemble_iter
+#' @keywords internal
+tabfm_ensemble_transform <- function(gen, X_test) {
+  it <- tabfm_ensemble_iter(gen, X_test)
+  lapply(seq_len(it$n), it$get)
 }
 
 

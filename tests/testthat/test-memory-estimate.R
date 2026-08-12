@@ -615,15 +615,45 @@ test_that("bad dimensions are refused", {
   expect_error(peak(mem_config_tabicl(), n_features = NA), "non-negative")
 })
 
-test_that("a model id with nothing downloaded says what to do about it", {
-  # Whichever ids this machine happens to be missing: the preflight must
-  # refuse rather than start a multi-gigabyte download to answer a
-  # question about whether the run would fit.
+test_that("an undownloaded model is estimated from the shipped table", {
+  # The preflight must never start a multi-gigabyte download to answer a
+  # question about whether the run would fit -- which is the whole reason
+  # `architectures.json` exists. A catalogue id not on this machine but
+  # in the table is answered from the table, and says so.
   ids <- list_models()
   missing <- ids$id[!ids$downloaded]
-  skip_if(!length(missing), "every catalogue model is downloaded here")
-  expect_error(
-    estimate_peak_memory(missing[1], 1000, 100, 10),
-    "No local artifacts"
-  )
+  known <- Filter(function(i) !is.null(.shipped_architecture(i)), missing)
+  skip_if(!length(known), "every table entry is downloaded here")
+  est <- estimate_peak_memory(known[[1]], 1000, 100, 10)
+  expect_identical(est$weights_source, "shipped architecture table")
+  expect_true(is.finite(est$total_peak_bytes))
+})
+
+
+test_that("a model nobody has and nobody catalogued says what to do", {
+  expect_error(estimate_peak_memory("no-such-model", 1000, 100, 10),
+               "No local artifacts")
+})
+
+
+test_that("a family name resolves with a task and is refused without one", {
+  # `"tabpfn"` names two checkpoints, one per task. The task was already
+  # an argument; it just was not reaching the resolver, so every family
+  # name failed as though it were unknown.
+  est <- estimate_peak_memory("tabpfn", 1000, 100, 10, task = "classification")
+  expect_true(is.finite(est$total_peak_bytes))
+  expect_identical(est$backend, "tabpfn")
+  expect_error(estimate_peak_memory("tabpfn", 1000, 100, 10), "model family")
+})
+
+
+test_that("the shipped architecture table covers what it can", {
+  tbl <- .shipped_architecture("tabpfn-v2.5-classifier")
+  expect_false(is.null(tbl))
+  # Every catalogue entry whose artifacts anyone has converted should be
+  # in there; the two that need a fresh download are the known gap.
+  ids <- list_models()$id
+  covered <- vapply(ids, function(i) !is.null(.shipped_architecture(i)),
+                    logical(1))
+  expect_setequal(ids[!covered], c("tabfm-1.0.0-regressor", "mitra-regressor"))
 })

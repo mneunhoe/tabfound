@@ -33,6 +33,16 @@
 #     This is the one place where this function's default deliberately
 #     differs from `synthpop::syn()`.
 #
+#     Read that default against what the imputation side found when it
+#     measured the same correction (`inst/simulation/README.md`,
+#     "Properness"): on a PFN a bootstrapped context is not the same model
+#     with new parameters but a worse model -- 63% distinct rows, and an
+#     in-context learner's fit *is* its context -- which cost an order of
+#     magnitude in bias there, enough that `tabfound_impute()` ships with
+#     `proper = FALSE`. Synthesis has not been measured that way and its
+#     estimators assume properness, so the default stands; it is an
+#     untested one, and the utility cost is probably comparable.
+#
 # The context *is* the real data at generation time. No differential
 # privacy claim is available and none is made; see `?tabfound_syn`.
 #
@@ -191,7 +201,7 @@
 # and never produce NA at all.
 # @keywords internal
 .syn_draw_continuous <- function(y, X_ctx, X_query, models, opts, cont_na,
-                                 block) {
+                                 block, cat_ix = integer()) {
   n_q <- nrow(X_query)
   special <- is.na(y) | (!is.na(y) & y %in% cont_na)
   label <- rep(".cont", length(y))
@@ -203,7 +213,7 @@
   # When every value is special the column is a categorical variable
   # wearing a numeric type, and the second part has nothing left to do.
   part <- if (any(special)) {
-    .syn_draw_categorical(factor(label), X_ctx, X_query, models)
+    .syn_draw_categorical(factor(label), X_ctx, X_query, models, cat_ix)
   } else {
     rep(".cont", n_q)
   }
@@ -213,7 +223,8 @@
   if (any(is_num)) {
     obs   <- !special
     y_obs <- as.numeric(y[obs])
-    raw <- mi_draw_numeric(models$get("regression"), X_ctx[obs, , drop = FALSE],
+    raw <- mi_draw_numeric(models$get("regression", cat_ix),
+                           X_ctx[obs, , drop = FALSE],
                            y_obs, X_query[is_num, , drop = FALSE],
                            draw = opts$draw, quantile_grid = opts$quantile_grid)
     bad <- !is.finite(raw)
@@ -241,11 +252,12 @@
 }
 
 # @keywords internal
-.syn_draw_categorical <- function(y, X_ctx, X_query, models) {
+.syn_draw_categorical <- function(y, X_ctx, X_query, models,
+                                  cat_ix = integer()) {
   y <- droplevels(as.factor(y))
   lv <- levels(y)
   if (length(lv) < 2L) return(rep(lv[1L], nrow(X_query)))
-  mi_draw_factor(models$get("classification"), X_ctx, y, X_query)
+  mi_draw_factor(models$get("classification", cat_ix), X_ctx, y, X_query)
 }
 
 
@@ -603,6 +615,10 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
         next
       }
 
+      # Which of *this* variable's predictors are factors. The visit
+      # sequence changes the set every step, so it is computed here rather
+      # than declared once on the model.
+      cat_ix <- unname(.categorical_predictor_indices(mdf[, preds, drop = FALSE]))
       X_ctx <- .encode_predictors(mdf[rows, preds, drop = FALSE])
       X_q   <- .encode_predictors(
         do.call(rbind, lapply(g, function(j) syn[[j]][, preds, drop = FALSE]))
@@ -610,9 +626,10 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
       block <- rep(g, each = k)
 
       out <- if (identical(kind[[v]], "categorical")) {
-        .syn_draw_categorical(y, X_ctx, X_q, models)
+        .syn_draw_categorical(y, X_ctx, X_q, models, cat_ix)
       } else {
-        .syn_draw_continuous(y, X_ctx, X_q, models, opts, cont_na[[v]], block)
+        .syn_draw_continuous(y, X_ctx, X_q, models, opts, cont_na[[v]], block,
+                             cat_ix)
       }
       for (i in seq_along(g)) {
         sel <- seq_len(k) + (i - 1L) * k

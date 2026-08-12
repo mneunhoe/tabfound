@@ -46,6 +46,7 @@ load_state_dict <- function(model, weights, keys,
   consumed_buffers <- character()
   unmatched        <- character()
   shape_mismatch   <- character()
+  dtype_mismatch   <- character()
 
   for (sd_key in keys) {
     r_path <- translate_fn(sd_key)
@@ -77,6 +78,20 @@ load_state_dict <- function(model, weights, keys,
       next
     }
 
+    # `set_data()` takes whatever dtype it is handed, so a bf16 or fp16
+    # checkpoint would land in float32 slots and run at the wrong
+    # precision with nothing said. Cast, and say so once.
+    # By name: two dtype objects for the same dtype are different R
+    # objects, so `identical()` on them is always FALSE and would report
+    # every tensor in the checkpoint as a mismatch.
+    if (!identical(as.character(tensor$dtype), as.character(target$dtype))) {
+      dtype_mismatch <- c(dtype_mismatch,
+                          sprintf("%s (%s -> %s)", sd_key,
+                                  as.character(tensor$dtype),
+                                  as.character(target$dtype)))
+      tensor <- tensor$to(dtype = target$dtype)
+    }
+
     if (kind == "param") {
       target$set_data(tensor)
       consumed_params <- c(consumed_params, r_path)
@@ -104,6 +119,18 @@ load_state_dict <- function(model, weights, keys,
       )
     }
     cli::cli_abort(c("Weight loading failed", msgs))
+  }
+
+  if (length(dtype_mismatch) > 0L) {
+    cli::cli_warn(c(
+      "{length(dtype_mismatch)} checkpoint tensor{?s} {?was/were} cast to \\
+       the module's dtype.",
+      set_names(utils::head(dtype_mismatch, 3),
+                rep("*", min(3, length(dtype_mismatch)))),
+      i = "This package runs float32 end to end. A half- or bfloat16 \\
+           checkpoint is upcast, which costs memory rather than accuracy \\
+           -- but it is not what the publisher measured."
+    ))
   }
 
   unfilled_params  <- setdiff(names(all_params),  consumed_params)

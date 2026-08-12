@@ -13,6 +13,9 @@ tabfound_impute(
   predictors = NULL,
   draw = c("auto", "sample", "grid", "quantile", "residual"),
   quantile_grid = 199L,
+  proper = FALSE,
+  where = NULL,
+  post = NULL,
   seed = NULL,
   verbose = TRUE,
   ...
@@ -46,9 +49,30 @@ distribution), else \code{"grid"} (TabICL's quantile grid), else
 \code{"quantile"} (inverse-CDF off a fine grid of predicted quantiles).
 \code{"residual"} is an approximation for point-estimate-only backends —
 a normal draw around the prediction, sized by the in-sample
-residuals.}
+residuals.
+
+\code{"quantile"} and \code{"grid"} invert a finite grid of predicted
+quantiles and clamp outside it, so the extreme levels carry an atom
+of mass and the tails are truncated. \code{"sample"} has no grid.}
 
 \item{quantile_grid}{Number of quantile levels for \code{draw = "quantile"}.}
+
+\item{proper}{Resample the context once per imputation rather than
+conditioning on the observed rows as they are. \code{FALSE} (default) is
+no resampling, \code{TRUE} a bootstrap, \code{"bayes"} a Bayesian bootstrap.
+The default is against the theory and with the measurements; read
+\emph{Properness} before changing it.}
+
+\item{where}{Optional logical matrix, same shape as \code{data}, marking
+the cells to impute. Defaults to the missing ones -- mice's \code{where}.
+Marking an \emph{observed} cell overimputes it, which is how you check a
+model against values you already have.}
+
+\item{post}{Optional named list of functions, one per column, applied
+to each variable's drawn values before they go back into the
+completed data -- the place to squeeze a draw into a plausible range
+or enforce a constraint. mice's \code{post} is a string evaluated inside
+its sampler; a function is the same idea without the reach-in.}
 
 \item{seed}{Optional integer seed.}
 
@@ -62,6 +86,9 @@ An object of class \code{tabfound_mi}:
 \item \code{imputations} — list of \code{m} completed data frames
 \item \code{data} — the input, unchanged
 \item \code{where} — logical matrix of imputed cells
+\item \code{chain_mean}, \code{chain_var} — per-sweep summaries of the imputed
+cells, \verb{variable x iteration x imputation}, which \code{\link[=as_mids]{as_mids()}}
+hands to mice so \code{plot()} has a convergence trace to draw
 \item \code{method}, \code{m}, \code{maxit}, \code{predictors}, \code{seed}, \code{call}
 }
 }
@@ -81,6 +108,43 @@ package: factors, characters and logicals go to the classifier,
 numerics to the regressor. Numeric 0/1 columns with missing values are
 the one exception — they take the classifier path and are mapped back
 to 0/1, because a continuous draw is not a valid value of a dummy.
+}
+\section{Properness}{
+
+A PFN draws each query row independently given a fixed context, so \code{m}
+chains that condition on the same observed rows differ only in the
+noise of the draw. That is an \emph{improper} imputer in Rubin's sense: the
+between-imputation variance carries no parameter uncertainty, and
+pooled standard errors run small. \code{proper = TRUE} applies the usual
+correction -- resample the observed rows once per imputation, the
+nonparametric stand-in for drawing new parameters, which is what
+\code{\link[=tabfound_syn]{tabfound_syn()}} does by default and what mice's \code{norm.boot} does.
+
+It is \strong{off} by default here, which is not what the theory says, and
+the reason is measured rather than argued. On the MAR simulation in
+\verb{inst/simulation/} (200 replications, \code{n = 400}, ~42\% missing), the
+correction behaves for a correctly specified parametric imputer
+exactly as advertised: coverage on the fully observed covariate moves
+from 0.910 to 0.950, intervals widen 11\%, bias does not move. Applied
+to TabPFN it moves coverage the same way and costs an order of
+magnitude in bias -- −0.008 to −0.062 on the coefficient of interest,
+against a complete-case bias of −0.111 -- while widening intervals by
+up to 92\%.
+
+The reason is that a bootstrap of the context is not the same model
+with different parameters. It is a \emph{worse model}: only 63\% of its rows
+are distinct (50\% under \code{proper = "bayes"}), and for a learner whose
+entire fit is its context that is a third of the training data thrown
+away, with ties the network never saw during pre-training. The draws
+come back no wider but less informative -- correlation with the values
+that were deleted drops -- which attenuates every coefficient. Coverage
+improves because the intervals grow faster than the error does.
+
+So: leave it off to estimate, turn it on if you need nominal coverage
+more than you need the point estimate, and read
+\code{inst/simulation/README.md} before deciding. Whether properness can be
+had for an in-context learner without degrading the context is an open
+question -- every resampling scheme duplicates rows.
 
 Reproducibility: pass \code{seed}, or call \code{set.seed()} first. The backends
 sample in torch's RNG, which \code{set.seed()} does not reach, so each draw
@@ -90,6 +154,7 @@ This is a \emph{use} of the fitted models, not a port of anything. Unlike
 the rest of the package it has no reference implementation to be
 verified against, and it is not covered by the parity harness.
 }
+
 \examples{
 \dontrun{
 mods <- tabfound_models(classifier = "path/to/tabpfn-v2.5-clf",

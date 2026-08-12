@@ -19,7 +19,8 @@ apply_ensemble_predict_classifier(
   kv_caches = NULL,
   save_peak_memory_factor = NULL,
   row_chunk_size = NA_integer_,
-  col_chunk_size = NA_integer_
+  col_chunk_size = NA_integer_,
+  pipelines = NULL
 )
 }
 \arguments{

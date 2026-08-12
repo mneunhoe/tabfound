@@ -46,6 +46,68 @@ rope <- torch::nn_module(
     }
     self$interleaved <- isTRUE(interleaved)
     self$seq_axis <- seq_axis
+    # One entry, keyed on the sequence length: consecutive calls into a
+    # stack rotate the same `T`, and rebuilding the `(T, Dh)` cos/sin
+    # pair per attention per layer per member per chunk is the same
+    # arithmetic every time. Reference LLaMA implementations cache the
+    # same way.
+    #
+    # It caches a *learnable* table too, which is only sound because this
+    # package does not train: the network is built, loaded, put in
+    # `eval()` and never updated, so `freqs` is frozen for the object's
+    # lifetime. A fine-tuning path would have to drop this cache -- and
+    # would have a great deal else to change first.
+    self$.angle_cache <- new.env(parent = emptyenv())
+  },
+
+  # The channel-pair index vectors depend on the head dimension alone,
+  # which cannot change between calls, so they are built on first use and
+  # kept.
+  .pair_indices = function(dh, dev) {
+    key <- paste0("idx-", dh, "-", as.character(dev))
+    hit <- self$.angle_cache[[key]]
+    if (!is.null(hit)) return(hit)
+    idx <- if (self$interleaved) {
+      list(torch::torch_arange(1L, dh - 1L, 2L, dtype = torch::torch_long(),
+                               device = dev),
+           torch::torch_arange(2L, dh, 2L, dtype = torch::torch_long(),
+                               device = dev))
+    } else {
+      half <- as.integer(dh %/% 2L)
+      list(torch::torch_arange(1L, half, dtype = torch::torch_long(),
+                               device = dev),
+           torch::torch_arange(half + 1L, dh, dtype = torch::torch_long(),
+                               device = dev))
+    }
+    assign(key, idx, envir = self$.angle_cache)
+    idx
+  },
+
+  # The (T, Dh) cos/sin tables, for this sequence length on this device.
+  .angles = function(t, dev) {
+    key <- paste0("ang-", t, "-", as.character(dev))
+    hit <- self$.angle_cache[[key]]
+    if (!is.null(hit)) return(hit)
+    pos <- torch::torch_arange(0L, t - 1L, dtype = torch::torch_float(),
+                               device = dev)
+    f <- torch::torch_outer(pos, self$freqs$to(dtype = torch::torch_float()))
+    ang <- if (self$interleaved) {
+      # Each frequency is duplicated into its adjacent pair, so channels
+      # (2k, 2k+1) share an angle.
+      list(cos = torch::torch_repeat_interleave(f$cos(), 2L, dim = -1L),
+           sin = torch::torch_repeat_interleave(f$sin(), 2L, dim = -1L))
+    } else {
+      # The frequency table is concatenated with itself, so channel i and
+      # channel i + d/2 share an angle.
+      list(cos = torch::torch_cat(list(f$cos(), f$cos()), dim = -1L),
+           sin = torch::torch_cat(list(f$sin(), f$sin()), dim = -1L))
+    }
+    # One length at a time: a stack that grows T would otherwise keep
+    # every table it ever saw.
+    rm(list = grep("^ang-", ls(self$.angle_cache), value = TRUE),
+       envir = self$.angle_cache)
+    assign(key, ang, envir = self$.angle_cache)
+    ang
   },
 
   forward = function(x) {
@@ -55,35 +117,16 @@ rope <- torch::nn_module(
     dh <- x$size(nd)
     dev <- x$device
 
-    pos <- torch::torch_arange(0L, t - 1L, dtype = torch::torch_float(),
-                               device = dev)
-    f <- torch::torch_outer(pos, self$freqs$to(dtype = torch::torch_float()))
+    ang <- self$.angles(t, dev)
+    cos <- ang$cos; sin <- ang$sin
 
-    if (self$interleaved) {
-      # Each frequency is duplicated into its adjacent pair, so channels
-      # (2k, 2k+1) share an angle.
-      cos <- torch::torch_repeat_interleave(f$cos(), 2L, dim = -1L)
-      sin <- torch::torch_repeat_interleave(f$sin(), 2L, dim = -1L)
-      idx_even <- torch::torch_arange(1L, dh - 1L, 2L,
-                                      dtype = torch::torch_long(), device = dev)
-      idx_odd  <- torch::torch_arange(2L, dh, 2L,
-                                      dtype = torch::torch_long(), device = dev)
-      x1 <- torch::torch_index_select(x, dim = -1L, index = idx_even)
-      x2 <- torch::torch_index_select(x, dim = -1L, index = idx_odd)
-      rot <- torch::torch_stack(list(-x2, x1), dim = -1L)$reshape(x$size())
+    idx <- self$.pair_indices(dh, dev)
+    x1 <- torch::torch_index_select(x, dim = -1L, index = idx[[1]])
+    x2 <- torch::torch_index_select(x, dim = -1L, index = idx[[2]])
+    rot <- if (self$interleaved) {
+      torch::torch_stack(list(-x2, x1), dim = -1L)$reshape(x$size())
     } else {
-      # The frequency table is concatenated with itself, so channel i and
-      # channel i + d/2 share an angle.
-      cos <- torch::torch_cat(list(f$cos(), f$cos()), dim = -1L)
-      sin <- torch::torch_cat(list(f$sin(), f$sin()), dim = -1L)
-      half <- as.integer(dh %/% 2L)
-      idx1 <- torch::torch_arange(1L, half, dtype = torch::torch_long(),
-                                  device = dev)
-      idx2 <- torch::torch_arange(half + 1L, dh, dtype = torch::torch_long(),
-                                  device = dev)
-      x1 <- torch::torch_index_select(x, dim = -1L, index = idx1)
-      x2 <- torch::torch_index_select(x, dim = -1L, index = idx2)
-      rot <- torch::torch_cat(list(-x2, x1), dim = -1L)
+      torch::torch_cat(list(-x2, x1), dim = -1L)
     }
 
     cos <- cos$to(dtype = x$dtype)

@@ -53,7 +53,20 @@
     total <- .system_memory_total()
     assign("total", total, envir = .mem_cache)
   }
+  # Availability moves, so it cannot be cached for the session -- but on
+  # macOS reading it means shelling out to `vm_stat`, and a chained-
+  # equations loop asks twice per univariate fit. A short time-to-live
+  # keeps the number honest at a fraction of the calls; the guard's
+  # thresholds are order-of-magnitude judgements, not knife edges.
+  ttl <- getOption("tabfound.memory_probe_ttl", 2)
+  now <- as.numeric(Sys.time())
+  hit <- .mem_cache$avail
+  if (!is.null(hit) && is.finite(ttl) && (now - hit$at) < ttl) {
+    return(list(total = total, available = hit$bytes, source = hit$source))
+  }
   av <- .system_memory_available()
+  assign("avail", list(bytes = av$bytes, source = av$source, at = now),
+         envir = .mem_cache)
   list(total = total, available = av$bytes, source = av$source)
 }
 
@@ -234,7 +247,8 @@
 # resolved as far as they can be and the shortfall is recorded rather
 # than hidden.
 # @keywords internal
-.resolve_memory_target <- function(model, backend = NULL, device = NULL) {
+.resolve_memory_target <- function(model, backend = NULL, device = NULL,
+                                   task = NULL) {
   if (inherits(model, "tabfound_model")) {
     return(list(
       backend = get_backend(model$backend),
@@ -268,14 +282,14 @@
     ))
   }
 
-  dir <- .local_artifact_dir(model)
+  dir <- .local_artifact_dir(model, task)
   if (is.null(dir)) {
     # Nothing downloaded. The dimensions are still knowable -- they are a
     # property of the published architecture, not of the copy on this
     # disk -- so the shipped table answers it, and the whole point of a
     # preflight survives: you can ask whether a 6.5 GB download is worth
     # making before you make it.
-    known <- .shipped_architecture(model)
+    known <- .shipped_architecture(model, task)
     if (!is.null(known)) {
       bk <- if (!is.null(backend)) get_backend(backend)
             else get_backend(known$backend)
@@ -284,6 +298,18 @@
         weights = known$weights_bytes,
         weights_source = "shipped architecture table",
         opts = list(), task = known$task %||% bk$task_of(known$config)
+      ))
+    }
+    # A family name that names two catalogue entries is not missing, it
+    # is ambiguous, and saying so beats sending the caller to a download
+    # command that would ask them the same question.
+    fam <- .catalog_family_matches(model)
+    if (is.null(task) && length(fam) > 1L) {
+      cli::cli_abort(c(
+        "{.val {model}} is a model family, not a single checkpoint.",
+        i = "It covers {.val {fam}}.",
+        i = "Pass {.arg task} ({.val classification} or {.val regression}), \\
+             or name the checkpoint."
       ))
     }
     cli::cli_abort(c(
@@ -314,7 +340,7 @@
 # preflight that downloads 6.5 GB to tell you the run will not fit has
 # missed the point.
 # @keywords internal
-.local_artifact_dir <- function(model) {
+.local_artifact_dir <- function(model, task = NULL) {
   if (dir.exists(model)) {
     if (file.exists(file.path(model, "config.json"))) {
       return(list(path = model, subfolder = NULL))
@@ -338,7 +364,13 @@
     }
     return(list(path = model, subfolder = NULL))
   }
-  id <- tryCatch(.catalog_id(model), error = function(e) NULL)
+  # As in `.shipped_architecture()`: a family name needs the task, and
+  # resolves without one only when it covers a single checkpoint.
+  id <- tryCatch(.catalog_id(model, task), error = function(e) NULL)
+  if (is.null(id) && is.null(task)) {
+    hits <- .catalog_family_matches(model)
+    if (length(hits) == 1L) id <- hits
+  }
   if (is.null(id) || !isTRUE(.model_is_downloaded(id))) return(NULL)
   list(path = .model_dir(id), subfolder = .model_catalog()[[id]]$subfolder)
 }
@@ -350,7 +382,7 @@
 .arch_cache <- new.env(parent = emptyenv())
 
 # @keywords internal
-.shipped_architecture <- function(model) {
+.shipped_architecture <- function(model, task = NULL) {
   if (is.null(.arch_cache$table)) {
     path <- tabfound_file("memory", "architectures.json")
     tbl <- if (nzchar(path)) {
@@ -359,16 +391,50 @@
     } else list()
     assign("table", tbl, envir = .arch_cache)
   }
-  id <- tryCatch(.catalog_id(model), error = function(e) NULL) %||% model
+  # A family name (`"tabpfn"`, `"tabfm-1.0.0"`) only resolves once the
+  # task is known, because a family ships one checkpoint per task. The
+  # task was already an argument of `estimate_peak_memory()`; it just was
+  # not reaching here, which is why every family name failed.
+  id <- tryCatch(.catalog_id(model, task), error = function(e) NULL) %||%
+    if (is.null(task)) {
+      hits <- .catalog_family_matches(model)
+      if (length(hits) == 1L) hits else model
+    } else model
   entry <- .arch_cache$table[[id]]
   if (is.null(entry)) return(NULL)
   entry
 }
 
+# Every catalogue id a family name covers. One means the name is
+# unambiguous even without a task; two means the caller has to choose.
+# @keywords internal
+.catalog_family_matches <- function(model) {
+  if (!is.character(model) || length(model) != 1L) return(character())
+  ids <- c(
+    tryCatch(.catalog_id(model, "classification"), error = function(e) NULL),
+    tryCatch(.catalog_id(model, "regression"), error = function(e) NULL)
+  )
+  unique(Filter(Negate(is.null), ids))
+}
+
 # Exact, from the tensors themselves.
+#
+# `$parameters` materialises the whole module tree as an R list --
+# thousands of entries for these networks -- and the answer cannot change
+# for a given network, so it is memoised against the module itself. That
+# matters in a chained-equations loop, which asks `m * maxit * p` times.
+# @keywords internal
+.weight_bytes_cache <- new.env(parent = emptyenv())
+
 # @keywords internal
 .model_weight_bytes <- function(object) {
-  params <- tryCatch(object$model$parameters, error = function(e) NULL)
+  net <- object$model
+  if (is.null(net)) return(NA_real_)
+  key <- tryCatch(format(net$.__enclos_env__), error = function(e) NULL)
+  if (!is.null(key) && !is.null(.weight_bytes_cache[[key]])) {
+    return(.weight_bytes_cache[[key]])
+  }
+  params <- tryCatch(net$parameters, error = function(e) NULL)
   # No parameters at all means the tensors are gone (a `saveRDS()` round
   # trip) or never existed. Zero would be a lie; NA sends the caller on
   # to the next source.
@@ -377,7 +443,11 @@
     sum(vapply(params, function(p) prod(as.numeric(p$size())), numeric(1))) * 4,
     error = function(e) NA_real_
   )
-  if (!isTRUE(is.finite(got))) NA_real_ else got
+  got <- if (!isTRUE(is.finite(got))) NA_real_ else got
+  # A dangling-pointer network gives NA every time and is not worth
+  # remembering; a real answer is.
+  if (!is.null(key) && !is.na(got)) assign(key, got, envir = .weight_bytes_cache)
+  got
 }
 
 # Exact, from the config, with no weights on disk at all. The converted
@@ -763,7 +833,8 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                     must be non-negative numbers.")
   }
 
-  tgt  <- .resolve_memory_target(model, backend = backend, device = device)
+  tgt  <- .resolve_memory_target(model, backend = backend, device = device,
+                                 task = task)
   task <- task %||% tgt$task %||% "classification"
   opts <- .resolve_memory_opts(tgt$backend, task, tgt$opts, list(...))
   dev  <- tgt$device %||% "cpu"
@@ -1294,6 +1365,21 @@ reset_memory_guard <- function() {
   mode <- .memory_guard_mode()
   if (identical(mode, "off")) return(invisible(NULL))
 
+  # The estimate is a function of these inputs, so a situation already
+  # judged is a situation that need not be judged again -- and the
+  # judging is not free: it walks the module tree and probes the system.
+  # A chained-equations loop presents the same handful of situations
+  # thousands of times over.
+  #
+  # Only under `"warn"`, which is the mode that is about *saying*
+  # something once. `"error"` is a live gate and re-checks every call,
+  # because what it guards against is the memory available now.
+  in_key <- paste(object$backend, object$device, stage,
+                  n_context, n_query, n_features, sep = "/")
+  if (identical(mode, "warn") && !is.null(.guard_seen[[in_key]])) {
+    return(invisible(.guard_seen[[in_key]]))
+  }
+
   est <- tryCatch(
     estimate_peak_memory(object, n_context = n_context, n_query = n_query,
                          n_features = n_features),
@@ -1301,6 +1387,12 @@ reset_memory_guard <- function() {
     warning = function(w) NULL
   )
   if (is.null(est) || est$verdict %in% c("ok", "unknown")) {
+    # Remembering the quiet verdicts too: those are the ones an MI loop
+    # meets over and over, and re-deriving "ok" costs the same as
+    # deriving it.
+    if (identical(mode, "warn")) {
+      assign(in_key, est %||% NA, envir = .guard_seen)
+    }
     return(invisible(est))
   }
 
@@ -1313,10 +1405,7 @@ reset_memory_guard <- function() {
   # One warning per distinct situation. A chained-equations loop calls
   # `fit()` once per variable per iteration, and two hundred copies of
   # the same paragraph would bury the one thing worth reading.
-  key <- paste(est$backend, est$verdict, stage,
-               paste(est$dims, collapse = "x"), sep = "/")
-  if (!is.null(.guard_seen[[key]])) return(invisible(est))
-  assign(key, TRUE, envir = .guard_seen)
+  assign(in_key, est, envir = .guard_seen)
 
   cli::cli_warn(c(msg, i = "This is said once per situation; \\
                             {.code options(tabfound.memory_guard = \"off\")} \\

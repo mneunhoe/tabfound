@@ -243,3 +243,64 @@ test_that("a Mitra layer matches for both support and query", {
   expect_gt(max(abs(a[1, 1, , ] - b[1, 1, , ])), 1e-3)
   expect_lt(max(abs(a[1, -1, , ] - b[1, -1, , ])), 1e-5)
 })
+
+
+# --- SDPA wrapper and its fallback (C6) -----------------------------------
+
+test_that("the pure-torch SDPA fallback agrees with the fused kernel", {
+  skip_if_not_installed("torch")
+  set.seed(4)
+  q <- torch::torch_randn(c(2, 3, 5, 8))
+  k <- torch::torch_randn(c(2, 3, 7, 8))
+  v <- torch::torch_randn(c(2, 3, 7, 8))
+
+  fused <- withr::with_options(list(tabfound.sdpa = "torch"), sdpa(q, k, v))
+  plain <- withr::with_options(list(tabfound.sdpa = "r"), sdpa(q, k, v))
+  expect_equal(as.array(fused), as.array(plain), tolerance = 1e-6)
+
+  # An additive mask, as the feature-group attentions use.
+  m <- torch::torch_zeros(c(5, 7))
+  m[, 6:7] <- -Inf
+  fused_m <- withr::with_options(list(tabfound.sdpa = "torch"),
+                                 sdpa(q, k, v, attn_mask = m))
+  plain_m <- withr::with_options(list(tabfound.sdpa = "r"),
+                                 sdpa(q, k, v, attn_mask = m))
+  expect_equal(as.array(fused_m), as.array(plain_m), tolerance = 1e-6)
+  # The masked positions really were excluded.
+  expect_false(isTRUE(all.equal(as.array(fused), as.array(fused_m))))
+
+  # A boolean mask keeps the TRUE positions.
+  b <- torch::torch_ones(c(5, 7), dtype = torch::torch_bool())
+  b[, 1:2] <- FALSE
+  expect_equal(
+    as.array(withr::with_options(list(tabfound.sdpa = "torch"),
+                                 sdpa(q, k, v, attn_mask = b))),
+    as.array(withr::with_options(list(tabfound.sdpa = "r"),
+                                 sdpa(q, k, v, attn_mask = b))),
+    tolerance = 1e-6
+  )
+
+  # An explicit scale, as TabICL's scalable softmax passes.
+  expect_equal(
+    as.array(withr::with_options(list(tabfound.sdpa = "torch"),
+                                 sdpa(q, k, v, scale = 1))),
+    as.array(withr::with_options(list(tabfound.sdpa = "r"),
+                                 sdpa(q, k, v, scale = 1))),
+    tolerance = 1e-6
+  )
+})
+
+
+test_that("a whole attention block gives the same answer either way", {
+  skip_if_not_installed("torch")
+  torch::torch_manual_seed(11)
+  att <- mha_fused_qkv(embedding_dim = 12L, n_heads = 3L)
+  x <- torch::torch_randn(c(2, 6, 12))
+  a <- withr::with_options(list(tabfound.sdpa = "torch"),
+                           torch::with_no_grad(att(x)))
+  b <- withr::with_options(list(tabfound.sdpa = "r"),
+                           torch::with_no_grad(att(x)))
+  # The whole point of reaching for the fused kernel is float32 rounding,
+  # so this is an agreement test, not an identity one.
+  expect_equal(as.array(a), as.array(b), tolerance = 1e-5)
+})

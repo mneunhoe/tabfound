@@ -64,9 +64,17 @@ character or logical outcome and regression from a numeric one.}
 \item{device}{One of \code{"cpu"}, \code{"cuda"}, \code{"mps"}.}
 
 \item{na_action}{What to do about missing predictors. \code{"auto"}
-(default) passes them through for backends that handle them
-(TabPFN, TabFM) and imputes for those that do not (TabICL).
-\code{"pass"}, \code{"impute"} and \code{"fail"} force the choice.}
+(default) passes them through whenever the backend deals with them
+itself -- which every backend in the package currently does, by one
+of two different routes. TabPFN encodes missingness in the network,
+as an is-missing channel beside the value, so the model conditions
+on it; TabICL, Mitra and TabFM run their reference wrapper's mean
+imputer first, so the model never learns a value was missing.
+\code{list_backends()} names which. \code{"impute"} puts this package's own
+column-mean imputer in front instead (modal code for factors),
+\code{"fail"} refuses, and \code{"pass"} forces the data through as it is --
+which warns, and produces \code{NaN} predictions, on a backend that
+handles neither.}
 
 \item{y}{When \code{x} is a data frame or matrix, the outcome vector.}
 }

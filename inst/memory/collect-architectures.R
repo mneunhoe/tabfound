@@ -3,7 +3,16 @@
 # Build `architectures.json` from whatever checkpoints are on this
 # machine.
 #
-#   Rscript inst/memory/collect-architectures.R
+#   Rscript inst/memory/collect-architectures.R [<id>=<dir> ...]
+#
+# With no arguments it collects every catalogue entry already in the
+# local store. A catalogue id can also be pointed at a directory
+# anywhere on disk -- converted checkpoints often live outside the store,
+# and an entry that can only be filled from someone's working copy is
+# still better shipped than missing:
+#
+#   Rscript inst/memory/collect-architectures.R \\
+#     tabicl-v2-regressor=~/Desktop/tabicl-ckpts/tabicl-v2-reg
 #
 # `estimate_peak_memory()` needs a model's *dimensions*, never its
 # weights. Those dimensions live in `config.json`, which lives inside the
@@ -35,18 +44,44 @@ HERE <- local({
 })
 out_path <- file.path(HERE, "architectures.json")
 
+# `$models`, not the whole document: the file has `collected_on` and
+# `note` beside it, and reading the lot back in as the model list nests
+# the previous run inside this one -- which the reader cannot see past,
+# so entries silently disappear a level down.
 existing <- if (file.exists(out_path)) {
-  fromJSON(out_path, simplifyVector = FALSE)
+  fromJSON(out_path, simplifyVector = FALSE)$models %||% list()
 } else list()
 
 catalog <- tabfound:::.model_catalog()
 added <- character()
 
-for (id in names(catalog)) {
-  if (!isTRUE(tabfound:::.model_is_downloaded(id))) next
+# `id=dir` overrides, for checkpoints outside the local store.
+overrides <- local({
+  args <- grep("=", commandArgs(TRUE), value = TRUE)
+  if (!length(args)) return(list())
+  ids <- sub("=.*$", "", args)
+  dirs <- path.expand(sub("^[^=]*=", "", args))
+  unknown <- setdiff(ids, names(catalog))
+  if (length(unknown)) {
+    stop("not catalogue ids: ", paste(unknown, collapse = ", "), call. = FALSE)
+  }
+  stats::setNames(as.list(dirs), ids)
+})
+
+for (id in union(names(catalog), names(overrides))) {
   entry <- catalog[[id]]
-  dir <- tabfound:::.model_dir(id)
-  if (!is.null(entry$subfolder)) dir <- file.path(dir, entry$subfolder)
+  dir <- overrides[[id]]
+  if (is.null(dir)) {
+    if (!isTRUE(tabfound:::.model_is_downloaded(id))) next
+    dir <- tabfound:::.model_dir(id)
+    if (!is.null(entry$subfolder)) dir <- file.path(dir, entry$subfolder)
+  } else if (!file.exists(file.path(dir, "config.json")) &&
+             !is.null(entry$subfolder)) {
+    dir <- file.path(dir, entry$subfolder)
+  }
+  if (!file.exists(file.path(dir, "config.json"))) {
+    stop("no config.json under ", dir, call. = FALSE)
+  }
 
   config <- tabfound:::read_model_config(file.path(dir, "config.json"))
   weights <- as.numeric(file.size(file.path(dir, "model.safetensors")))

@@ -349,3 +349,24 @@ test_that("asking a backend for a path it lacks is refused", {
   # v2.6: both allowed.
   expect_true(tabfound:::.require_kv_cache_support(v26, TRUE, 8L))
 })
+
+
+test_that("a checkpoint in another dtype is cast, loudly", {
+  skip_if_not_installed("torch")
+  net <- torch::nn_linear(2, 2)
+  keys <- c("weight", "bias")
+  w32 <- list(weight = torch::torch_randn(c(2, 2)), bias = torch::torch_randn(2))
+
+  # Matching dtypes say nothing: two dtype objects for the same dtype are
+  # different R objects, so a naive comparison would report every tensor.
+  expect_silent(suppressMessages(load_state_dict(net, w32, keys)))
+
+  # A half-precision checkpoint would otherwise be `set_data`'d into
+  # float32 slots and run at a precision nobody chose.
+  w16 <- lapply(w32, function(t) t$to(dtype = torch::torch_half()))
+  expect_warning(suppressMessages(load_state_dict(net, w16, keys)), "cast to")
+  expect_identical(as.character(net$parameters$weight$dtype), "Float")
+  expect_equal(as.array(net$parameters$weight),
+               as.array(w16$weight$to(dtype = torch::torch_float())),
+               tolerance = 1e-3)
+})

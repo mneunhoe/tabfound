@@ -231,3 +231,96 @@ test_that("the converter tells the two TabPFN architectures apart", {
     "Conversion failed"
   )
 })
+
+
+# --- Hub access: tokens, offline, completeness (C3) ------------------------
+
+test_that("the token bridge reads the sources hfhub does not", {
+  withr::with_envvar(
+    c(HUGGING_FACE_HUB_TOKEN = NA, HUGGINGFACE_HUB_TOKEN = NA,
+      HF_TOKEN = NA, HF_HOME = NA), {
+    expect_identical(.hf_token(), "")
+
+    # `HF_TOKEN` is what the Python docs tell you to set, and what hfhub
+    # ignores -- the reason access granted the normal way 401s from R.
+    withr::with_envvar(c(HF_TOKEN = "tok-env"), {
+      expect_identical(.hf_token(), "tok-env")
+    })
+
+    # `huggingface-cli login` writes a file, not an environment variable.
+    home <- withr::local_tempdir()
+    writeLines("tok-file", file.path(home, "token"))
+    withr::with_envvar(c(HF_HOME = home), {
+      expect_identical(.hf_token(), "tok-file")
+      # hfhub's own variables still win when both are set.
+      withr::with_envvar(c(HUGGING_FACE_HUB_TOKEN = "tok-native"), {
+        expect_identical(.hf_token(), "tok-native")
+      })
+    })
+  })
+})
+
+
+test_that("the token is exported to hfhub for one call only", {
+  withr::with_envvar(
+    c(HUGGING_FACE_HUB_TOKEN = NA, HUGGINGFACE_HUB_TOKEN = NA,
+      HF_TOKEN = "tok-env"), {
+    seen <- .with_hf_token(Sys.getenv("HUGGING_FACE_HUB_TOKEN", unset = ""))
+    expect_identical(seen, "tok-env")
+    # ... and put back, so a token resolved from a file does not leak into
+    # the rest of the session.
+    expect_identical(Sys.getenv("HUGGING_FACE_HUB_TOKEN", unset = ""), "")
+  })
+})
+
+
+test_that("offline mode is read from either the option or the environment", {
+  withr::with_envvar(c(HF_HUB_OFFLINE = NA), {
+    withr::with_options(list(tabfound.offline = NULL), expect_false(.hf_offline()))
+    withr::with_options(list(tabfound.offline = TRUE), expect_true(.hf_offline()))
+    # The option wins, so a script can override a shell that set it.
+    withr::with_envvar(c(HF_HUB_OFFLINE = "1"), {
+      expect_true(.hf_offline())
+      withr::with_options(list(tabfound.offline = FALSE), expect_false(.hf_offline()))
+    })
+    withr::with_envvar(c(HF_HUB_OFFLINE = "0"), expect_false(.hf_offline()))
+  })
+})
+
+
+test_that("offline mode refuses a cache miss instead of hanging", {
+  skip_if_not_installed("hfhub")
+  withr::with_options(list(tabfound.offline = TRUE), {
+    expect_error(
+      .hub_download("tabfound/definitely-not-a-repo", "model.safetensors"),
+      "offline mode"
+    )
+  })
+})
+
+
+test_that("an interrupted download does not count as downloaded", {
+  skip_if_not_installed("jsonlite")
+  home <- withr::local_tempdir()
+  withr::local_options(list(tabfound.home = home))
+  id <- list_models()$id[[1]]
+  d <- .model_dir(id)
+  dir.create(d, recursive = TRUE)
+  writeLines("weights", file.path(d, "model.safetensors"))
+  writeLines("{}", file.path(d, "config.json"))
+
+  # No SOURCE.json: the old name-only check, kept for stores written
+  # before sizes were recorded.
+  expect_true(.model_is_downloaded(id))
+
+  sizes <- .artifact_sizes(d)
+  expect_setequal(names(sizes), c("model.safetensors", "config.json"))
+  writeLines(jsonlite::toJSON(list(id = id, files = sizes), auto_unbox = TRUE),
+             file.path(d, "SOURCE.json"))
+  expect_true(.model_is_downloaded(id))
+
+  # Truncate the weights the way a killed download would: the file is
+  # still there, still named right, and now short.
+  writeLines("w", file.path(d, "model.safetensors"))
+  expect_false(.model_is_downloaded(id))
+})

@@ -55,10 +55,11 @@ resolve_artifacts <- function(model,
     ))
   }
 
-  require_suggested("hfhub")
+  # Cache-first, token-bridged, and honest about gated repos; see
+  # `.hub_download()`.
   list(
-    weights = hfhub::hub_download(model, rel(weights_file)),
-    config  = hfhub::hub_download(model, rel(config_file))
+    weights = .hub_download(model, rel(weights_file)),
+    config  = .hub_download(model, rel(config_file))
   )
 }
 

@@ -290,3 +290,41 @@ test_that("the forward helper only names arguments the network has", {
     "kv=TRUE,spmf=TRUE")
   expect_identical(tabpfn_forward(v26, 1, 2, 3, NULL), "kv=FALSE,spmf=FALSE")
 })
+
+
+test_that("sampling uses the ensemble rather than one unensembled pass", {
+  d <- Sys.getenv("TABFOUND_TABPFN_REG_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN_REG_DIR not configured")
+
+  set.seed(6)
+  n_tr <- 200L; n_te <- 60L; p <- 4L
+  X <- matrix(rnorm((n_tr + n_te) * p), ncol = p)
+  y <- as.numeric(X %*% rnorm(p)) + rnorm(n_tr + n_te, sd = 0.4)
+  tr <- seq_len(n_tr); te <- n_tr + seq_len(n_te)
+
+  cfg <- withr::local_tempdir()
+  generate_ensemble_configs_native(X[tr, ], y[tr], n_estimators = 4L,
+                                   head = "regressor", variant = "v2.5",
+                                   random_state = 0L, output_dir = cfg)
+  reg <- fit(tabular_regressor(d, ensemble_configs_dir = cfg), X[tr, ], y[tr])
+
+  # It used to warn and quietly drop the ensemble.
+  expect_no_warning(
+    s <- predict(reg, X[te, ], type = "sample", n_samples = 500L, seed = 1L)
+  )
+  expect_identical(dim(s), c(length(te), 500L))
+
+  # The draws and the analytic summaries now describe the same
+  # distribution, which is the point: a sample that disagreed with the
+  # quantiles printed beside it would be worse than no sample.
+  mu <- predict(reg, X[te, ], type = "mean")
+  expect_gt(cor(rowMeans(s), mu), 0.99)
+  q <- predict(reg, X[te, ], type = "quantiles", quantiles = c(0.1, 0.9))
+  emp <- t(apply(s, 1L, stats::quantile, probs = c(0.1, 0.9)))
+  expect_lt(mean(abs(emp[, 1] - q[, 1])), 0.1)
+  expect_lt(mean(abs(emp[, 2] - q[, 2])), 0.1)
+
+  # A seed still reproduces the draw.
+  expect_identical(predict(reg, X[te, ], type = "sample", n_samples = 5L, seed = 3L),
+                   predict(reg, X[te, ], type = "sample", n_samples = 5L, seed = 3L))
+})

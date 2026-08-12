@@ -283,6 +283,9 @@ syn.tabfound <- function(y, x, xp, smoothing = "", proper = FALSE,
       xp[[v]] <- factor(as.character(xp[[v]]), levels = levels(x[[v]]))
     }
   }
+  # mice-style callers hand over a data frame, so the factor columns are
+  # still factors here and can be declared rather than inferred.
+  cat_ix <- unname(.categorical_predictor_indices(x))
   X_ctx <- .encode_predictors(x)
   X_q   <- .encode_predictors(xp)
 
@@ -293,7 +296,7 @@ syn.tabfound <- function(y, x, xp, smoothing = "", proper = FALSE,
   }
 
   if (!is.numeric(y) || is.factor(y)) {
-    lab <- .syn_draw_categorical(as.factor(y), X_ctx, X_q, opts$models)
+    lab <- .syn_draw_categorical(as.factor(y), X_ctx, X_q, opts$models, cat_ix)
     res <- if (is.factor(y)) factor(lab, levels = levels(y))
            else if (is.logical(y)) lab == "TRUE"
            else lab
@@ -303,7 +306,8 @@ syn.tabfound <- function(y, x, xp, smoothing = "", proper = FALSE,
   # Never `predict()`: a posterior mean would make every synthetic record
   # a fitted value and collapse the within-conditional variance.
   res <- .syn_draw_continuous(y, X_ctx, X_q, opts$models, opts,
-                              cont_na = numeric(0), block = rep(1L, k))
+                              cont_na = numeric(0), block = rep(1L, k),
+                              cat_ix = cat_ix)
   if (is.integer(y)) res <- as.integer(round(res))
   list(res = res, fit = paste0("tabfound-", opts$draw_mode))
 }

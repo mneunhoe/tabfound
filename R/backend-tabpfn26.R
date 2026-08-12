@@ -174,7 +174,7 @@ tabpfn26_attention <- torch::nn_module(
     q <- self$to_heads(self$q_projection(x), S)
     k <- self$to_heads(self$k_projection(x), S)
     v <- self$to_heads(self$v_projection(x), S)
-    ctx <- torch:::torch_scaled_dot_product_attention(
+    ctx <- sdpa(
       query = q, key = k, value = v, dropout_p = 0
     )
     self$from_heads(ctx, S)
@@ -202,7 +202,7 @@ tabpfn26_attention <- torch::nn_module(
       n_kv <- cached_kv$key$size(3)
       k <- cached_kv$key$expand(c(B, H, n_kv, D))
       v <- cached_kv$value$expand(c(B, H, n_kv, D))
-      ctx <- torch:::torch_scaled_dot_product_attention(
+      ctx <- sdpa(
         query = q, key = k, value = v, dropout_p = 0
       )
       return(list(out = self$from_heads(ctx, S), kv = NULL))
@@ -223,7 +223,7 @@ tabpfn26_attention <- torch::nn_module(
     }
 
     if (n_kv == S) {
-      ctx <- torch:::torch_scaled_dot_product_attention(
+      ctx <- sdpa(
         query = q, key = k, value = v, dropout_p = 0
       )
     } else {
@@ -234,10 +234,10 @@ tabpfn26_attention <- torch::nn_module(
       n_train <- as.integer(single_eval_pos)
       k1 <- k[, 1, , ]$unsqueeze(2L)$expand(c(B, H, n_kv, D))
       v1 <- v[, 1, , ]$unsqueeze(2L)$expand(c(B, H, n_kv, D))
-      ctx_train <- torch:::torch_scaled_dot_product_attention(
+      ctx_train <- sdpa(
         query = q[, , 1:n_train, ], key = k, value = v, dropout_p = 0
       )
-      ctx_test <- torch:::torch_scaled_dot_product_attention(
+      ctx_test <- sdpa(
         query = q[, , (n_train + 1L):S, ], key = k1, value = v1, dropout_p = 0
       )
       ctx <- torch::torch_cat(list(ctx_train, ctx_test), dim = 3L)
@@ -1052,6 +1052,7 @@ register_tabpfn26_backend <- function() {
     peak_terms    = tabpfn_peak_terms,
     # NaN and Inf are first-class inputs: imputed with the train mean and
     # flagged in a dedicated indicator channel.
+    kv_cache_capable = TRUE,
     handles_missing = TRUE,
     description   = "TabPFN v2.6 (Prior-Labs)",
     parity        = "tabpfn 8.2.0 (PyPI)"

@@ -149,6 +149,18 @@ predictors impute first, exactly as their Python wrappers do, so neither
 failure mode is reachable through the API. All four therefore take `NA`
 directly and `na_action = "auto"` passes it through to them.
 
+Which route a backend takes is recorded, and is worth knowing rather
+than glossing: `list_backends()$missing` reads `"encoded"` for TabPFN,
+`"imputed"` for TabICL and Mitra, `"encoded+imputed"` for TabFM. The two
+are not the same guarantee. A network that encodes missingness
+*conditions on* it — the fact that a value was absent is available to
+the model, and to anything you ask the model about it. A wrapper that
+mean-fills has replaced that fact with a column mean before the network
+is reached. For prediction the distinction rarely matters; for
+imputation and synthesis, where the missingness pattern is the object of
+study, it is most of the question, and it is one reason the MI
+simulation finds TabPFN and TabICL so far apart.
+
 TabICL's and TabFM's imputation is `SimpleImputer(strategy = "mean")`,
 fitted on the training rows: new data is filled with the *training*
 column means, and a column that is entirely missing is dropped rather
@@ -202,13 +214,21 @@ library(mice)
 summary(pool(with(imp, lm(Ozone ~ Wind + Temp))))   # with() returns a mira
 
 mids <- as_mids(imp)          # the full mice toolchain: densityplot(), complete(), ...
+plot(mids)                    # convergence traces, recorded per sweep
 mice::complete(imp, "long")   # registered on mice's own generic
 
 amp <- as_amelia(imp)         # Amelia::mi.meld() and friends
 ```
 
+`where` and `post` are arguments here too — `where` picks the cells to
+draw (marking an *observed* cell overimputes it, which is how you check
+the model against values you already have), and `post` takes a named list
+of functions applied to each variable's draws, the place to squeeze a
+value into a plausible range. mice's `post` is a string evaluated inside
+its sampler; a function does the same job without reaching into the loop.
+
 Or let mice drive and call in here per variable, which buys mice's
-`where`, `blocks`, `post` and convergence plots:
+`blocks`, `ignore` and its own diagnostics:
 
 ```r
 options(tabfound.models = mods)
@@ -241,12 +261,28 @@ coefficient it removes essentially none of the bias. Use the TabPFN
 backend for imputation; the numbers and the open questions are in
 [`inst/simulation/README.md`](inst/simulation/README.md).
 
-Between-imputation variability comes from the posterior predictive; there
-is no bootstrap of the context rows, and no equivalent of Amelia's
-`bounds` — draws come off the predictive distribution tails included.
-Backends with a point-estimate-only regression head (TabFM, Mitra) have
-nothing to draw from and are refused unless you ask for
-`draw = "residual"`.
+**Properness.** Between-imputation variability comes from the posterior
+predictive. A PFN draws each query row independently given a fixed
+context, so *m* chains conditioned on the same observed rows differ only
+in the noise of the draw: parameter uncertainty is missing, which is the
+defect that makes an imputer improper under Rubin's rules.
+`proper = TRUE` applies the usual correction — resample the context once
+per imputation — and it is **off by default**, against the theory and
+with the measurements. On the simulation above it moves coverage to
+nominal (0.900 → 0.955 on the fully observed covariate) and costs an
+order of magnitude in bias (−0.008 → −0.062, against a complete-case
+−0.111), widening intervals by up to 92%. The same correction is free for
+a correctly specified parametric imputer on the same data. A bootstrap
+context is not the same model with different parameters — only 63% of its
+rows are distinct, and for a learner whose entire fit *is* its context
+that is a third of the training data thrown away. Turn it on if you need
+nominal coverage more than the point estimate; the numbers are in
+[`inst/simulation/README.md`](inst/simulation/README.md).
+
+There is no equivalent of Amelia's `bounds` — draws come off the
+predictive distribution, tails included. Backends with a
+point-estimate-only regression head (TabFM, Mitra) have nothing to draw
+from and are refused unless you ask for `draw = "residual"`.
 
 Full walk-through: `vignette("multiple-imputation", "tabfound")`.
 
@@ -314,6 +350,16 @@ which is exactly synthpop's definition, and is the default here. This is
 the one place `tabfound_syn()` deliberately disagrees with
 `synthpop::syn()`.
 
+It is also, on current evidence, the riskier default of the two. The MI
+side ran the same correction through a coverage simulation and found it
+costs an order of magnitude in bias on these models, because a bootstrap
+context keeps only 63% distinct rows and an in-context learner's fit *is*
+its context — see the MI section above. Synthesis has not been measured
+that way, and its loss function is different (synthpop's estimators
+*assume* properness), so the default stands; but expect the utility cost
+to be of the same order, and compare against `proper = FALSE` before
+concluding anything about fidelity.
+
 **Scope.** The context *is* the real data at generation time. This is a
 fully conditional synthesiser, not a disclosure-control method, and no
 differential-privacy claim is available from it. `NA` is treated as a
@@ -340,11 +386,58 @@ data.
 `saveRDS()` does **not** work: a torch module survives the round trip
 structurally but its tensors come back as dangling pointers, and the
 failure only shows up later, in use. [`tabfound_save()`] /
-[`tabfound_load()`] are the supported path. They write only the fitted
-context plus a reference to the model artifacts — a few kilobytes — and
-re-resolve the weights on load, since fitting these models stores context
-rows rather than learning parameters. Using a `saveRDS`-ed object raises
-an error naming the fix rather than failing inside torch.
+[`tabfound_load()`] are the supported path, for both object types: the
+engine-level `tabfound_model` and the `tabfound_fit` that `tabfound()`
+returns, whose hardhat blueprint travels with it so a reloaded fit
+re-applies the same encoding and factor levels to new data. They write
+only the fitted context plus a reference to the model artifacts — a few
+kilobytes — and re-resolve the weights on load, since fitting these
+models stores context rows rather than learning parameters. Using a
+`saveRDS`-ed object raises an error naming the fix rather than failing
+inside torch.
+
+### Fit once, query forever
+
+Conditioning the network on the training rows is the expensive half of a
+prediction, and it does not depend on what you are predicting.
+`kv_cache = TRUE` already does it once per `predict()` instead of once
+per chunk; `tabfound_cache()` does it once and *keeps* the result, on the
+object and through a save:
+
+```r
+clf <- fit(tabular_classifier(dir, kv_cache = TRUE), X_train, y_train)
+clf <- tabfound_cache(clf)          # condition now, once
+tabfound_save(clf, "clf-bundle")    # a directory, not a file
+```
+
+```r
+clf <- tabfound_load("clf-bundle")  # next session, next machine
+predict(clf, X_new, type = "prob")  # starts from the conditioned state
+```
+
+Measured on TabPFN v2.5, 800 context rows × 6 features, 512 query rows:
+0.43 s per uncached call against 0.17 s to build the cache plus 0.13 s
+per call — and the reload costs 0.25 s, so it pays for itself on the
+first call of the second session. On TabICL (1,000 × 6, 2,000 query
+rows) it is 4.9 s against 2.3 s, a 2.1× speedup that persists.
+Predictions are **bit-identical** across the session boundary.
+
+What travels is a bundle directory: `state.rds` beside
+`cache.safetensors`. The RDS holds the skeleton of the cache — its list
+structure, classes and integers, all ordinary R data — and the tensors go
+to safetensors under dotted paths (`kv.3.key`), which is precisely the
+thing `saveRDS()` cannot carry. A model with no cache is still a single
+file, as before.
+
+Two things to know. The cache is **large** — it is the conditioned state
+of every ensemble member, 32 MB for that TabPFN fit and 409 MB for the
+TabICL one — so this trades disk for latency, deliberately. And it is a
+function of the training rows: it is fingerprinted when built and checked
+when used, so a cache that has outlived its context raises an error
+naming both shapes rather than quietly answering from the wrong data.
+
+`has_cache()` says whether an object carries one;
+`tabfound_cache(object, build = FALSE)` drops it.
 
 ## Parity
 
@@ -638,6 +731,26 @@ Weights live in `tabfound_home()` — `tools::R_user_dir("tabfound",
 `TABFOUND_HOME`. Deliberately *not* inside the installed package: writing
 there breaks read-only and shared libraries, and CRAN forbids it.
 
+A finished download records its file sizes in `SOURCE.json`, so an
+interrupted one is detected and retried rather than passing the
+"is it there?" check forever on a truncated file.
+
+**Gated repos and offline use.** `hfhub` reads a token from
+`HUGGING_FACE_HUB_TOKEN` / `HUGGINGFACE_HUB_TOKEN` and nowhere else,
+which means access granted the normal Python way — `HF_TOKEN`, or
+`huggingface-cli login`, which writes `~/.cache/huggingface/token` — is
+invisible from R, and the resulting 401 surfaces as *"Connection error…
+cannot find the requested files in the disk cache"*. tabfound reads all
+four sources and forwards the token for the duration of the call, and
+when a fetch fails that way it says the repo is probably gated, whether a
+token was found, and points at the local-conversion route.
+
+Every Hub-referenced load consults the cache before the network, so a
+cached model costs no round trip (and no timeout when the network is
+gone). `options(tabfound.offline = TRUE)` or `HF_HUB_OFFLINE` makes that
+the only mode: a cache miss is an error naming the cache directory rather
+than a hang.
+
 **Conversion needs Python, once.** TabFM and Mitra ship
 `model.safetensors` + `config.json` and need none. TabPFN and TabICL
 publish PyTorch pickles that R cannot read — nested Python dicts holding
@@ -909,6 +1022,13 @@ counts the target column. `print()` on the cache reports the figure.
 
 Either way it is off by default.
 
+What the cache spares is the *forward pass* over the training rows. It
+used to spare only that: the member's preprocessing was still fitted, and
+the training matrix still uploaded, once per member per chunk, before
+being handed to a network that ignores it. Both are now skipped when a
+cache is supplied, which is what makes `kv_cache = TRUE` cost what it
+claims to.
+
 **`save_peak_memory_factor`** splits each sublayer's work into that many
 chunks, shrinking the temporaries each one materialises. It reorganises
 work that was already independent, so the only cost is a little loop
@@ -1011,6 +1131,27 @@ genuinely live data — Mitra at 2,000 × 50, whose 36 GB really is resident
 2-D attention state, comes out 2.7% worse. `options(tabfound.collect_between_layers =)`
 takes `"auto"` (default), `TRUE` or `FALSE`.
 
+The same thing happens one level up, where it had been missed: an
+ensemble runs the whole stack per member, and a chunked prediction runs
+the whole ensemble per chunk, so both loops were holding every iteration's
+dead intermediates while the next one allocated. Every member loop and
+every chunk loop now collects too. There is nothing to weigh there — the
+iteration that just finished was a full forward pass over the training
+context, so a millisecond of collection is never the deciding term — and
+the same option switches all of it off.
+
+**Fitting in the right loop.** A member's preprocessing — the quantile
+transformer that sorts every column of the training matrix, the ordinal
+encoder, the SVD — is fitted on the training rows and depends on nothing
+else, but it used to be fitted *inside* the chunk loop: `n_members ×
+n_chunks` fits where `n_members` would do. It is now fitted once per
+`predict()` call and replayed on each chunk, which is bit-identical
+(verified against the parity fixtures and end-to-end on a real
+checkpoint) and worth 9–20% at three chunks, more as chunks multiply.
+The member views themselves are built one at a time rather than all up
+front: for TabICL's eight members on an 8,000 × 30 table that is 15.5 MB
+of R matrices down to 1.9 MB, and TabFM has thirty-two of them.
+
 **Mitra is the case all of this was worth doing for.** It attends across
 rows *and* columns, so its activation carries every row at full embedding
 width on both axes — the steepest curve in the package, and the reason
@@ -1055,6 +1196,29 @@ that is an *under*-estimate, the one direction a guard must never err in.
 cannot reach: 0.64 for Mitra, 0.85 for v2.6, and **1.00 for v3**, whose
 stage chunking has already taken the transient away. An unswept backend
 defaults to 1 — no promised saving at all.
+
+### Threads
+
+libtorch runs one intra-op thread per core, which is right for one model
+in one process and wrong inside a worker pool: `k` R workers each
+spawning `n_cores` threads oversubscribe the machine `k`-fold, and the
+run gets *slower* the more workers you add. `tabfound_threads(n)` sets
+the count for the calling process — the rule of thumb is
+`detectCores() %/% k`, called inside each worker.
+
+Set it before the first forward pass. libtorch's native backend refuses
+both thread counts once its parallel region has started and says so on
+stderr from C++, not through an R condition, so a late call looks as
+though it worked; `tabfound_threads()` with no argument reads the value
+back.
+
+The advice underneath the knob is not to fork at all. Chained-equations
+chains and ensemble members are already sequential calls into a
+multi-threaded library, so the parallelism is better left to torch than
+taken from it — and forking a process that has already initialised
+libtorch leaves the child with a thread pool it cannot use, so a pool
+must be built before the first torch call, or with
+`future::plan(multisession)` rather than `multicore`.
 
 ### Knowing before you run
 
@@ -1258,23 +1422,30 @@ seeds it, so its own flips differ between two of its own runs.
 - `outlier_removal_std` is not implemented. It is a no-op
   on the current fixtures (the classifier default is 12σ, the regressor
   passes `NULL`), but data with extreme outliers will diverge.
-- `predict(type = "sample")` uses a single forward pass and ignores
-  ensemble configs.
-- Categorical and datetime columns must be encoded to numeric by the
-  caller on the matrix interface; `tabfound()` does it for you. Which
-  columns are *categorical* is separate from that encoding and is
-  declared via `categorical_features` — see the formula-interface
-  section.
+- `predict(type = "sample")` is ensemble-aware: it draws from the
+  members' averaged bucket probabilities — the same pseudo-logits the
+  reference hands its head for `mean()` and `icdf()` — so a draw agrees
+  with the quantiles reported beside it. Without ensemble configs it is
+  one forward pass, as before.
+- A data frame handed to `fit()` on the matrix interface is encoded the
+  same way `tabfound()` encodes one (factors to ordinal codes, dates to
+  numbers), and anything that cannot be encoded is refused rather than
+  coerced. What that path does *not* do is declare which columns are
+  categorical — it warns and names them; `tabfound()` declares them from
+  the frame. See the formula-interface section.
 - One-hot categorical encoding is not implemented. Its width depends on
   the data, which a member's shuffle permutation cannot be sized ahead
   of; no released checkpoint asks for it.
 - Text columns are not supported. The reference has a `TEXT` modality
   for high-cardinality strings; here a character column becomes a factor
   and is declared categorical, which is refused above 30 levels.
-- `R/nn-attention.R` and `R/backend-tabpfn3.R` call
-  `torch:::torch_scaled_dot_product_attention`, an unexported internal,
-  to match the reference's SDPA numerics. This needs replacing before
-  CRAN.
+- The fused SDPA kernel is reached through one wrapper (`sdpa()`) rather
+  than eleven `torch:::` call sites. It still prefers torch's unexported
+  `torch_scaled_dot_product_attention`, because that is what makes the
+  float32 rounding match the reference — but the lookup is soft, and a
+  pure public-API fallback takes over when it is absent, agreeing to
+  ~1e-6. `options(tabfound.sdpa = "r")` forces the fallback, which is
+  how the agreement is tested.
 
 **TabPFN v2.6.**
 

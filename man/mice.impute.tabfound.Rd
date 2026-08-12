@@ -4,7 +4,16 @@
 \alias{mice.impute.tabfound}
 \title{Use a tabular foundation model as a mice imputation method}
 \usage{
-mice.impute.tabfound(y, ry, x, wy = NULL, models = NULL, draw = "auto", ...)
+mice.impute.tabfound(
+  y,
+  ry,
+  x,
+  wy = NULL,
+  models = NULL,
+  draw = "auto",
+  proper = FALSE,
+  ...
+)
 }
 \arguments{
 \item{y}{The incomplete target, as mice supplies it.}
@@ -19,6 +28,12 @@ mice.impute.tabfound(y, ry, x, wy = NULL, models = NULL, draw = "auto", ...)
 \code{getOption("tabfound.models")}.}
 
 \item{draw}{Passed to the regressor draw; see \code{\link[=tabfound_impute]{tabfound_impute()}}.}
+
+\item{proper}{Resample the observed rows before fitting, the way
+mice's own \code{norm.boot} / \code{polyreg.boot} do. Same argument, same
+default (\code{FALSE}) and same rationale as \code{\link[=tabfound_impute]{tabfound_impute()}}, whose
+\emph{Properness} section explains why the correction is off by default
+for these models.}
 
 \item{...}{Unused; absorbs the rest of what mice passes down.}
 }

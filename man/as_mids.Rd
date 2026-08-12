@@ -23,10 +23,11 @@ whole mice toolchain -- \code{with()}, \code{pool()}, \code{complete()},
 \code{densityplot()}, \code{stripplot()} -- applies unchanged.
 }
 \details{
-What is \emph{not} carried over is the diagnostic history mice's own
-sampler records: \code{chainMean} and \code{chainVar} are empty, so
-\code{plot()} on the result has nothing to draw. Everything that depends on
-the imputed values themselves works normally.
+The convergence trace comes with it: \code{\link[=tabfound_impute]{tabfound_impute()}} records the
+mean and variance of each variable's imputed cells at every sweep, in
+mice's own \verb{variable x iteration x imputation} layout, so \code{plot()} on
+the result draws the chains the way it does for a \code{mice()} fit. The
+\code{where} matrix travels too.
 }
 \examples{
 \dontrun{

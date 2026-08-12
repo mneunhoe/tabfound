@@ -31,10 +31,14 @@
 }
 
 # sha256(row_bytes || salt_bytes) -> unit float
+#
+# Called once per row, so the two things that do not depend on the row --
+# the namespace check and the salt's little-endian encoding -- are the
+# caller's job (`.salt_raw()`), not this function's. It stays correct if
+# handed a salt directly.
 # @keywords internal
 .hash_row_to_unit_float <- function(row_bytes, salt_uint64) {
-  require_suggested("digest")
-  salt_le <- .uint64_to_le_raw(salt_uint64)
+  salt_le <- if (is.raw(salt_uint64)) salt_uint64 else .uint64_to_le_raw(salt_uint64)
   combined <- c(as.raw(row_bytes), salt_le)
   hex <- digest::digest(combined, algo = "sha256", serialize = FALSE)
   .hex64_to_unit_float(hex)
@@ -84,9 +88,12 @@
 #' @return Numeric vector of length `nrow(X)` with values in `[0, 1]`.
 #' @keywords internal
 apply_fingerprint <- function(X, salt_uint64, is_test = FALSE) {
+  require_suggested("digest")
   X_arr <- as.matrix(X)
   storage.mode(X_arr) <- "double"
   n <- nrow(X_arr); f <- ncol(X_arr)
+  # Constant across rows, so encoded once rather than n times.
+  salt_le <- .uint64_to_le_raw(salt_uint64)
   # The reference hashes `np.around(X, 12).tobytes()` -- float64, 8 bytes
   # per value, little-endian.
   #
@@ -105,31 +112,35 @@ apply_fingerprint <- function(X, salt_uint64, is_test = FALSE) {
   out <- numeric(n)
   if (is_test) {
     for (i in seq_len(n)) {
-      out[i] <- .hash_row_to_unit_float(row_bytes_list[[i]], salt_uint64)
+      out[i] <- .hash_row_to_unit_float(row_bytes_list[[i]], salt_le)
     }
   } else {
     seen <- new.env(hash = TRUE, parent = emptyenv())
     counter <- new.env(hash = TRUE, parent = emptyenv())
     for (i in seq_len(n)) {
       rb <- row_bytes_list[[i]]
-      h_base <- .hash_row_to_unit_float(rb, salt_uint64)
+      h_base <- .hash_row_to_unit_float(rb, salt_le)
       key_base <- format(h_base, digits = 17L)
       add_offset <- counter[[key_base]]
       if (is.null(add_offset)) add_offset <- 0L
       h <- if (add_offset == 0L) h_base else
         .hash_row_to_unit_float(rb, salt_uint64 + add_offset)
-      # Resolve further collisions
+      # Resolve further collisions. The key is the expensive part of the
+      # loop after the hash itself, so it is formatted once per candidate
+      # rather than once per lookup.
+      key <- if (add_offset == 0L) key_base else format(h, digits = 17L)
       retries <- 0L
-      while (!is.null(seen[[format(h, digits = 17L)]])) {
+      while (!is.null(seen[[key]])) {
         add_offset <- add_offset + 1L
         retries <- retries + 1L
         if (retries > 100L) {
           stop("Fingerprint hash collision not resolved after 100 retries on row ", i)
         }
         h <- .hash_row_to_unit_float(rb, salt_uint64 + add_offset)
+        key <- format(h, digits = 17L)
       }
       out[i] <- h
-      seen[[format(h, digits = 17L)]] <- TRUE
+      seen[[key]] <- TRUE
       counter[[key_base]] <- add_offset + 1L
     }
   }

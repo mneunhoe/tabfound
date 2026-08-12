@@ -66,3 +66,43 @@ test_that("sampling is reproducible under a seed and spans the support", {
   expect_equal(dim(s1), c(3L, 50L))
   expect_true(all(s1 >= 0 & s1 <= 10))
 })
+
+
+test_that("border translation preserves total mass and endpoint conventions", {
+  frm <- torch::torch_tensor(seq(0, 10, length.out = 11),
+                             dtype = torch::torch_float())
+  to  <- torch::torch_tensor(seq(0, 10, length.out = 6),
+                             dtype = torch::torch_float())
+  set.seed(5)
+  logits <- torch::torch_tensor(matrix(rnorm(10 * 4), nrow = 4),
+                                dtype = torch::torch_float())
+  p <- as.matrix(translate_probs_across_borders_r(logits, frm, to)$cpu())
+  expect_equal(dim(p), c(4L, 5L))
+  expect_true(all(p >= 0))
+  expect_equal(rowSums(p), rep(1, 4), tolerance = 1e-5)
+})
+
+
+test_that("border translation runs on an accelerator", {
+  # `torch_where` refuses to mix devices, so every tensor this builds --
+  # including the positional mask -- has to be created where the
+  # probabilities live. Every ensembled TabPFN regression goes through
+  # here, so a CPU-only index vector breaks GPU/MPS regression outright.
+  dev <- if (torch::cuda_is_available()) "cuda"
+         else if (torch::backends_mps_is_available()) "mps"
+         else NULL
+  skip_if(is.null(dev), "no accelerator available")
+
+  frm <- torch::torch_tensor(seq(0, 10, length.out = 11),
+                             dtype = torch::torch_float(), device = dev)
+  to  <- torch::torch_tensor(seq(0, 10, length.out = 6),
+                             dtype = torch::torch_float(), device = dev)
+  set.seed(5)
+  logits <- torch::torch_tensor(matrix(rnorm(10 * 4), nrow = 4),
+                                dtype = torch::torch_float(), device = dev)
+  p_dev <- translate_probs_across_borders_r(logits, frm, to)
+  expect_identical(p_dev$device$type, dev)
+
+  p_cpu <- translate_probs_across_borders_r(logits$cpu(), frm$cpu(), to$cpu())
+  expect_equal(as.matrix(p_dev$cpu()), as.matrix(p_cpu), tolerance = 1e-5)
+})

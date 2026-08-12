@@ -7,7 +7,6 @@
 apply_primary_reshape(X_train, X_test, preset)
 }
 \description{
-Fitted on train, applied to both. Returns the transformed pair; the
-caller decides whether it replaces the originals or is appended.
+Fit-and-transform-both, for callers that have the pair in hand.
 }
 \keyword{internal}

@@ -234,7 +234,7 @@ mitra_attention <- torch::nn_module(
     } else {
       k <- cached_kv$key; v <- cached_kv$value
     }
-    ctx <- torch:::torch_scaled_dot_product_attention(
+    ctx <- sdpa(
       query = q, key = k, value = v, dropout_p = 0
     )
     ctx <- ctx$permute(c(1L, 3L, 2L, 4L))$contiguous()$
@@ -713,6 +713,9 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
     n_cls <- length(state$class_levels)
     acc <- NULL
     for (i in seq_along(state$preps)) {
+      # Between members: a whole forward pass' worth of torch
+      # allocations, which R's collector cannot see.
+      if (i > 1L) collect_between_chunks()
       out <- .mitra_member_out(net, dev, state, state$preps[[i]],
                                state$y_train_int, X_test_chunk, caches, i,
                                save_peak_memory_factor)
@@ -726,7 +729,10 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
-    caches <- if (isTRUE(kv_cache)) member_cache_store() else NULL
+    # A cache carried on the fitted state was built once, possibly in
+    # another session; otherwise build lazily as before.
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     probs <- chunk_apply(as.matrix(newdata), predict_chunk_size,
                          function(chunk) .chunk(state, chunk, caches))
     colnames(probs) <- as.character(state$class_levels)
@@ -734,7 +740,18 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
-  list(fit = fit_fn, predict = predict_fn)
+  # Building every member's cache is exactly what one forward pass over a
+  # single query row does, so ask for that rather than duplicating the
+  # builders: the store comes back full.
+  .build_all_caches <- function(state) {
+    store <- member_cache_store()
+    one <- state$X_train[1L, , drop = FALSE]
+    .chunk(state, one, store)
+    member_cache_list(store)
+  }
+
+  list(fit = fit_fn, predict = predict_fn,
+       build_cache = .build_all_caches)
 }
 
 #' Build the Mitra regressor predictor
@@ -767,6 +784,9 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
   .chunk <- function(state, X_test_chunk, caches) {
     acc <- NULL
     for (i in seq_along(state$preps)) {
+      # Between members: a whole forward pass' worth of torch
+      # allocations, which R's collector cannot see.
+      if (i > 1L) collect_between_chunks()
       pp <- state$preps[[i]]
       out <- .mitra_member_out(net, dev, state, pp, state$y_train,
                                X_test_chunk, caches, i,
@@ -778,12 +798,26 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
   }
 
   predict_fn <- function(state, newdata, type = "mean", ...) {
-    caches <- if (isTRUE(kv_cache)) member_cache_store() else NULL
+    # A cache carried on the fitted state was built once, possibly in
+    # another session; otherwise build lazily as before.
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     as.numeric(chunk_apply(as.matrix(newdata), predict_chunk_size,
                            function(chunk) .chunk(state, chunk, caches)))
   }
 
-  list(fit = fit_fn, predict = predict_fn, types = "mean")
+  # Building every member's cache is exactly what one forward pass over a
+  # single query row does, so ask for that rather than duplicating the
+  # builders: the store comes back full.
+  .build_all_caches <- function(state) {
+    store <- member_cache_store()
+    one <- state$X_train[1L, , drop = FALSE]
+    .chunk(state, one, store)
+    member_cache_list(store)
+  }
+
+  list(fit = fit_fn, predict = predict_fn, types = "mean",
+       build_cache = .build_all_caches)
 }
 
 
@@ -966,7 +1000,11 @@ register_mitra_backend <- function() {
     # every value to 0 and collapses the column to zeros -- silently. See
     # `mitra_quantile_embedding()`. The predictors never let that happen:
     # each member's preprocessor mean-imputes first, as AutoGluon's does.
-    handles_missing = TRUE,
+    # That is the sharpest edge in the package and the clearest case for
+    # the two flags being separate.
+    kv_cache_capable   = TRUE,
+    handles_missing    = FALSE,
+    imputes_internally = TRUE,
     description   = "Mitra 2-D attention transformer (AutoGluon)",
     parity        = "autogluon mitra"
   )

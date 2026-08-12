@@ -117,6 +117,144 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
 
 
 # ---------------------------------------------------------------------------
+# Input coercion
+# ---------------------------------------------------------------------------
+
+# Every backend's `fit_fn` opens with `as.matrix(X)` and then forces the
+# storage mode to double. That is safe for a numeric matrix and silently
+# destructive for a data frame with one non-numeric column: `as.matrix()`
+# on a mixed frame goes through `format()`, so the result is a *character*
+# matrix -- the factor column becomes all-`NA` and every numeric column is
+# rounded to 7 significant digits. The fit succeeds, with one coercion
+# warning, on wrong data.
+#
+# So no data frame ever reaches a backend. It is encoded here first, by
+# the same function the formula interface uses, and anything that is
+# neither numeric nor encodable is refused rather than mangled.
+#
+# `levels` is the training data's factor levels, recorded at `fit()` and
+# replayed here: a factor's code is its position in its own level set, so
+# a test frame whose column happens to hold only two of the three
+# training levels would otherwise encode "c" as 1 where training encoded
+# it as 2. This is `forge()`'s job on the formula path, and it has to be
+# done on this one too.
+# @keywords internal
+.as_model_matrix <- function(x, arg = "X", levels = NULL) {
+  if (is.data.frame(x)) {
+    x <- .coerce_for_mold(x)
+    if (length(levels)) x <- .apply_training_levels(x, levels, arg)
+    return(.encode_predictors(x))
+  }
+  if (is.matrix(x)) {
+    if (is.numeric(x) || is.logical(x)) {
+      storage.mode(x) <- "double"
+      return(x)
+    }
+    cli::cli_abort(c(
+      "{.arg {arg}} is a {.cls {typeof(x)}} matrix; these models take numbers.",
+      i = "Pass a data frame instead -- factors and dates are encoded for \\
+           you -- or convert the columns yourself."
+    ))
+  }
+  # A bare vector is one predictor; its names are row labels, not a
+  # column name, so the matrix gets none.
+  if (is.numeric(x) || is.logical(x)) return(matrix(as.double(x), ncol = 1L))
+  cli::cli_abort(
+    "{.arg {arg}} must be a matrix or a data frame, not a {.cls {class(x)[1]}}."
+  )
+}
+
+# The factor levels of a coerced frame, for the columns that have any.
+# @keywords internal
+.training_levels <- function(d) {
+  if (!is.data.frame(d)) return(NULL)
+  lv <- lapply(d, function(col) if (is.factor(col)) levels(col) else NULL)
+  lv <- lv[!vapply(lv, is.null, logical(1))]
+  if (!length(lv)) NULL else lv
+}
+
+# @keywords internal
+.apply_training_levels <- function(d, levels, arg = "newdata") {
+  novel <- character()
+  for (nm in intersect(names(levels), names(d))) {
+    col <- d[[nm]]
+    if (!is.factor(col)) next
+    if (identical(levels(col), levels[[nm]])) next
+    chr <- as.character(col)
+    seen <- setdiff(unique(chr[!is.na(chr)]), levels[[nm]])
+    if (length(seen)) novel <- c(novel, sprintf("%s: %s", nm,
+                                                paste(seen, collapse = ", ")))
+    d[[nm]] <- factor(chr, levels = levels[[nm]])
+  }
+  if (length(novel)) {
+    cli::cli_warn(c(
+      "{.arg {arg}} has level{?s} the model was not fitted on; \\
+       they become {.val NA}.",
+      set_names(novel, rep("*", length(novel)))
+    ))
+  }
+  d
+}
+
+# A data frame's factor columns are encoded as ordinal codes, which is
+# what the reference implementations do -- but only `tabfound()` also
+# tells the backend *which* columns those are. On the matrix path the
+# information exists (it is in the frame) and is being thrown away, and
+# the backends' own fallback heuristic only catches columns with fewer
+# than four distinct values.
+# @keywords internal
+.warn_undeclared_categoricals <- function(object, X) {
+  if (!is.data.frame(X)) return(invisible(FALSE))
+  if (!is.null(object$model_ref$args$categorical_features)) return(invisible(FALSE))
+  cat_cols <- names(X)[vapply(X, function(col) {
+    is.factor(col) || is.character(col) || is.logical(col)
+  }, logical(1))]
+  if (!length(cat_cols)) return(invisible(FALSE))
+  cli::cli_warn(c(
+    "{length(cat_cols)} categorical column{?s} encoded as ordinal codes: \\
+     {.field {cat_cols}}.",
+    i = "The backend was not told they are categorical. Use {.fn tabfound}, \\
+         which declares them from the frame, or pass \\
+         {.arg categorical_features} when constructing the model."
+  ))
+  invisible(TRUE)
+}
+
+
+# Rebuild a model's predictor with a different categorical declaration,
+# reusing the loaded network.
+#
+# Chained equations and sequential synthesis fit a *different* predictor
+# set for every variable, so which columns are categorical changes from
+# one draw to the next and no fixed index vector can be right. Building a
+# fresh `tabular_classifier()` per variable would re-read the weights
+# from disk, which for TabFM is 6.5 GB; this rebuilds only the predictor
+# closure around the network that is already in memory.
+#
+# A declaration the caller made explicitly wins: they know something we
+# are inferring.
+# @keywords internal
+.respec_categoricals <- function(object, categorical_features) {
+  if (is.null(categorical_features) || !length(categorical_features)) return(object)
+  if (!is.null(object$model_ref$args$categorical_features)) return(object)
+  bk  <- tryCatch(get_backend(object$backend), error = function(e) NULL)
+  if (is.null(bk)) return(object)
+  ctor <- if (inherits(object, "tabfound_classifier")) bk$classifier else bk$regressor
+  if (is.null(ctor) || !"categorical_features" %in% names(formals(ctor))) {
+    return(object)
+  }
+  ctx <- list(net = object$model, config = object$config, device = object$device,
+              backend = bk, task = object$task, model_ref = object$model_ref$model)
+  args <- c(list(ctx), list(categorical_features = as.integer(categorical_features)),
+            object$model_ref$args)
+  out <- .new_tabfound_model(ctx, do.call(ctor, args), object$task, args[-1L])
+  out$model_ref <- object$model_ref
+  out$model_ref$args <- args[-1L]
+  out
+}
+
+
+# ---------------------------------------------------------------------------
 # Liveness
 # ---------------------------------------------------------------------------
 
@@ -148,6 +286,9 @@ is_fitted <- function(object) UseMethod("is_fitted")
 
 #' @export
 is_fitted.tabfound_model <- function(object) !is.null(object$state)
+
+#' @export
+is_fitted.tabfound_fit <- function(object) is_fitted(object$inner)
 
 # @keywords internal
 .require_fitted <- function(object) {
@@ -208,6 +349,9 @@ fit <- function(object, X, y, ...) UseMethod("fit")
 #' @export
 fit.tabfound_model <- function(object, X, y, ...) {
   .check_weights_alive(object)
+  .warn_undeclared_categoricals(object, X)
+  train_levels <- .training_levels(.coerce_for_mold(X))
+  X <- .as_model_matrix(X, "X")
   # Checked here rather than per backend: the dimensions and the options
   # are the same question for all six, and a backend contributes only its
   # `peak_terms()` formula. `fit()` allocates almost nothing itself -- the
@@ -217,7 +361,14 @@ fit.tabfound_model <- function(object, X, y, ...) {
                 n_features = NCOL(X), stage = "fit")
   # Assigning into a list copies it, so the caller's object is untouched.
   # The network is shared, not copied -- it is read-only and large.
-  object$state <- object$spec$fit(X, y)
+  state <- object$spec$fit(X, y)
+  # The training schema, kept next to the training rows: what `predict()`
+  # checks new data against. Backends record their own view of `X_train`,
+  # which by then is a bare matrix with no promise about column names.
+  state$n_features    <- ncol(X)
+  state$feature_names <- colnames(X)
+  state$feature_levels <- train_levels
+  object$state <- state
   object
 }
 
@@ -242,7 +393,8 @@ predict.tabfound_classifier <- function(object, newdata,
                                         type = c("class", "prob"), ...) {
   type <- match.arg(type)
   .require_fitted(object)
-  .guard_predict(object, newdata)
+  .check_predict_dots(object, ...)
+  newdata <- .prepare_newdata(object, newdata)
   object$spec$predict(object$state, newdata, type, ...)
 }
 
@@ -260,18 +412,109 @@ predict.tabfound_regressor <- function(object, newdata,
       i = "Available: {.val {supported}}."
     ))
   }
-  .guard_predict(object, newdata)
+  .check_predict_dots(object, ...)
+  .check_quantiles(...)
+  newdata <- .prepare_newdata(object, newdata)
   object$spec$predict(object$state, newdata, type, ...)
 }
 
+# Coerce new data the same way the training data was coerced, check it
+# against the training schema, and run the memory preflight.
+#
 # The fitted context is the other half of a prediction's dimensions, and
 # it lives on the object rather than in the call.
 # @keywords internal
-.guard_predict <- function(object, newdata) {
+.prepare_newdata <- function(object, newdata) {
+  .kv_guard_check(object$state)
+  newdata <- .as_model_matrix(newdata, "newdata", object$state$feature_levels)
+  .check_newdata_schema(object, newdata)
   n_train <- object$state$n_train %||% NROW(object$state$X_train)
   .memory_guard(object, n_context = n_train %||% 0,
                 n_query = NROW(newdata), n_features = NCOL(newdata),
                 stage = "predict")
+  newdata
+}
+
+# Without this, a wrong column count surfaces as a libtorch C++ stack
+# trace tens of frames down, and *reordered* columns do not surface at
+# all: the network happily conditions column 3 of the context on column 3
+# of the query whatever they mean. hardhat's `forge()` covers the formula
+# path; this covers the matrix one.
+# @keywords internal
+.check_newdata_schema <- function(object, newdata) {
+  p_train <- object$state$n_features
+  if (!is.null(p_train) && ncol(newdata) != p_train) {
+    cli::cli_abort(c(
+      "{.arg newdata} has {ncol(newdata)} column{?s}; the model was fitted \\
+       on {p_train}.",
+      i = "Predictors must be the same columns, in the same order, as at \\
+           {.fn fit} time."
+    ))
+  }
+  train_nm <- object$state$feature_names
+  new_nm   <- colnames(newdata)
+  if (is.null(train_nm) || is.null(new_nm) || identical(train_nm, new_nm)) {
+    return(invisible(TRUE))
+  }
+  if (setequal(train_nm, new_nm)) {
+    cli::cli_abort(c(
+      "{.arg newdata} has the training columns in a different order.",
+      x = "Column {which(train_nm != new_nm)[1]} is \\
+           {.field {new_nm[which(train_nm != new_nm)[1]]}}, but was \\
+           {.field {train_nm[which(train_nm != new_nm)[1]]}} at fit time.",
+      i = "Reorder with {.code newdata[, c({.val {train_nm}})]}."
+    ))
+  }
+  cli::cli_abort(c(
+    "{.arg newdata} does not have the columns the model was fitted on.",
+    x = "Missing: {.field {setdiff(train_nm, new_nm)}}.",
+    x = "Unexpected: {.field {setdiff(new_nm, train_nm)}}."
+  ))
+}
+
+# The real knobs on these backends are constructor-time
+# (`tabular_regressor(model, softmax_temperature = )`), so a name misspelt
+# at predict time -- or one that only exists on another backend -- is
+# swallowed by the `...` every `predict_fn` ends with and silently does
+# nothing. Say so.
+# @keywords internal
+.check_predict_dots <- function(object, ...) {
+  given <- names(list(...))
+  given <- given[nzchar(given %||% "")]
+  if (!length(given)) return(invisible(TRUE))
+  known <- setdiff(names(formals(object$spec$predict)),
+                   c("state", "newdata", "type", "..."))
+  unknown <- setdiff(given, known)
+  if (!length(unknown)) return(invisible(TRUE))
+  cli::cli_warn(c(
+    "{.fn predict} ignore{?s/} the argument{?s} {.arg {unknown}}.",
+    i = if (length(known)) "The {.val {object$backend}} backend takes \\
+                            {.arg {known}} here."
+        else "The {.val {object$backend}} backend takes no extra arguments here.",
+    i = "Backend options are set when the model is constructed, not at \\
+         predict time."
+  ))
+  invisible(FALSE)
+}
+
+# Quantile levels outside (0, 1) are extrapolated off the end of the
+# predicted distribution and come back as plausible-looking numbers.
+# @keywords internal
+.check_quantiles <- function(...) {
+  dots <- list(...)
+  if (!"quantiles" %in% names(dots)) return(invisible(TRUE))
+  quantiles <- dots[["quantiles"]]
+  if (!is.numeric(quantiles) || !length(quantiles)) {
+    cli::cli_abort("{.arg quantiles} must be a numeric vector.")
+  }
+  bad <- !is.finite(quantiles) | quantiles <= 0 | quantiles >= 1
+  if (any(bad)) {
+    cli::cli_abort(c(
+      "{.arg quantiles} must lie strictly inside {.val {c(0, 1)}}.",
+      x = "Out of range: {.val {quantiles[bad]}}."
+    ))
+  }
+  invisible(TRUE)
 }
 
 #' Predicted class probabilities
@@ -285,6 +528,15 @@ predict_proba <- function(object, newdata, ...) UseMethod("predict_proba")
 
 #' @export
 predict_proba.tabfound_classifier <- function(object, newdata, ...) {
+  predict(object, newdata, type = "prob", ...)
+}
+
+#' @export
+predict_proba.tabfound_fit <- function(object, newdata, ...) {
+  if (!identical(object$mode, "classification")) {
+    cli::cli_abort("{.fn predict_proba} needs a classification fit, \\
+                    not a {.val {object$mode}} one.")
+  }
   predict(object, newdata, type = "prob", ...)
 }
 
@@ -303,6 +555,16 @@ predict_quantiles <- function(object, newdata, quantiles = c(0.1, 0.5, 0.9),
 predict_quantiles.tabfound_regressor <- function(object, newdata,
                                                  quantiles = c(0.1, 0.5, 0.9),
                                                  ...) {
+  predict(object, newdata, type = "quantiles", quantiles = quantiles, ...)
+}
+
+#' @export
+predict_quantiles.tabfound_fit <- function(object, newdata,
+                                           quantiles = c(0.1, 0.5, 0.9), ...) {
+  if (!identical(object$mode, "regression")) {
+    cli::cli_abort("{.fn predict_quantiles} needs a regression fit, \\
+                    not a {.val {object$mode}} one.")
+  }
   predict(object, newdata, type = "quantiles", quantiles = quantiles, ...)
 }
 
@@ -327,7 +589,13 @@ predict_quantiles.tabfound_regressor <- function(object, newdata,
 #' re-resolves them from that reference, so the artifacts (or the
 #' HuggingFace cache) must still be reachable.
 #'
-#' @param object A `tabfound_model`, fitted or not.
+#' Both object types are supported: the engine-level `tabfound_model`
+#' from [tabular_classifier()] / [tabular_regressor()], and the
+#' `tabfound_fit` that [tabfound()] returns. For the latter the hardhat
+#' blueprint travels with it, so the reloaded object re-applies the same
+#' encoding and the same factor levels to new data.
+#'
+#' @param object A `tabfound_model` or a `tabfound_fit`, fitted or not.
 #' @param file Path to write to.
 #' @return `file`, invisibly.
 #' @examples
@@ -338,37 +606,85 @@ predict_quantiles.tabfound_regressor <- function(object, newdata,
 #' }
 #' @export
 tabfound_save <- function(object, file) {
-  if (!inherits(object, "tabfound_model")) {
-    cli::cli_abort("{.arg object} must be a {.cls tabfound_model}.")
-  }
-  saveRDS(
-    list(
-      format    = "tabfound-model",
-      version   = 1L,
-      task      = object$task,
-      model_ref = object$model_ref,
-      state     = object$state,
-      pkg_version = as.character(utils::packageVersion("tabfound"))
-    ),
-    file
+  base <- list(
+    version     = .tabfound_save_version,
+    pkg_version = as.character(utils::packageVersion("tabfound"))
   )
+  blob <- if (inherits(object, "tabfound_fit")) {
+    c(list(format = "tabfound-fit",
+           task   = object$inner$task,
+           model_ref = object$inner$model_ref,
+           state     = object$inner$state,
+           mode      = object$mode,
+           na_action = object$na_action,
+           imputer   = object$imputer,
+           blueprint = object$blueprint),
+      base)
+  } else if (inherits(object, "tabfound_model")) {
+    c(list(format = "tabfound-model",
+           task   = object$task,
+           model_ref = object$model_ref,
+           state     = object$state),
+      base)
+  } else {
+    cli::cli_abort("{.arg object} must be a {.cls tabfound_model} or a \\
+                    {.cls tabfound_fit}.")
+  }
+
+  # A precomputed cache is torch tensors, which is the one thing an RDS
+  # cannot carry -- so a cached model is written as a *bundle* directory:
+  # `state.rds` beside `cache.safetensors`. Without a cache nothing has
+  # changed and the single file stays a single file.
+  caches <- blob$state$kv_caches
+  if (is.null(caches)) {
+    saveRDS(blob, file)
+    return(invisible(file))
+  }
+  dir.create(file, recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(file)) {
+    cli::cli_abort("Could not create the bundle directory {.path {file}}.")
+  }
+  written <- .kv_write(caches, file)
+  blob$state$kv_caches <- NULL          # the tensors live in the other file
+  blob$cache_skeleton  <- written$skeleton
+  blob$cache_file      <- written$file
+  saveRDS(blob, file.path(file, "state.rds"))
   invisible(file)
 }
 
+# Bumped when the payload's layout changes in a way an older reader could
+# not make sense of. Readers refuse anything newer than they know.
+.tabfound_save_version <- 1L
+
 #' @rdname tabfound_save
 #' @param device Optional device override for the reloaded model.
-#' @return For `tabfound_load()`, a `tabfound_model`.
+#' @return For `tabfound_load()`, whichever of the two object types was
+#'   saved.
 #' @export
 tabfound_load <- function(file, device = NULL) {
-  blob <- readRDS(file)
-  if (!identical(blob$format, "tabfound-model")) {
+  # A bundle directory (see `tabfound_save()`) or a plain file.
+  bundle <- dir.exists(file)
+  blob <- readRDS(if (bundle) file.path(file, "state.rds") else file)
+  if (!identical(blob$format, "tabfound-model") &&
+      !identical(blob$format, "tabfound-fit")) {
     cli::cli_abort(c(
       "{.path {file}} is not a saved tabfound model.",
       i = "It was probably written with {.fn saveRDS}, which cannot \\
            capture torch weights. Re-save with {.fn tabfound_save}."
     ))
   }
-  ref <- blob$model_ref
+  ver     <- blob$version %||% 0L
+  max_ver <- .tabfound_save_version
+  if (!is.numeric(ver) || ver > max_ver) {
+    cli::cli_abort(c(
+      "{.path {file}} is in format version {.val {ver}}; this version of \\
+       tabfound reads up to {.val {max_ver}}.",
+      i = "It was written by tabfound {.val {blob$pkg_version %||% 'unknown'}}. \\
+           Upgrade the package to read it."
+    ))
+  }
+
+  ref  <- blob$model_ref
   ctor <- if (identical(blob$task, "classification")) tabular_classifier
           else tabular_regressor
   obj <- do.call(ctor, c(
@@ -377,7 +693,24 @@ tabfound_load <- function(file, device = NULL) {
     ref$args
   ))
   obj$state <- blob$state
-  obj
+  # The cache travels as tensors in a sibling file, on whichever device
+  # this model was just loaded onto.
+  if (!is.null(blob$cache_skeleton)) {
+    obj$state$kv_caches <- .kv_read(blob$cache_skeleton,
+                                    file.path(file, blob$cache_file),
+                                    device = obj$device)
+  }
+  if (identical(blob$format, "tabfound-model")) return(obj)
+
+  require_suggested("hardhat")
+  hardhat::new_model(
+    inner     = obj,
+    mode      = blob$mode,
+    na_action = blob$na_action,
+    imputer   = blob$imputer,
+    blueprint = blob$blueprint,
+    class     = "tabfound_fit"
+  )
 }
 
 

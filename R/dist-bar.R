@@ -343,16 +343,17 @@ translate_probs_across_borders_r <- function(logits, frm, to) {
   prob_left <- .cdf_bar_dist(logits, frm, to)
   # Set endpoints exactly (Python does prob_left[..., 0] = 0, [..., -1] = 1)
   n_last <- as.integer(prob_left$size(prob_left$dim()))
-  # Build left column of zeros and right column of ones via concatenation.
-  left_idx  <- torch::torch_tensor(c(1L), dtype = torch::torch_long())
-  right_idx <- torch::torch_tensor(c(n_last), dtype = torch::torch_long())
+  dev_   <- prob_left$device
   # Instead of in-place, just clamp endpoints via explicit where
   zeros_idx <- torch::torch_zeros_like(prob_left)
   ones_idx  <- torch::torch_ones_like(prob_left)
   # Positional mask: last dim == 0 -> replace with 0; last dim == n-1 -> 1
   mask_shape <- as.integer(prob_left$size())
-  # Build a 1-D position mask of length n_last
-  positions <- torch::torch_arange(1L, n_last, dtype = torch::torch_long())
+  # Build a 1-D position mask of length n_last. It is compared against
+  # tensors that live wherever `prob_left` does, so it has to be built
+  # there too -- `torch_where` will not mix devices.
+  positions <- torch::torch_arange(1L, n_last, dtype = torch::torch_long(),
+                                   device = dev_)
   # Broadcast to prob_left shape for comparison
   pos_expanded <- positions$view(c(rep(1L, length(mask_shape) - 1L), n_last))
   is_left  <- (pos_expanded == 1L)
@@ -361,7 +362,6 @@ translate_probs_across_borders_r <- function(logits, frm, to) {
   prob_left <- torch::torch_where(is_right, ones_idx,  prob_left)
 
   # Diff along last dim, clamp non-negative
-  dev_   <- prob_left$device
   left_idx  <- torch::torch_arange(1L, n_last - 1L, dtype = torch::torch_long(),
                                     device = dev_)
   right_idx <- torch::torch_arange(2L, n_last, dtype = torch::torch_long(),

@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-08-07">
+<meta name="dcterms.date" content="2026-08-12">
 
 <title>Multiple imputation with tabfound</title>
 <style>
@@ -103,6 +103,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </ul></li>
   <li><a href="#letting-mice-drive-instead" id="toc-letting-mice-drive-instead" class="nav-link" data-scroll-target="#letting-mice-drive-instead">Letting mice drive instead</a></li>
   <li><a href="#does-it-actually-work" id="toc-does-it-actually-work" class="nav-link" data-scroll-target="#does-it-actually-work">Does it actually work?</a></li>
+  <li><a href="#properness" id="toc-properness" class="nav-link" data-scroll-target="#properness">Properness</a></li>
   <li><a href="#what-this-is-not" id="toc-what-this-is-not" class="nav-link" data-scroll-target="#what-this-is-not">What this is not</a></li>
   <li><a href="#reproducing-this" id="toc-reproducing-this" class="nav-link" data-scroll-target="#reproducing-this">Reproducing this</a></li>
   <li><a href="#see-also" id="toc-see-also" class="nav-link" data-scroll-target="#see-also">See also</a></li>
@@ -130,7 +131,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">August 7, 2026</p>
+      <p class="date">August 12, 2026</p>
     </div>
   </div>
   
@@ -271,17 +272,20 @@ Temp          1.2746429  0.3759286  3.390652 0.001869036</code></pre>
 <span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="fu">densityplot</span>(mids, <span class="sc">~</span> Ozone)</span>
 <span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>mice<span class="sc">::</span><span class="fu">complete</span>(imp, <span class="st">"long"</span>)   <span class="co"># registered on mice's own generic, no conversion</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>The <code>mids</code> is built from a real <code>mice(maxit = 0)</code> skeleton rather than assembled by hand: mice owns the invariants of its own object. What does <em>not</em> carry over is the diagnostic history mice’s own sampler records — <code>chainMean</code> and <code>chainVar</code> are empty, so <code>plot()</code> on the result has nothing to draw. Everything that depends on the imputed values works normally.</p>
+<p>The <code>mids</code> is built from a real <code>mice(maxit = 0)</code> skeleton rather than assembled by hand: mice owns the invariants of its own object. The convergence trace comes with it — <code>tabfound_impute()</code> records the mean and variance of each variable’s imputed cells at every sweep, in mice’s own <code>variable x iteration x imputation</code> layout — so <code>plot()</code> draws the chains the way it does for a <code>mice()</code> fit, and <code>maxit</code> is something you can actually watch converge:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot</span>(<span class="fu">as_mids</span>(imp))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
 </section>
 <section id="handing-it-to-amelia" class="level3">
 <h3 class="anchored" data-anchor-id="handing-it-to-amelia">Handing it to Amelia</h3>
 <p><code>mi.meld()</code> applies the same Rubin’s rules and, on this example, returns the same numbers to the last digit:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(Amelia)</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>amp  <span class="ot">&lt;-</span> <span class="fu">as_amelia</span>(imp)</span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>fits <span class="ot">&lt;-</span> <span class="fu">lapply</span>(amp<span class="sc">$</span>imputations, <span class="cf">function</span>(d) <span class="fu">lm</span>(Ozone <span class="sc">~</span> Wind <span class="sc">+</span> Temp, <span class="at">data =</span> d))</span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="fu">mi.meld</span>(<span class="at">q  =</span> <span class="fu">t</span>(<span class="fu">sapply</span>(fits, coef)),</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        <span class="at">se =</span> <span class="fu">t</span>(<span class="fu">sapply</span>(fits, \(f) <span class="fu">summary</span>(f)<span class="sc">$</span>coefficients[, <span class="dv">2</span>])))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(Amelia)</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>amp  <span class="ot">&lt;-</span> <span class="fu">as_amelia</span>(imp)</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>fits <span class="ot">&lt;-</span> <span class="fu">lapply</span>(amp<span class="sc">$</span>imputations, <span class="cf">function</span>(d) <span class="fu">lm</span>(Ozone <span class="sc">~</span> Wind <span class="sc">+</span> Temp, <span class="at">data =</span> d))</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="fu">mi.meld</span>(<span class="at">q  =</span> <span class="fu">t</span>(<span class="fu">sapply</span>(fits, coef)),</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>        <span class="at">se =</span> <span class="fu">t</span>(<span class="fu">sapply</span>(fits, \(f) <span class="fu">summary</span>(f)<span class="sc">$</span>coefficients[, <span class="dv">2</span>])))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <pre><code>$q.mi
      (Intercept)      Wind     Temp
@@ -297,16 +301,16 @@ $se.mi
 <h2 class="anchored" data-anchor-id="letting-mice-drive-instead">Letting mice drive instead</h2>
 <p>The mirror image: mice runs its own loop and calls in here per variable, which buys mice’s <code>where</code>, <code>blocks</code>, <code>post</code>, <code>ignore</code> and convergence plots.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">options</span>(<span class="at">tabfound.models =</span> mods)</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>imp2 <span class="ot">&lt;-</span> <span class="fu">mice</span>(aq, <span class="at">method =</span> <span class="st">"tabfound"</span>, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">maxit =</span> <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">options</span>(<span class="at">tabfound.models =</span> mods)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>imp2 <span class="ot">&lt;-</span> <span class="fu">mice</span>(aq, <span class="at">method =</span> <span class="st">"tabfound"</span>, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">maxit =</span> <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The trade-off is real and worth knowing: mice hands over an already-dummy-coded numeric design matrix, so a factor predictor arrives one column per contrast rather than as the single ordinal column these networks expect. <code>tabfound_impute()</code> keeps factors whole. Prefer it unless you specifically need something only mice’s loop provides.</p>
 </section>
 <section id="does-it-actually-work" class="level2">
 <h2 class="anchored" data-anchor-id="does-it-actually-work">Does it actually work?</h2>
 <p>Unlike everything else in the package this has no reference implementation to be verified against, so the parity harness has nothing to say about it. What stands in for parity is a simulation where the right answer is known by construction — <code>inst/simulation/run-mi-sim.R</code>. Missingness is made to depend on the outcome, which is missing at random given the data but <em>not</em> ignorable for a complete-case analysis, so there is a real bias for imputation to remove.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/simulation/run-mi-sim.R <span class="at">--backend</span><span class="op">=</span>lm <span class="at">--reps</span><span class="op">=</span>200      <span class="co"># 13s, no weights</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/simulation/run-mi-sim.R <span class="at">--backend</span><span class="op">=</span>tabpfn <span class="at">--reps</span><span class="op">=</span>200</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/simulation/run-mi-sim.R <span class="at">--backend</span><span class="op">=</span>lm <span class="at">--reps</span><span class="op">=</span>200      <span class="co"># 13s, no weights</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/simulation/run-mi-sim.R <span class="at">--backend</span><span class="op">=</span>tabpfn <span class="at">--reps</span><span class="op">=</span>200</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Over 200 replications at <code>n = 400</code> with ~42% of a covariate missing:</p>
 <table class="caption-top table">
 <thead>
@@ -352,33 +356,86 @@ $se.mi
 <p>TabPFN removes 93% of the bias and restores coverage, matching both a correctly specified parametric imputer and <code>mice</code>’s PMM without having been told anything about the data-generating process. Its intervals run systematically narrower than PMM’s, which on one coefficient tips into undercoverage (0.900 against 0.950) — so PMM remains the safer default if you want intervals you need not think about.</p>
 <p><strong>TabICL does not do the job.</strong> It removes 45% of the bias here, and on a binary covariate essentially none. Use the TabPFN backend for imputation; why TabICL falls short is an open question, and the numbers are in <code>inst/simulation/README.md</code>.</p>
 </section>
+<section id="properness" class="level2">
+<h2 class="anchored" data-anchor-id="properness">Properness</h2>
+<p>A PFN draws each query row independently given a fixed context. Condition <code>m</code> chains on the same observed rows and they differ only in the noise of the draw: the between-imputation variance carries no <em>parameter</em> uncertainty, which is the defect that makes an imputer improper under Rubin’s rules and makes pooled standard errors too small.</p>
+<p><code>proper = TRUE</code> applies the standard correction: resample the observed rows once per imputation, the nonparametric stand-in for drawing new parameters, which is what mice’s own <code>norm.boot</code> / <code>polyreg.boot</code> methods do and what <code>tabfound_syn()</code> does by default.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>imp_proper <span class="ot">&lt;-</span> <span class="fu">tabfound_impute</span>(aq, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">proper =</span> <span class="cn">TRUE</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p><strong>It is off by default</strong>, which is not what the theory says. The simulation above was run both ways, on the same 200 data sets:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th></th>
+<th>bias <code>x1</code></th>
+<th>CI width <code>x1</code></th>
+<th>coverage <code>x2</code></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>complete cases</td>
+<td>−0.111</td>
+<td>0.355</td>
+<td>0.880</td>
+</tr>
+<tr class="even">
+<td>MI, default</td>
+<td>−0.008</td>
+<td>0.314</td>
+<td>0.900</td>
+</tr>
+<tr class="odd">
+<td>MI, <code>proper = TRUE</code></td>
+<td><strong>−0.062</strong></td>
+<td><strong>0.547</strong></td>
+<td><strong>0.955</strong></td>
+</tr>
+<tr class="even">
+<td>MI, <code>lm</code> imputer, default</td>
+<td>+0.003</td>
+<td>0.283</td>
+<td>0.910</td>
+</tr>
+<tr class="odd">
+<td>MI, <code>lm</code> imputer, <code>proper = TRUE</code></td>
+<td>+0.003</td>
+<td>0.325</td>
+<td>0.935</td>
+</tr>
+</tbody>
+</table>
+<p>The correction does what the textbook promises for the correctly specified parametric imputer: coverage moves up, intervals widen 15%, bias does not move. Applied to TabPFN it fixes coverage the same way and costs an order of magnitude in bias — most of what the imputation was worth, since the complete-case bias it exists to remove is −0.111.</p>
+<p>The reason is that a bootstrap of the context is not the same model with different parameters. It is a <em>worse model</em>: only 63% of its rows are distinct, and for a learner whose entire fit is its context, that is a third of the training data thrown away, with ties the network never saw during pre-training. The draws come back no wider but less informative — their correlation with the values that were deleted drops — and that attenuates every coefficient. Coverage improves because the intervals grow faster than the error does.</p>
+<p>Leave it off to estimate; turn it on if you need nominal coverage more than you need the point estimate. Whether properness can be had for an in-context learner without degrading the context is open: every resampling scheme duplicates rows.</p>
+</section>
 <section id="what-this-is-not" class="level2">
 <h2 class="anchored" data-anchor-id="what-this-is-not">What this is not</h2>
-<p>It is a <em>use</em> of the fitted models, not a claim about them, and it has two limits worth stating before you rely on it.</p>
-<p><strong>No properness bootstrap.</strong> Between-imputation variability comes entirely from the posterior predictive — the in-context prior carries the epistemic uncertainty a parametric imputer would get by drawing new coefficients. The context rows are not bootstrapped. The coverage numbers above suggest this is adequate in practice for TabPFN; it is not the same thing as a proof. (<code>tabfound_syn()</code>, the synthesis sibling, <em>does</em> bootstrap by default, because the synthetic-data variance estimators assume it — see <code>vignette("synthetic-data", "tabfound")</code>.)</p>
+<p>It is a <em>use</em> of the fitted models, not a claim about them, and one limit is worth stating before you rely on it.</p>
 <p><strong>No bounds.</strong> Draws come off the predictive distribution as it is, tails included. On the example above that is not hypothetical:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>oz <span class="ot">&lt;-</span> <span class="fu">unlist</span>(<span class="fu">lapply</span>(imp<span class="sc">$</span>imputations, \(d) d<span class="sc">$</span>Ozone[<span class="fu">is.na</span>(aq<span class="sc">$</span>Ozone)]))</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="fu">c</span>(<span class="at">cells =</span> <span class="fu">length</span>(oz), <span class="at">negative =</span> <span class="fu">sum</span>(oz <span class="sc">&lt;</span> <span class="dv">0</span>), <span class="at">min =</span> <span class="fu">min</span>(oz), <span class="at">max =</span> <span class="fu">max</span>(oz))</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;    cells negative      min      max</span></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;      125        3      -16      122</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>oz <span class="ot">&lt;-</span> <span class="fu">unlist</span>(<span class="fu">lapply</span>(imp<span class="sc">$</span>imputations, \(d) d<span class="sc">$</span>Ozone[<span class="fu">is.na</span>(aq<span class="sc">$</span>Ozone)]))</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="fu">c</span>(<span class="at">cells =</span> <span class="fu">length</span>(oz), <span class="at">negative =</span> <span class="fu">sum</span>(oz <span class="sc">&lt;</span> <span class="dv">0</span>), <span class="at">min =</span> <span class="fu">min</span>(oz), <span class="at">max =</span> <span class="fu">max</span>(oz))</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;    cells negative      min      max</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;      125        3      -16      122</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Three of 125 imputed ozone concentrations are negative, which is not a physically possible value. There is no equivalent of Amelia’s <code>bounds</code>, and deliberately so — truncating after the fact biases the draws it keeps. Transform before imputing instead:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>aql <span class="ot">&lt;-</span> aq; aql<span class="sc">$</span>Ozone <span class="ot">&lt;-</span> <span class="fu">log</span>(aql<span class="sc">$</span>Ozone)</span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>impl <span class="ot">&lt;-</span> <span class="fu">tabfound_impute</span>(aql, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">maxit =</span> <span class="dv">3</span>, <span class="at">seed =</span> <span class="dv">20260806</span>)</span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>ozl  <span class="ot">&lt;-</span> <span class="fu">exp</span>(<span class="fu">unlist</span>(<span class="fu">lapply</span>(impl<span class="sc">$</span>imputations, \(d) d<span class="sc">$</span>Ozone[<span class="fu">is.na</span>(aq<span class="sc">$</span>Ozone)])))</span>
-<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="fu">range</span>(ozl)</span>
-<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; [1]   0.4 168.9</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>aql <span class="ot">&lt;-</span> aq; aql<span class="sc">$</span>Ozone <span class="ot">&lt;-</span> <span class="fu">log</span>(aql<span class="sc">$</span>Ozone)</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>impl <span class="ot">&lt;-</span> <span class="fu">tabfound_impute</span>(aql, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">maxit =</span> <span class="dv">3</span>, <span class="at">seed =</span> <span class="dv">20260806</span>)</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>ozl  <span class="ot">&lt;-</span> <span class="fu">exp</span>(<span class="fu">unlist</span>(<span class="fu">lapply</span>(impl<span class="sc">$</span>imputations, \(d) d<span class="sc">$</span>Ozone[<span class="fu">is.na</span>(aq<span class="sc">$</span>Ozone)])))</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="fu">range</span>(ozl)</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; [1]   0.4 168.9</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Positive by construction, at the cost of imputing on a scale the analysis model may not want.</p>
 </section>
 <section id="reproducing-this" class="level2">
 <h2 class="anchored" data-anchor-id="reproducing-this">Reproducing this</h2>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-classifier"</span>)</span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-regressor"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-classifier"</span>)</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-regressor"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Outputs above are single-threaded CPU on macOS/arm64, R 4.5.2, <code>torch</code> 0.16.3, TabPFN v2.5. <code>mice</code> and <code>Amelia</code> are needed only for the pooling sections; <code>tabfound_impute()</code> itself needs neither.</p>
 </section>

@@ -7,7 +7,12 @@
 list_backends()
 }
 \value{
-A data.frame with one row per backend.
+A data.frame with one row per backend. \code{missing} says what
+happens to \code{NA} predictors: \code{"encoded"} when the network conditions
+on missingness itself, \code{"imputed"} when the predictor fills it in
+first (the reference wrapper's mean imputer), \code{"encoded+imputed"}
+when both, and \code{"unhandled"} when neither -- see
+\code{\link[=register_backend]{register_backend()}} for why the two are not the same guarantee.
 }
 \description{
 List registered backends

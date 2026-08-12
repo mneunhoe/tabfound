@@ -275,10 +275,94 @@ test_that("pooling recovers a known coefficient under MCAR", {
   se <- est$std.error[est$term == "x1"]
 
   expect_lt(abs(b - 2), 3 * se)
+
   # And the imputed rows are actually contributing: the pooled SE beats
-  # the complete-case one.
-  cc <- summary(stats::lm(y ~ x1 + x2, data = d))$coefficients["x1", 2]
-  expect_lt(se, cc)
+  # the complete-case one. Averaged over data sets rather than asserted on
+  # one, because the margin is a few percent -- proper imputation spends
+  # part of what the imputed rows buy on parameter uncertainty (the
+  # bootstrapped context), so a single unlucky draw can land either side.
+  ratio <- vapply(1:5, function(s) {
+    set.seed(1000 + s)
+    x1 <- rnorm(n); x2 <- rnorm(n)
+    d  <- data.frame(y = 1 + 2 * x1 - x2 + rnorm(n), x1 = x1, x2 = x2)
+    d$x1[sample(n, 90L)] <- NA
+    imp <- tabfound_impute(d, m = 10L, models = stub_models(), maxit = 3L,
+                           verbose = FALSE)
+    est <- summary(mice::pool(with(imp, lm(y ~ x1 + x2))))
+    cc  <- summary(stats::lm(y ~ x1 + x2, data = d))$coefficients["x1", 2]
+    est$std.error[est$term == "x1"] / cc
+  }, numeric(1))
+  expect_lt(mean(ratio), 1)
+})
+
+
+test_that(".mi_context_rows resamples only when asked", {
+  obs <- c(2L, 5L, 7L, 11L, 13L, 17L)
+  expect_identical(.mi_context_rows(obs, "none"), obs)
+  set.seed(1)
+  for (p in c("bootstrap", "bayes")) {
+    draws <- replicate(20, .mi_context_rows(obs, p), simplify = FALSE)
+    expect_true(all(vapply(draws, length, integer(1)) == length(obs)))
+    expect_true(all(vapply(draws, function(d) all(d %in% obs), logical(1))))
+    # A resample of six rows almost never comes back as the six rows.
+    expect_true(mean(vapply(draws, function(d) anyDuplicated(d) > 0,
+                            logical(1))) > 0.5)
+  }
+  # Too little to resample: one observed row is one observed row.
+  expect_identical(.mi_context_rows(3L, "bootstrap"), 3L)
+})
+
+
+test_that("proper = TRUE widens the between-imputation variance", {
+  # The reason `proper` exists: with a fixed context every chain draws
+  # from the same conditional, so the m completed data sets differ only by
+  # the noise of the draw and Rubin's between-imputation term is too
+  # small. Resampling the context adds the parameter uncertainty back.
+  #
+  # The effect is O(p / n_obs) against the residual noise of the draw, so
+  # it is measured on a deliberately small context and averaged over
+  # several RNG streams -- at survey sizes it is a few percent and would
+  # need a full coverage study, not a unit test.
+  set.seed(11)
+  n  <- 40L
+  x1 <- rnorm(n); x2 <- rnorm(n)
+  d  <- data.frame(y = 1 + 2 * x1 - x2 + rnorm(n), x1 = x1, x2 = x2)
+  d$x1[sample(n, 25L)] <- NA
+
+  between <- function(proper, seed) {
+    set.seed(seed)
+    imp <- tabfound_impute(d, m = 20L, models = stub_models(), maxit = 1L,
+                           proper = proper, verbose = FALSE)
+    # Spread of each imputed cell across the m completed data sets.
+    rows <- which(imp$where[, "x1"])
+    vals <- vapply(imp$imputations, function(x) x$x1[rows], numeric(length(rows)))
+    mean(apply(vals, 1L, stats::var))
+  }
+  avg <- function(p) mean(vapply(1:3, function(s) between(p, s), numeric(1)))
+
+  fixed <- avg(FALSE)
+  expect_gt(avg(TRUE), fixed)
+  expect_gt(avg("bayes"), fixed)
+})
+
+
+test_that("proper is validated and recorded", {
+  d <- data.frame(a = c(1, 2, NA, 4, 5), b = c(1, 2, 3, 4, 5))
+  imp <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                         proper = TRUE, verbose = FALSE)
+  expect_identical(imp$proper, "bootstrap")
+  # Off by default: the correction costs more bias than it buys coverage
+  # on these models -- see the Properness section of ?tabfound_impute.
+  expect_identical(
+    tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                    verbose = FALSE)$proper,
+    "none"
+  )
+  expect_error(
+    tabfound_impute(d, m = 1L, models = stub_models(), proper = "yes",
+                    verbose = FALSE),
+    "must be"
+  )
 })
 
 
@@ -380,4 +464,167 @@ test_that("print methods say something", {
   expect_match(paste(capture.output(print(stub_models()), type = "message"),
                      collapse = " "),
                "model handle")
+})
+
+
+test_that("a NaN probability row does not become a missing category", {
+  # What a backend returns when the predictors it was handed still hold
+  # NA. Untreated, the NaN row walks through `cumsum` into `lab[NA]` and
+  # deposits NA_character_ in a cell the caller was told was imputed --
+  # the numeric draw has warned about exactly this since it was written.
+  nan_clf <- stub_model("classification")
+  inner   <- nan_clf$spec$predict
+  nan_clf$spec$predict <- function(state, newdata, type = "class", ...) {
+    out <- inner(state, newdata, type, ...)
+    if (identical(type, "prob")) out[1L, ] <- NaN
+    out
+  }
+
+  X <- matrix(rnorm(40), ncol = 2)
+  y <- factor(rep(c("a", "b"), 10))
+  expect_warning(
+    lab <- mi_draw_factor(nan_clf, X, y, matrix(rnorm(8), ncol = 2)),
+    "non-finite probability row"
+  )
+  expect_false(anyNA(lab))
+  expect_true(all(lab %in% levels(y)))
+})
+
+
+test_that("the completed data are checked for cells left missing", {
+  d <- data.frame(a = c(1, 2, NA, 4, 5, 6), b = rnorm(6))
+  mask <- matrix(c(rep(FALSE, 2), TRUE, rep(FALSE, 3), rep(FALSE, 6)),
+                 ncol = 2, dimnames = list(NULL, c("a", "b")))
+  expect_identical(.mi_check_complete(d, mask, "b", 1L), d)
+  expect_error(.mi_check_complete(d, mask, "a", 2L), "left 1 cell missing")
+})
+
+
+test_that("each draw declares the categoricals of its own predictor set", {
+  # The package's headline advantage over the Python wrappers is that
+  # `is.factor()` is exact where a cardinality heuristic guesses. Chained
+  # equations change the predictor set every variable, so a fixed index
+  # vector on the model cannot express it -- the declaration has to be
+  # computed per draw and the model re-specced around it.
+  seen <- new.env(parent = emptyenv())
+  seen$calls <- list()
+  recording_backend <- function(task) {
+    spec_fn <- function(ctx, categorical_features = NULL, ...) {
+      seen$calls <- c(seen$calls, list(categorical_features))
+      if (identical(task, "classification")) stub_classifier_spec()
+      else stub_regressor_spec()
+    }
+    spec_fn
+  }
+  register_backend(name = "catprobe",
+                   build = function(config, task) NULL,
+                   classifier = recording_backend("classification"),
+                   regressor  = recording_backend("regression"))
+  withr::defer(rm("catprobe", envir = .tabfound_backends))
+
+  mk <- function(task) {
+    m <- stub_model(task)
+    m$backend <- "catprobe"
+    m
+  }
+  mods <- tabfound_models(classifier = mk("classification"),
+                          regressor  = mk("regression"))
+
+  set.seed(4)
+  n <- 30L
+  d <- data.frame(num = rnorm(n),
+                  fac = factor(sample(c("a", "b", "c"), n, TRUE)),
+                  z   = rnorm(n))
+  d$num[1:5] <- NA
+  d$fac[6:10] <- NA
+  tabfound_impute(d, m = 1L, models = mods, maxit = 1L, verbose = FALSE)
+
+  # Imputing `num` conditions on (fac, z): the factor is column 1 of that
+  # set. Imputing `fac` conditions on (num, z): neither is categorical, so
+  # nothing is declared and no respec happens.
+  declared <- Filter(Negate(is.null), seen$calls)
+  expect_true(length(declared) >= 1L)
+  expect_true(any(vapply(declared, function(x) identical(as.integer(x), 1L),
+                         logical(1))))
+  # Indices are positions within the predictor set, never in the original
+  # frame -- `fac` is column 2 of `d` and column 1 of `num`'s predictors.
+  expect_false(any(vapply(declared, function(x) identical(as.integer(x), 2L),
+                          logical(1))))
+})
+
+
+test_that("where selects the cells to draw, including observed ones", {
+  set.seed(31)
+  d <- data.frame(a = c(rnorm(18), NA, NA), b = rnorm(20))
+  # Impute only one of the two missing cells.
+  w <- matrix(FALSE, 20L, 2L, dimnames = list(NULL, c("a", "b")))
+  w[19, "a"] <- TRUE
+  imp <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                         where = w, verbose = FALSE)
+  got <- imp$imputations[[1]]
+  expect_false(is.na(got$a[19]))
+  expect_true(is.na(got$a[20]))          # not asked for, left alone
+  expect_identical(got$b, d$b)
+
+  # Overimputation: an observed cell is redrawn, which is the diagnostic
+  # use of `where`, and the original is not silently kept.
+  w2 <- matrix(FALSE, 20L, 2L, dimnames = list(NULL, c("a", "b")))
+  w2[1:3, "a"] <- TRUE
+  over <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                          where = w2, verbose = FALSE)$imputations[[1]]
+  expect_false(any(over$a[1:3] == d$a[1:3]))
+  expect_true(is.na(over$a[19]))
+
+  expect_error(tabfound_impute(d, models = stub_models(), where = w[, 1, drop = FALSE]),
+               "20 x 1")
+  expect_error(tabfound_impute(d, models = stub_models(), where = "yes"),
+               "logical matrix")
+})
+
+
+test_that("post-processing is applied to the drawn values", {
+  d <- data.frame(a = c(rnorm(17), NA, NA, NA), b = rnorm(20))
+  imp <- tabfound_impute(d, m = 2L, models = stub_models(), maxit = 2L,
+                         post = list(a = function(v) pmax(v, 99)),
+                         verbose = FALSE)
+  for (k in 1:2) {
+    got <- imp$imputations[[k]]$a
+    expect_true(all(got[is.na(d$a)] >= 99))
+    expect_identical(got[!is.na(d$a)], d$a[!is.na(d$a)])   # observed untouched
+  }
+
+  expect_error(
+    tabfound_impute(d, models = stub_models(), post = list(a = function(v) v[1]),
+                    verbose = FALSE),
+    "returned 1 value"
+  )
+  expect_error(tabfound_impute(d, models = stub_models(), post = list(zz = identity)),
+               "not in the data")
+  expect_error(tabfound_impute(d, models = stub_models(), post = list(a = 1)),
+               "not")
+})
+
+
+test_that("the chain trace is recorded and reaches mice", {
+  d <- mi_test_df(n = 30L)
+  imp <- tabfound_impute(d, m = 2L, models = stub_models(), maxit = 3L,
+                         seed = 9L, verbose = FALSE)
+
+  expect_identical(dim(imp$chain_mean), c(ncol(d), 3L, 2L))
+  expect_identical(rownames(imp$chain_mean), names(d))
+  # Every visited variable has a number at every sweep of every chain;
+  # the untouched ones stay NA.
+  for (v in imp$visit_sequence) {
+    expect_false(anyNA(imp$chain_mean[v, , ]), info = v)
+  }
+  expect_true(all(is.na(imp$chain_mean["ok", , ])))
+
+  skip_if_not_installed("mice")
+  mids <- as_mids(imp)
+  expect_identical(dim(mids$chainMean), dim(imp$chain_mean))
+  expect_false(anyNA(mids$chainMean[imp$visit_sequence[1], , ]))
+  # The complaint this fixes: `plot()` on the converted object used to
+  # draw an empty frame.
+  pdf(NULL); on.exit(dev.off(), add = TRUE)
+  expect_no_error(print(plot(mids)))
 })

@@ -12,10 +12,19 @@ Rscript inst/simulation/run-mi-sim.R --backend=tabpfn --reps=200 --save
 ```
 
 Options: `--backend` (`lm`, `tabpfn`, `tabicl`), `--reps`, `--n`, `--m`,
-`--maxit`, `--seed`, `--save`. Real backends are located through the same
-environment variables the parity harness uses
+`--maxit`, `--proper`, `--seed`, `--save`. Real backends are located
+through the same environment variables the parity harness uses
 (`TABFOUND_TABPFN_CLF_DIR`, `TABFOUND_TABPFN_REG_DIR`, and the `TABICL`
 equivalents).
+
+`paired-compare.R` reads a saved `-reps.csv` and compares two arms
+replication by replication — McNemar on the coverage indicators, paired
+*t* on the estimates and the interval widths. All arms see the same data
+sets, so the pairing is far sharper than comparing summary columns:
+
+```bash
+Rscript inst/simulation/paired-compare.R results/mi-mar-tabpfn-reps.csv
+```
 
 ## The design
 
@@ -75,10 +84,11 @@ Replacing it with the logistic fit the DGP actually implies moved that to
 
 ## Results
 
-200 replications, `n = 400`, `m = 5`, `maxit = 3`, seed 20260807. All
-arms see the same data sets, replication for replication, so the columns
-are directly comparable. Monte Carlo error is about 0.006–0.010 on a
-bias and 0.02 on a coverage.
+200 replications, `n = 400`, `m = 5`, `maxit = 3`, seed 20260807, at the
+package defaults (`proper = FALSE` — see *Properness* below for what
+happens when that is turned on). All arms see the same data sets,
+replication for replication, so the columns are directly comparable.
+Monte Carlo error is about 0.006–0.010 on a bias and 0.02 on a coverage.
 
 **`x1`** — continuous, ~42% missing, truth 2.0:
 
@@ -171,6 +181,91 @@ imputation's influence is second-hand. If you want intervals you do not
 have to think about, PMM is the safer default today; if you want bias
 removal, they are interchangeable.
 
+## Properness: the correction that makes things worse
+
+The undercoverage above has a textbook fix, and it does not work here.
+
+A PFN draws each query row independently given a fixed context, so the
+`m` chains of an imputation differ only in the noise of the draw. No
+parameter uncertainty enters, which is exactly what makes an imputer
+improper under Rubin's rules — `tabfound_syn()` says so in its own
+documentation and bootstraps the context by default for that reason.
+`tabfound_impute(proper = TRUE)` offers the same correction: resample the
+observed rows once per imputation, then run the chain against that
+context. mice's `norm.boot` and `polyreg.boot` are the same idea.
+
+Run both ways on the same 200 data sets (`--proper=TRUE`, everything else
+identical), the correction behaves completely differently for the two
+imputers.
+
+**The `lm` arm — a correctly specified parametric imputer:**
+
+| coef | bias | CI width | coverage |
+|---|---|---|---|
+| x1 | +0.003 → +0.003 | 0.283 → 0.325 | 0.935 → 0.950 |
+| x2 | −0.005 → −0.007 | 0.291 → 0.323 | **0.910 → 0.935** |
+| g  | +0.003 → +0.008 | 0.538 → 0.650 | 0.945 → 0.965 |
+
+Textbook: bias does not move, intervals widen 11–21%, coverage goes up.
+
+**The `tabpfn` arm — the same correction, same data sets:**
+
+| coef | bias | CI width | coverage |
+|---|---|---|---|
+| x1 | −0.008 → **−0.062** | 0.314 → 0.547 | 0.965 → 0.955 |
+| x2 | +0.008 → **+0.041** | 0.308 → 0.436 | **0.900 → 0.955** |
+| g  | +0.011 → **−0.069** | 0.559 → 0.792 | 0.940 → 0.955 |
+
+Coverage is repaired and the estimate is wrecked. On `x1` the bias goes
+from −0.008 to −0.062 against a complete-case bias of −0.111: better than
+deleting the rows, but only just, where the default removes 93% of it.
+Paired on the data set, the proper estimates are farther from truth on
+every coefficient — mean absolute error 0.061 → 0.092 on `x1`
+(*p* = 2e-12), 0.067 → 0.081 on `x2` (*p* = 2e-05), 0.121 → 0.138 on `g`
+(*p* = 0.012) — and every interval is wider (all *p* < 1e-9). The
+coverage that buys is bought with width, not with accuracy.
+
+**Why.** A bootstrap of the context is not the same model with different
+parameters. It is a worse model. Resampling *n* rows with replacement
+leaves 63% of them distinct (50% under `proper = "bayes"`, whose
+Dirichlet weights concentrate harder), so an in-context learner — whose
+entire fit *is* its context — loses a third of its training data and
+gains ties it never saw during pre-training. A parametric imputer barely
+notices: least squares on 145 distinct rows with multiplicities is still
+least squares.
+
+A single-data-set diagnostic points the same way. Under `proper = TRUE`
+TabPFN's draws for the deleted cells correlate less with the values that
+were actually deleted (0.803 → 0.784 per draw, 0.889 → 0.875 for the
+imputation mean) at essentially unchanged dispersion (1.00 → 1.02 of the
+true conditional SD). Draws that are no wider but less informative are
+the errors-in-variables condition, and attenuation of every coefficient
+is what it predicts.
+
+**What ships.** `proper = FALSE` is the default, against the theory and
+with the numbers. `proper = TRUE` and `proper = "bayes"` are available
+for anyone who needs nominal coverage more than a point estimate.
+
+Two things this does *not* establish. It is one DGP at one sample size;
+the balance could differ where the observed context is large enough that
+losing 37% of it costs little. And it is not a licence to read the
+default's intervals as correct — the `x2` undercoverage at 0.900 is real,
+it is just cheaper than the cure. Whether properness can be had for an
+in-context learner without degrading the context is open: every
+resampling scheme duplicates rows.
+
+Reproduce with:
+
+```bash
+Rscript inst/simulation/run-mi-sim.R --backend=tabpfn --reps=200 --proper=TRUE --save
+Rscript inst/simulation/paired-compare.R results/mi-mar-tabpfn-proper-reps.csv
+```
+
+The variant that resamples per *sweep* rather than per imputation was
+measured too (`mi-mar-tabpfn-proper-persweep.csv`) and lands in the same
+place — bias −0.060, widths 0.604/0.445/0.710 — so this is not an
+artefact of where the resample sits in the loop.
+
 ## Reading the numbers
 
 `bias` is against the known truth; `coverage` is the share of replication
@@ -180,4 +275,5 @@ that is around 0.005–0.010 here, so differences smaller than ~0.02 are
 noise. Coverage carries about ±0.02.
 
 Results land in `inst/simulation/results/mi-mar-<backend>.csv` with
-`--save`.
+`--save`, plus `-reps.csv` with the per-replication estimates. Runs in a
+non-default regime tag themselves: `-proper`, `-bayes`.

@@ -172,6 +172,33 @@ collect_between_layers <- function(x = NULL) {
 }
 
 
+#' Let go of a chunk's or a member's intermediates before the next one
+#'
+#' The same mechanism as [collect_between_layers()] with different
+#' arithmetic. Between layers the collection has to earn its
+#' millisecond, because a small carried state means small savings --
+#' hence the size test. Between prediction chunks and between ensemble
+#' members there is nothing to weigh: each iteration is a whole forward
+#' pass over the training context, so the fixed cost is never the
+#' deciding term, and each leaves behind everything that pass allocated.
+#'
+#' This is where the accumulation actually bites. Every backend already
+#' collects between layers; the loop *above* those -- eight members, each
+#' running the full stack, then the next chunk doing it again -- held all
+#' of it until something else triggered a collection.
+#'
+#' @return Invisibly, whether a collection happened. Honours the same
+#'   `tabfound.collect_between_layers` option, so one switch turns all of
+#'   it off.
+#' @keywords internal
+collect_between_chunks <- function() {
+  if (isFALSE(getOption("tabfound.collect_between_layers", "auto"))) {
+    return(invisible(FALSE))
+  }
+  gc(full = FALSE)
+  invisible(TRUE)
+}
+
 #' Evaluate a function over one axis of a tensor in chunks, in place
 #'
 #' The same trade as [chunked_evaluate()] — peak memory for a little loop
@@ -277,7 +304,14 @@ chunk_apply <- function(X, chunk_size, fn) {
   n <- nrow(X)
   if (n <= chunk_size) return(fn(X))
   starts <- seq(1L, n, by = as.integer(chunk_size))
-  do.call(rbind, lapply(starts, function(s) {
+  do.call(rbind, lapply(seq_along(starts), function(k) {
+    # A chunk's transients are dead the moment it returns, but they are
+    # torch allocations, which R's collector cannot see and will not free
+    # before the next chunk has allocated its own. This is the same
+    # collection [collect_between_layers()] does inside a stack, one level
+    # up: between chunks rather than between layers.
+    if (k > 1L) collect_between_chunks()
+    s <- starts[[k]]
     e <- min(s + as.integer(chunk_size) - 1L, n)
     fn(X[s:e, , drop = FALSE])
   }))
@@ -310,6 +344,32 @@ member_cache <- function(store, i, build) {
   cache <- build()
   assign(key, cache, envir = store)
   cache
+}
+
+#' A store pre-filled from a persisted cache
+#'
+#' The lazy backends build member caches on first use, which is right
+#' when the cache lives for one `predict()` call. A cache restored from
+#' disk is already built, so it is loaded into a store of the same shape
+#' and the builders never run.
+#'
+#' @param caches A named list keyed by member index, as
+#'   [tabfound_cache()] stores it, or `NULL`.
+#' @return A [member_cache_store()], or `NULL`.
+#' @keywords internal
+member_cache_store_from <- function(caches) {
+  if (is.null(caches)) return(NULL)
+  store <- member_cache_store()
+  for (nm in names(caches)) assign(nm, caches[[nm]], envir = store)
+  store
+}
+
+#' Everything a member-cache store holds, keyed by member index
+#' @keywords internal
+member_cache_list <- function(store) {
+  if (is.null(store)) return(NULL)
+  out <- as.list(store)
+  out[order(as.integer(names(out)))]
 }
 
 #' Float32 footprint of a tensor, or of an arbitrarily nested list of them
@@ -371,4 +431,68 @@ read_reference_tensors <- function(path) {
   close(con_out); close(con_in)
   on.exit(unlink(tmp), add = FALSE)
   safetensors::safe_load_file(tmp, framework = "torch")
+}
+
+
+#' Set libtorch's thread count
+#'
+#' libtorch defaults to one intra-op thread per core, which is right for
+#' a single model in a single process and catastrophic inside a
+#' `parallel` / `future` worker pool: `k` workers each spawning `n_cores`
+#' threads oversubscribe the machine by `k`-fold, and the run gets slower
+#' the more workers you add.
+#'
+#' This is the knob for that. The rule of thumb for `k` R workers is
+#' `tabfound_threads(max(1, parallel::detectCores() %/% k))`, called
+#' inside each worker -- the setting is per process.
+#'
+#' The other half of the advice is not to fork at all: multiple-imputation
+#' chains and ensemble members are already sequential calls into a
+#' multi-threaded library, so the parallelism is better left to torch
+#' than taken from it. Forking a process that has already initialised
+#' libtorch is its own hazard -- the child inherits a thread pool it
+#' cannot use -- so a worker pool must be created *before* the first
+#' torch call, or with `future::plan(multisession)` rather than
+#' `multicore`.
+#'
+#' Set it **before the first forward pass**. libtorch's native backend
+#' refuses both counts once its parallel region has started, and says so
+#' on stderr from C++ rather than through an R condition, so a late call
+#' looks as though it worked. Reading back the value is the check.
+#'
+#' @param n Number of intra-op threads. `NULL` reports the current
+#'   setting without changing it.
+#' @param interop Number of inter-op threads, or `NULL` to leave it.
+#' @return Invisibly, the intra-op thread count in effect afterwards.
+#' @examples
+#' \dontrun{
+#' tabfound_threads()        # report
+#' tabfound_threads(4L)      # four intra-op threads in this process
+#' }
+#' @export
+tabfound_threads <- function(n = NULL, interop = NULL) {
+  current <- function() {
+    tryCatch(torch::torch_get_num_threads(), error = function(e) NA_integer_)
+  }
+  if (!is.null(n)) {
+    n <- as.integer(n)
+    if (is.na(n) || n < 1L) cli::cli_abort("{.arg n} must be a positive integer.")
+    tryCatch(torch::torch_set_num_threads(n),
+             error = function(e) cli::cli_warn(c(
+               "Could not set the thread count: {conditionMessage(e)}"
+             )))
+  }
+  if (!is.null(interop)) {
+    interop <- as.integer(interop)
+    if (is.na(interop) || interop < 1L) {
+      cli::cli_abort("{.arg interop} must be a positive integer.")
+    }
+    tryCatch(torch::torch_set_num_interop_threads(interop),
+             error = function(e) cli::cli_warn(c(
+               "Could not set the inter-op thread count.",
+               i = "libtorch only allows this before the parallel region \\
+                    starts -- set it before the first forward pass."
+             )))
+  }
+  invisible(current())
 }

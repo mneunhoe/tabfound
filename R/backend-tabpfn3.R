@@ -96,7 +96,7 @@ tabpfn3_sdpa <- function(q, k, v, scaling = NULL) {
     kh <- torch::torch_repeat_interleave(kh, repeats = reps, dim = 2L)
     vh <- torch::torch_repeat_interleave(vh, repeats = reps, dim = 2L)
   }
-  ctx <- torch:::torch_scaled_dot_product_attention(
+  ctx <- sdpa(
     query = qh, key = kh, value = vh, dropout_p = 0
   )
   ctx$permute(c(1L, 3L, 2L, 4L))
@@ -1749,6 +1749,7 @@ register_tabpfn3_backend <- function() {
     peak_terms    = tabpfn3_peak_terms,
     # NaN and Inf are first-class inputs: imputed with the training mean
     # and flagged in a dedicated indicator channel.
+    kv_cache_capable = TRUE,
     handles_missing = TRUE,
     description   = "TabPFN v3 (Prior-Labs)",
     parity        = "tabpfn 8.2.0 (PyPI)"
