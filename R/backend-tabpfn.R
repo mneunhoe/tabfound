@@ -537,10 +537,16 @@ tabpfn_regressor <- function(ctx,
     y_tr <- as_float_tensor(matrix(y_z, ncol = 1L),
                             device = dev)$squeeze(-1L)$unsqueeze(1L)
     x_te <- as_float_tensor(as.matrix(newdata), device = dev)$unsqueeze(1L)
-    out <- torch::with_no_grad({
-      net(x_tr, y_tr, x_te, column_embeddings = col_emb)
-    })
-    as.matrix(bar_logits_to_samples(out$logits[1, , ], borders,
+    out <- torch::with_no_grad(tabpfn_forward(
+      net, x_tr, y_tr, x_te, col_emb,
+      save_peak_memory_factor = save_peak_memory_factor,
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
+    # Same tempering the mean and the quantiles get in `.single_pass_chunk`:
+    # a draw has to come from the distribution reported beside it, so the
+    # temperature cannot apply to only two of the three types.
+    logits <- out$logits[1, , ]
+    if (softmax_temperature != 1) logits <- logits / softmax_temperature
+    as.matrix(bar_logits_to_samples(logits, borders,
                                     n_samples = as.integer(n_samples),
                                     seed = seed)$cpu()) *
       state$y_std + state$y_mean
