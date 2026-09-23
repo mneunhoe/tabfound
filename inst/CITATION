@@ -1,0 +1,44 @@
+citHeader("To cite tabfound in publications, use:")
+
+bibentry(
+  bibtype = "Manual",
+  title   = "{tabfound}: Tabular Foundation Models in {R}",
+  author  = person("Marcel", "Neunhoeffer"),
+  year    = "2026",
+  note    = sprintf("R package version %s", utils::packageVersion("tabfound")),
+  url     = "https://github.com/mneunhoe/tabfound",
+  textVersion = paste0(
+    "Neunhoeffer, M. (2026). tabfound: Tabular Foundation Models in R. ",
+    "R package version ", utils::packageVersion("tabfound"), ". ",
+    "https://github.com/mneunhoe/tabfound"
+  )
+)
+
+citFooter(
+  "Please also cite the model you use. For TabPFN and TabICL see below;",
+  "for TabFM and Mitra, see the model card on the Hugging Face repository",
+  "listed by list_models()."
+)
+
+bibentry(
+  bibtype = "Article",
+  title   = "Accurate predictions on small data with a tabular foundation model",
+  author  = c(person("Noah", "Hollmann"), person("Samuel", "Müller"),
+              person("Lennart", "Purucker"), person("Arjun", "Krishnakumar"),
+              person("Max", "Körfer"), person("Shi Bin", "Hoo"),
+              person("Robin Tibor", "Schirrmeister"), person("Frank", "Hutter")),
+  journal = "Nature",
+  year    = "2025",
+  volume  = "637",
+  pages   = "319--326",
+  doi     = "10.1038/s41586-024-08328-6"
+)
+
+bibentry(
+  bibtype   = "InProceedings",
+  title     = "{TabICL}: A Tabular Foundation Model for In-Context Learning on Large Data",
+  author    = c(person("Jingang", "Qu"), person("David", "Holzmüller"),
+                person("Gaël", "Varoquaux"), person("Marine", "Le Morvan")),
+  booktitle = "Proceedings of the 42nd International Conference on Machine Learning",
+  year      = "2025"
+)
