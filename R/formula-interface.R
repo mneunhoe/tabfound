@@ -30,13 +30,19 @@
 # `indicators = "none"`. Coercing first keeps the formula and xy
 # interfaces producing the same one-column-per-predictor result.
 # @keywords internal
-.coerce_for_mold <- function(data) {
+#
+# `keep_character` names string columns to leave as strings: text
+# candidates, which the frame expansion may turn into LSA features after
+# mold. Made factors here, their level set would be baked into the
+# blueprint, and every unseen sentence at predict time would be reported
+# as a novel level and blanked.
+.coerce_for_mold <- function(data, keep_character = character()) {
   if (!is.data.frame(data)) return(data)
   for (j in seq_along(data)) {
     col <- data[[j]]
     if (is.logical(col)) {
       data[[j]] <- factor(col, levels = c(FALSE, TRUE))
-    } else if (is.character(col)) {
+    } else if (is.character(col) && !names(data)[[j]] %in% keep_character) {
       data[[j]] <- factor(col)
     }
   }
@@ -55,7 +61,12 @@
   out <- vapply(predictors, function(col) {
     if (is.factor(col)) {
       as.numeric(as.integer(col) - 1L)
-    } else if (inherits(col, c("Date", "POSIXct", "POSIXt", "difftime"))) {
+    } else if (inherits(col, "difftime")) {
+      # Seconds, whatever unit the object carries. Plain `as.numeric()`
+      # returned the magnitude in its own units, so the same duration was
+      # 1.5 or 90 depending on how it had been built.
+      as.numeric(col, units = "secs")
+    } else if (inherits(col, c("Date", "POSIXct", "POSIXt"))) {
       as.numeric(col)
     } else if (is.numeric(col) || is.logical(col)) {
       as.numeric(col)
@@ -179,6 +190,11 @@
 #'   `"fail"` refuses, and `"pass"` forces the data through as it is --
 #'   which warns, and produces `NaN` predictions, on a backend that
 #'   handles neither.
+#' @param transform_text,transform_dates,min_cardinality_for_text,text_n_components
+#'   How text and date columns are expanded before they reach the model;
+#'   see [tabular_classifier()]. `"auto"` follows the checkpoint's own
+#'   recipe, which turns both on for TabPFN v3.5 and leaves them off
+#'   elsewhere.
 #' @param ... Passed to [tabular_classifier()] / [tabular_regressor()].
 #' @return An object of class `tabfound_fit`.
 #' @examples
@@ -194,25 +210,40 @@ tabfound <- function(x, ...) {
 #' @rdname tabfound
 #' @export
 tabfound.formula <- function(x, data, model, mode = "auto", backend = NULL,
-                             device = "cpu", na_action = "auto", ...) {
+                             device = "cpu", na_action = "auto",
+                             transform_text = "auto", transform_dates = "auto",
+                             min_cardinality_for_text = 30L,
+                             text_n_components = 30L, ...) {
   require_suggested("hardhat")
-  data <- .coerce_for_mold(data)
+  opts <- .preprocess_options(transform_text, transform_dates,
+                              min_cardinality_for_text, text_n_components)
+  raw <- data
+  keep <- .text_columns(raw, opts$min_cardinality_for_text)
+  data <- .coerce_for_mold(data, keep_character = keep)
   # `indicators = "none"` keeps factors as single columns rather than
   # dummy-expanding them: these models take ordinal codes, and one-hot
   # would both widen the table and hide the column's identity.
   bp <- hardhat::default_formula_blueprint(indicators = "none",
                                            intercept = FALSE)
   processed <- hardhat::mold(x, data, blueprint = bp)
-  .tabfound_bridge(processed, model, mode, backend, device, na_action, ...)
+  .tabfound_bridge(processed, model, mode, backend, device, na_action,
+                   opts = opts, raw = raw, keep_character = keep, ...)
 }
 
 #' @rdname tabfound
 #' @export
 tabfound.data.frame <- function(x, y, model, mode = "auto", backend = NULL,
-                                device = "cpu", na_action = "auto", ...) {
+                                device = "cpu", na_action = "auto",
+                                transform_text = "auto", transform_dates = "auto",
+                                min_cardinality_for_text = 30L,
+                                text_n_components = 30L, ...) {
   require_suggested("hardhat")
-  processed <- hardhat::mold(.coerce_for_mold(x), y)
-  .tabfound_bridge(processed, model, mode, backend, device, na_action, ...)
+  opts <- .preprocess_options(transform_text, transform_dates,
+                              min_cardinality_for_text, text_n_components)
+  keep <- .text_columns(x, opts$min_cardinality_for_text)
+  processed <- hardhat::mold(.coerce_for_mold(x, keep_character = keep), y)
+  .tabfound_bridge(processed, model, mode, backend, device, na_action,
+                   opts = opts, raw = x, keep_character = keep, ...)
 }
 
 #' @rdname tabfound
@@ -250,27 +281,69 @@ tabfound.default <- function(x, ...) {
 # `processed` list.
 # @keywords internal
 .tabfound_bridge <- function(processed, model, mode, backend, device,
-                             na_action, ...) {
+                             na_action, opts = .preprocess_options(),
+                             raw = NULL, keep_character = character(), ...) {
   hardhat::validate_outcomes_are_univariate(processed$outcomes)
   outcome <- processed$outcomes[[1]]
 
   mode <- match.arg(mode, c("auto", "classification", "regression"))
   if (identical(mode, "auto")) mode <- .infer_mode(outcome)
   na_action <- match.arg(na_action, c("auto", "pass", "impute", "fail"))
+  dots <- list(...)
 
-  x <- .encode_predictors(processed$predictors)
+  # Text and date expansion, on the molded predictors with their typed
+  # columns put back (see `.restore_typed_columns()`). Done here rather
+  # than inside `fit()` because which columns are categorical has to be
+  # known before the model is constructed, and expansion decides where
+  # they end up.
+  predictors <- .restore_typed_columns(processed$predictors, raw,
+                                       keep_character = keep_character)
+  restored <- attr(predictors, "restored")
+  attr(predictors, "restored") <- NULL
+  expansion <- NULL
+  if (.frame_needs_expansion(predictors, opts)) {
+    # "auto" is decided by the checkpoint's recipe, read without loading
+    # weights -- and only when there is something it would decide.
+    cfg <- if (identical(opts$transform_text, "auto") ||
+               identical(opts$transform_dates, "auto")) {
+      .resolve_backend_config(model, mode, backend)$config
+    } else NULL
+    declared <- if (length(dots$categorical_features))
+      names(predictors)[dots$categorical_features] else character()
+    fitted <- fit_frame_expansion(
+      predictors,
+      transform_text  = .resolve_transform_flag(opts$transform_text, cfg,
+                                                "TRANSFORM_TEXT", "transform_text"),
+      transform_dates = .resolve_transform_flag(opts$transform_dates, cfg,
+                                                "TRANSFORM_DATES", "transform_dates"),
+      min_cardinality_for_text = opts$min_cardinality_for_text,
+      text_n_components = opts$text_n_components,
+      declared = declared
+    )
+    predictors <- fitted$data
+    expansion <- fitted$state
+    expansion$keep_character <- keep_character
+    expansion$restored <- restored
+    if (length(declared)) {
+      dots$categorical_features <- .expanded_indices_of(declared, expansion)
+    }
+  }
+
+  x <- .encode_predictors(predictors)
 
   # Hand the backend the columns we know are categorical, unless the
   # caller has already said. Nothing downstream can recover this: by the
   # time the matrix exists, a factor is just small integers, and the
   # reference's own cardinality heuristic would only catch the columns
   # with fewer than four levels.
-  dots <- list(...)
-  cat_idx <- unname(.categorical_predictor_indices(processed$predictors))
+  cat_idx <- unname(.categorical_predictor_indices(predictors))
   if (!"categorical_features" %in% names(dots)) {
     dots$categorical_features <- cat_idx
   }
-  ctor_args <- c(list(model, backend = backend, device = device), dots)
+  # The inner model gets the same options: a refit on the engine API should
+  # decide what this did. It is handed an encoded matrix here, so it has
+  # nothing to expand itself.
+  ctor_args <- c(list(model, backend = backend, device = device), opts, dots)
 
   if (identical(mode, "classification")) {
     y <- if (is.factor(outcome)) outcome else factor(outcome)
@@ -298,6 +371,7 @@ tabfound.default <- function(x, ...) {
     mode      = mode,
     na_action = na_action,
     imputer   = imputer,
+    expansion = expansion,
     blueprint = processed$blueprint,
     class     = "tabfound_fit"
   )
@@ -326,8 +400,18 @@ predict.tabfound_fit <- function(object, new_data, type = NULL, ...) {
   require_suggested("hardhat")
   type <- type %||% if (identical(object$mode, "classification")) "class" else "mean"
 
-  forged <- hardhat::forge(.coerce_for_mold(new_data), object$blueprint)
-  x <- .encode_predictors(forged$predictors)
+  exp_state <- object$expansion
+  keep <- exp_state$keep_character %||% character()
+  forged <- hardhat::forge(.coerce_for_mold(new_data, keep_character = keep),
+                           object$blueprint)
+  predictors <- forged$predictors
+  if (!is.null(exp_state)) {
+    predictors <- .restore_typed_columns(predictors, new_data,
+                                         exp_state$restored %||% character())
+    attr(predictors, "restored") <- NULL
+    predictors <- transform_frame_expansion(predictors, exp_state)
+  }
+  x <- .encode_predictors(predictors)
   if (identical(object$na_action, "impute") && !is.null(object$imputer)) {
     x <- .apply_imputer(x, object$imputer)
   }

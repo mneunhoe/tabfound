@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-08-11">
+<meta name="dcterms.date" content="2026-09-22">
 
 <title>How big a table can each model handle?</title>
 <style>
@@ -122,7 +122,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">August 11, 2026</p>
+      <p class="date">September 22, 2026</p>
     </div>
   </div>
   
@@ -169,7 +169,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">c</span>(<span class="at">available_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_avail_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>),</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">installed_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_total_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>))</span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; available_gb installed_gb </span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         38.0         51.5</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         32.5         51.5</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </section>
 <section id="the-headline-numbers" class="level2">
@@ -206,26 +206,33 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 <tr class="odd">
 <td style="text-align: left;">TabPFN v3</td>
-<td style="text-align: right;">188</td>
-<td style="text-align: right;">1563</td>
-<td style="text-align: right;">44068</td>
-<td style="text-align: right;">134352</td>
+<td style="text-align: right;">161</td>
+<td style="text-align: right;">1500</td>
+<td style="text-align: right;">41658</td>
+<td style="text-align: right;">130623</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">TabICL</td>
-<td style="text-align: right;">132</td>
-<td style="text-align: right;">797</td>
-<td style="text-align: right;">2125</td>
-<td style="text-align: right;">4782</td>
+<td style="text-align: left;">TabPFN v3.5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1290</td>
+<td style="text-align: right;">20852</td>
+<td style="text-align: right;">49486</td>
 </tr>
 <tr class="odd">
+<td style="text-align: left;">TabICL</td>
+<td style="text-align: right;">34</td>
+<td style="text-align: right;">550</td>
+<td style="text-align: right;">1583</td>
+<td style="text-align: right;">3647</td>
+</tr>
+<tr class="even">
 <td style="text-align: left;">TabFM</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">0</td>
-<td style="text-align: right;">34322</td>
+<td style="text-align: right;">375</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td style="text-align: left;">Mitra</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">204</td>
@@ -270,26 +277,33 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 <tr class="odd">
 <td style="text-align: left;">TabPFN v3</td>
-<td style="text-align: right;">1219</td>
-<td style="text-align: right;">37898</td>
-<td style="text-align: right;">129733</td>
-<td style="text-align: right;">277535</td>
+<td style="text-align: right;">1166</td>
+<td style="text-align: right;">35649</td>
+<td style="text-align: right;">126124</td>
+<td style="text-align: right;">270077</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">TabICL</td>
-<td style="text-align: right;">631</td>
-<td style="text-align: right;">1959</td>
-<td style="text-align: right;">4616</td>
-<td style="text-align: right;">9929</td>
+<td style="text-align: left;">TabPFN v3.5</td>
+<td style="text-align: right;">895</td>
+<td style="text-align: right;">19062</td>
+<td style="text-align: right;">47697</td>
+<td style="text-align: right;">104965</td>
 </tr>
 <tr class="odd">
+<td style="text-align: left;">TabICL</td>
+<td style="text-align: right;">421</td>
+<td style="text-align: right;">1454</td>
+<td style="text-align: right;">3518</td>
+<td style="text-align: right;">7648</td>
+</tr>
+<tr class="even">
 <td style="text-align: left;">TabFM</td>
 <td style="text-align: right;">0</td>
 <td style="text-align: right;">0</td>
-<td style="text-align: right;">31082</td>
-<td style="text-align: right;">134770</td>
+<td style="text-align: right;">324</td>
+<td style="text-align: right;">1966</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td style="text-align: left;">Mitra</td>
 <td style="text-align: right;">128</td>
 <td style="text-align: right;">732</td>
@@ -305,7 +319,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Three things stand out, and all three are measured rather than assumed:</p>
 <ul>
 <li><strong>Nothing is comfortable on 8 GB free.</strong> Before a single activation exists there is a fixed cost of 0.6–2.7 GB depending on backend — R, libtorch, the allocator’s arenas — and 9.5 GB for TabFM. Small tables are fine there; fold-sized ones are not, and the ordering between models at 8 GB says more about that fixed cost than about the architectures.</li>
-<li><strong>TabPFN v3 goes furthest once there is room to work in</strong> — around twenty times TabICL’s context and fifty times Mitra’s, at 50 columns. Not because its state is smaller: v3 carries one vector per <em>column</em> per row where v2.6 carries one per group of three, and Mitra one per feature per row on both axes at once. It reaches further because it is the only backend that never holds that state for the whole table — <code>row_chunk_size</code> runs the first three stages a chunk of rows at a time, which turns the term that decides the ceiling from something that grows with the table into a constant. See “what the knobs buy”.</li>
+<li><strong>TabPFN v3 goes furthest once there is room to work in</strong> — around twenty times TabICL’s context and fifty times Mitra’s, at 50 columns. Not because its state is smaller: v3 carries one vector per <em>column</em> per row where v2.6 carries one per group of three, and Mitra one per feature per row on both axes at once. It reaches further because it is one of the two backends that never hold that state for the whole table — <code>row_chunk_size</code> runs the first three stages a chunk of rows at a time, which turns the term that decides the ceiling from something that grows with the table into a constant. See “what the knobs buy”.</li>
+<li><strong>TabPFN v3.5 has the same mechanism and about half the reach.</strong> Same three stages, same row and column chunking, but a 1024-wide in-context stack against v3’s 512 and 876 MB of weights against 213 MB, so the fixed cost is higher and every row costs more. At 8 GB it does not fit at all; the ordering between it and v3 is about width, not about whether the chunking works.</li>
 <li><strong>TabFM is in a different regime.</strong> 6.5 GB of weights are resident before anything happens, and its 32-member default multiplies what comes after.</li>
 </ul>
 </section>
@@ -314,8 +329,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Capacity is not a row count. Every backend’s state is <em>rows × features</em> (or rows × feature-groups), so doubling the columns costs what doubling the rows costs:</p>
 <div class="cell">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>cols <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">25</span>, <span class="dv">50</span>, <span class="dv">100</span>, <span class="dv">200</span>)</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">envelope_table</span>(<span class="at">models =</span> MODELS[<span class="fu">c</span>(<span class="st">"TabPFN v2.6"</span>, <span class="st">"TabPFN v3"</span>, <span class="st">"TabICL"</span>,</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>                                 <span class="st">"Mitra"</span>)],</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">envelope_table</span>(<span class="at">models =</span> MODELS[<span class="fu">c</span>(<span class="st">"TabPFN v2.6"</span>, <span class="st">"TabPFN v3"</span>, <span class="st">"TabPFN v3.5"</span>,</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>                                 <span class="st">"TabICL"</span>, <span class="st">"Mitra"</span>)],</span>
 <span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>               <span class="at">n_features =</span> cols, <span class="at">available =</span> <span class="fl">32e9</span>,</span>
 <span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>               <span class="at">labels =</span> <span class="fu">paste</span>(cols, <span class="st">"cols"</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output-display">
@@ -342,21 +357,29 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 <tr class="even">
 <td style="text-align: left;">TabPFN v3</td>
-<td style="text-align: right;">60690</td>
-<td style="text-align: right;">60600</td>
-<td style="text-align: right;">44068</td>
-<td style="text-align: right;">7255</td>
-<td style="text-align: right;">994</td>
+<td style="text-align: right;">58878</td>
+<td style="text-align: right;">58791</td>
+<td style="text-align: right;">41658</td>
+<td style="text-align: right;">5500</td>
+<td style="text-align: right;">959</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;">TabICL</td>
-<td style="text-align: right;">5906</td>
-<td style="text-align: right;">3557</td>
-<td style="text-align: right;">2125</td>
-<td style="text-align: right;">1085</td>
-<td style="text-align: right;">487</td>
+<td style="text-align: left;">TabPFN v3.5</td>
+<td style="text-align: right;">20888</td>
+<td style="text-align: right;">20874</td>
+<td style="text-align: right;">20852</td>
+<td style="text-align: right;">6974</td>
+<td style="text-align: right;">1098</td>
 </tr>
 <tr class="even">
+<td style="text-align: left;">TabICL</td>
+<td style="text-align: right;">4482</td>
+<td style="text-align: right;">2680</td>
+<td style="text-align: right;">1583</td>
+<td style="text-align: right;">785</td>
+<td style="text-align: right;">327</td>
+</tr>
+<tr class="odd">
 <td style="text-align: left;">Mitra</td>
 <td style="text-align: right;">4470</td>
 <td style="text-align: right;">1776</td>
@@ -396,15 +419,15 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tbody>
 <tr class="odd">
 <td style="text-align: right;">200</td>
-<td style="text-align: right;">2125</td>
+<td style="text-align: right;">1583</td>
 </tr>
 <tr class="even">
 <td style="text-align: right;">1000</td>
-<td style="text-align: right;">1326</td>
+<td style="text-align: right;">783</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;">5000</td>
-<td style="text-align: right;">1302</td>
+<td style="text-align: right;">759</td>
 </tr>
 </tbody>
 </table>
@@ -444,19 +467,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tbody>
 <tr class="odd">
 <td style="text-align: left;">defaults (8 members)</td>
-<td style="text-align: right;">2125</td>
+<td style="text-align: right;">1583</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">n_estimators = 4</td>
-<td style="text-align: right;">2795</td>
+<td style="text-align: right;">2096</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">n_estimators = 1</td>
-<td style="text-align: right;">6852</td>
+<td style="text-align: right;">5207</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">defaults + kv_cache</td>
-<td style="text-align: right;">1914</td>
+<td style="text-align: right;">1438</td>
 </tr>
 </tbody>
 </table>
@@ -487,19 +510,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tbody>
 <tr class="odd">
 <td style="text-align: right;">1</td>
-<td style="text-align: right;">44068</td>
+<td style="text-align: right;">41658</td>
 </tr>
 <tr class="even">
 <td style="text-align: right;">2</td>
-<td style="text-align: right;">62211</td>
+<td style="text-align: right;">41566</td>
 </tr>
 <tr class="odd">
 <td style="text-align: right;">4</td>
-<td style="text-align: right;">71282</td>
+<td style="text-align: right;">41520</td>
 </tr>
 <tr class="even">
 <td style="text-align: right;">8</td>
-<td style="text-align: right;">75818</td>
+<td style="text-align: right;">41498</td>
 </tr>
 </tbody>
 </table>
@@ -532,19 +555,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tbody>
 <tr class="odd">
 <td style="text-align: left;">off (one pass)</td>
-<td style="text-align: right;">4313</td>
+<td style="text-align: right;">4179</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">2048 (the default)</td>
-<td style="text-align: right;">44068</td>
+<td style="text-align: right;">41658</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">512</td>
-<td style="text-align: right;">60450</td>
+<td style="text-align: right;">58646</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">128</td>
-<td style="text-align: right;">60450</td>
+<td style="text-align: right;">58646</td>
 </tr>
 </tbody>
 </table>
@@ -560,7 +583,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; List of 6</span></span>
 <span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;  $ row_chunk_size: int 1024</span></span>
 <span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;  $ col_chunk_size: int NA</span></span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;  $ peak_bytes    : num 1.31e+10</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;  $ peak_bytes    : num 1.35e+10</span></span>
 <span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;  $ verdict       : chr "ok"</span></span>
 <span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;  $ feasible      : logi TRUE</span></span>
 <span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;  $ note          : NULL</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -591,11 +614,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: left;">–</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;">tabicl</td>
-<td style="text-align: left;">0.8</td>
-<td style="text-align: left;">1.3</td>
-<td style="text-align: left;">2.1</td>
-<td style="text-align: left;">4</td>
+<td style="text-align: left;">tabfm</td>
+<td style="text-align: left;">7.5</td>
+<td style="text-align: left;">16.5</td>
+<td style="text-align: left;">53.1</td>
+<td style="text-align: left;">–</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">tabpfn</td>
@@ -638,7 +661,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tr class="odd">
 <td>under ~2,000 rows, any width</td>
 <td>anything</td>
-<td>all six are comfortable</td>
+<td>all seven are comfortable</td>
 </tr>
 <tr class="even">
 <td>a few thousand rows, ≤ 100 columns</td>
@@ -648,19 +671,24 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tr class="odd">
 <td>tens of thousands of rows</td>
 <td>TabPFN v3</td>
-<td>the only backend that bounds the row axis of its embedding tensor; 32,768 × 120 measures 18 GB</td>
+<td>one of the two backends that bound the row axis of their embedding tensor, and the roomier of them; 32,768 × 120 measures 18 GB against v3.5’s 23 GB</td>
 </tr>
 <tr class="even">
-<td>wide (200+ columns)</td>
-<td>TabPFN v2.6, with <code>save_peak_memory_factor</code></td>
-<td>v3’s chunking bounds rows, not columns, and its state is a vector per column</td>
+<td>tens of thousands of rows, and you want v3.5</td>
+<td>TabPFN v3.5</td>
+<td>same chunking, about half the reach; budget roughly twice v3’s memory for the same table</td>
 </tr>
 <tr class="odd">
+<td>wide (200+ columns)</td>
+<td>TabPFN v2.6, with <code>save_peak_memory_factor</code></td>
+<td>the v3 and v3.5 chunking bounds rows, not columns, and their state is a vector per column</td>
+</tr>
+<tr class="even">
 <td>large and you want TabICL’s ensembling</td>
 <td>TabICL with <code>n_estimators</code> lowered</td>
 <td>the default 8 costs about three times what one does</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>small (hundreds of rows)</td>
 <td>Mitra or TabFM are fine here</td>
 <td>this is the size they were published for</td>

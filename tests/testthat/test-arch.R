@@ -49,6 +49,24 @@ arch_test_configs <- function() {
                     softmax_scaling_mlp_hidden_dim = 4L, max_num_classes = 6L,
                     n_out = 6L, n_bar_bins = 16L),
       task = "classification"),
+    # v3.5 carries no `head`: one checkpoint serves both tasks, so `task`
+    # is what picks which decoder the diagram draws. Run as a regressor
+    # here so the pair covers both branches of `tabpfn35_describe()`.
+    tabpfn35 = list(
+      config = list(arch = "tabpfn_v3_5", head = "multitask", embed_dim = 8L,
+                    feat_agg_num_cls_tokens = 2L, ff_factor = 2L,
+                    feature_group_size = 3L, use_nan_indicators = TRUE,
+                    fourier_encoding_num_frequencies = 4L,
+                    cell_ecdf_num_frequencies = 2L, cell_ecdf_num_buckets = 64L,
+                    dist_embed_num_blocks = 1L, dist_embed_num_heads = 2L,
+                    dist_embed_num_inducing_points = 4L,
+                    feat_agg_num_blocks = 1L, feat_agg_num_heads = 2L,
+                    nlayers = 2L, icl_num_heads = 2L, icl_num_kv_heads_test = 1L,
+                    decoder_head_dim = 4L, decoder_num_heads = 2L,
+                    decoder_use_softmax_scaling = TRUE,
+                    softmax_scaling_mlp_hidden_dim = 4L, max_num_classes = 6L,
+                    num_buckets = 16L, n_bar_bins = 16L),
+      task = "regression"),
     tabicl = list(
       config = list(arch = "tabicl", head = "classifier", max_classes = 6L,
                     num_quantiles = 9L, embed_dim = 8L, col_num_blocks = 1L,

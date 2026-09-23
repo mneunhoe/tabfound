@@ -9,9 +9,12 @@ test_that("the catalogue resolves ids and family + task", {
   m <- list_models()
   expect_s3_class(m, "data.frame")
   expect_true(all(c("id", "backend", "task", "downloaded", "repo") %in% names(m)))
-  expect_true(all(m$task %in% c("classification", "regression")))
+  # `"both"` is TabPFN v3.5's multitask checkpoint, which answers to
+  # either task rather than to one.
+  expect_true(all(m$task %in% c("classification", "regression", "both")))
   expect_setequal(unique(m$backend),
-                  c("tabpfn", "tabpfn26", "tabpfn3", "tabicl", "tabfm", "mitra"))
+                  c("tabpfn", "tabpfn26", "tabpfn3", "tabpfn35",
+                    "tabicl", "tabfm", "mitra"))
 
   # An exact id resolves without a task.
   expect_identical(tabfound:::.catalog_id("tabpfn-v2.5-classifier"),
@@ -48,6 +51,22 @@ test_that("the catalogue resolves ids and family + task", {
   expect_true(all(spec %in% m$id))
   expect_true(all(m$backend[match(spec, m$id)] == "tabpfn3"))
   for (id in spec) expect_identical(tabfound:::.catalog_id(id), id)
+
+  # v3.5 is one checkpoint for both tasks, so the *same* id comes back
+  # whichever one is asked for -- the artifacts have no head of their own.
+  # Splitting it into two ids would download 876 MB twice.
+  expect_identical(tabfound:::.catalog_id("tabpfn-v3.5", "classification"),
+                   "tabpfn-v3.5")
+  expect_identical(tabfound:::.catalog_id("tabpfn-v3.5", "regression"),
+                   "tabpfn-v3.5")
+  expect_identical(m$task[m$id == "tabpfn-v3.5"], "both")
+  expect_identical(m$backend[m$id == "tabpfn-v3.5"], "tabpfn35")
+  # Its two variants follow the v3 rule: exact id only, no family, so
+  # `"tabpfn-v3.5"` keeps meaning the default.
+  spec35 <- c("tabpfn-v3.5-fast", "tabpfn-v3.5-multiclass")
+  expect_true(all(spec35 %in% m$id))
+  for (id in spec35) expect_identical(tabfound:::.catalog_id(id), id)
+  expect_true(all(m$backend[match(spec35, m$id)] == "tabpfn35"))
   # Anything not ours passes through as NULL, which is what lets a plain
   # path or Hub repo id reach the old code path untouched.
   expect_null(tabfound:::.catalog_id("/some/local/dir", "classification"))

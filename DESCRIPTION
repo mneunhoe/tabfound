@@ -24,6 +24,8 @@ Depends:
 Imports:
     torch,
     cli,
+    Matrix,
+    methods,
     stats,
     utils
 Suggests:

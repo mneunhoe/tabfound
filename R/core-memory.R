@@ -232,6 +232,16 @@
     source                 = blob$source %||% "unknown",
     notes                  = blob$notes %||% ""
   )
+  # Every byte count as a double, whatever `fromJSON()` decided. A value
+  # that fits in an R integer comes back as one, and byte counts at this
+  # scale then overflow silently: `intercept_bytes + weights_bytes` is
+  # 2.8e9 for TabPFN v3.5 -- past `.Machine$integer.max` -- and R answers
+  # `NA` with a warning rather than the number. The estimate then compares
+  # NA against a threshold and the preflight says nothing at all. Smaller
+  # backends never reached the boundary, which is why this held for five
+  # of them.
+  num <- setdiff(names(out), c("source", "notes"))
+  out[num] <- lapply(out[num], function(v) if (is.null(v)) v else as.numeric(v))
   assign(key, out, envir = .coef_cache)
   out
 }
@@ -642,6 +652,30 @@
 }
 
 
+# A chunk size as stored in a measurement file, as an integer or
+# `NA_integer_`.
+#
+# Four spellings mean "not set", and every reader has to take all four.
+# The field is absent from grids measured before it was recorded; JSON
+# `null` in files written since `inst/memory/calibrate.R` passes
+# `na = "null"`; `{}` in a file a refit has read and rewritten, since
+# jsonlite reads `null` as `NULL` and writes `NULL` back as an empty
+# object; and, in files written before that fix, the *string* `"NA"`,
+# which is how jsonlite serialises `NA_integer_` under `auto_unbox`. Read
+# naively the string is neither NULL nor NA: `as.integer()` warns, and --
+# worse -- a point measured with chunking off is replayed with the
+# checkpoint's default chunk instead. That misreading is what once let a
+# refit write an empty measurements file over hours of measurement.
+# @keywords internal
+.chunk_field <- function(v) {
+  if (is.list(v)) v <- unlist(v)
+  if (is.null(v) || !length(v)) return(NA_integer_)
+  if (is.character(v)) v[v == "NA"] <- NA_character_
+  out <- suppressWarnings(as.integer(v))
+  if (!length(out)) NA_integer_ else out
+}
+
+
 # float32 throughout; the coef files carry a dtype key for when that
 # stops being true.
 DTYPE_BYTES <- 4
@@ -987,12 +1021,12 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
       s <- c(s, "Lower {.arg predict_chunk_size} (now {chunk}): only one \\
                   chunk of query rows is resident at a time.")
     }
-    # Ordered by how much each moves. On v3 the stage chunking is the
-    # dominant one -- it bounds the `(rows, columns, embedding)` tensor
-    # itself, where `save_peak_memory_factor` only bounds the temporaries
-    # made from it -- so it goes first, and it is the one knob that
-    # changes how the peak grows with rows rather than by how much.
-    if (identical(backend, "tabpfn3")) {
+    # Ordered by how much each moves. On v3 and v3.5 the stage chunking
+    # is the dominant one -- it bounds the `(rows, columns, embedding)`
+    # tensor itself, where `save_peak_memory_factor` only bounds the
+    # temporaries made from it -- so it goes first, and it is the one knob
+    # that changes how the peak grows with rows rather than by how much.
+    if (backend %in% c("tabpfn3", "tabpfn35")) {
       rc <- suppressWarnings(as.numeric(opts$row_chunk_size %||% NA))
       if (is.null(opts$row_chunk_size)) {
         # Explicitly off, which is the one setting that makes the peak
@@ -1001,7 +1035,8 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                     {.code NULL}: stages 0-2 then hold one chunk of rows \\
                     rather than all of them.")
       } else if (!isTRUE(is.finite(rc))) {
-        # The default -- the checkpoint's own, 2048 on every released v3.
+        # The default -- the checkpoint's own, 2048 on every released v3
+        # and v3.5.
         s <- c(s, "Lower {.arg row_chunk_size} below the checkpoint's \\
                     default: stages 0-2 hold one chunk of rows at a time, \\
                     so it is the term that decides how the peak grows.")
@@ -1011,15 +1046,15 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                     decides how the peak grows.")
       }
     }
-    if (backend %in% c("tabpfn26", "tabpfn3") &&
+    if (backend %in% c("tabpfn26", "tabpfn3", "tabpfn35") &&
         is.null(opts$save_peak_memory_factor)) {
       s <- c(s, "Set {.arg save_peak_memory_factor} (try {.val 4}): it \\
                   splits each sublayer's work, for the same answer.")
     }
     if (identical(backend, "tabpfn26")) {
       s <- c(s, "This generation has no stage chunking -- only TabPFN v3 \\
-                  bounds the row axis of its embedding tensor. At these \\
-                  dimensions v3 will cost far less.")
+                  and v3.5 bound the row axis of their embedding tensor. At \\
+                  these dimensions either will cost far less.")
     }
   }
 
@@ -1261,7 +1296,7 @@ suggest_chunk_sizes <- function(model, n_context, n_query = 1000, n_features,
 
   # `NA` is "the checkpoint's own", which is where the search starts.
   top <- est(NA_integer_)
-  if (!isTRUE(top$backend %in% c("tabpfn3", "tabicl", "tabfm"))) {
+  if (!isTRUE(top$backend %in% c("tabpfn3", "tabpfn35", "tabicl", "tabfm"))) {
     return(list(row_chunk_size = NA_integer_, col_chunk_size = NA_integer_,
                 peak_bytes = top$total_peak_bytes, verdict = top$verdict,
                 feasible = top$verdict %in% accept,

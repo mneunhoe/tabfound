@@ -331,7 +331,13 @@ fit_member_pipeline <- function(X_train, cfg,
       i = "Past the budget the reference subsamples features per estimator, \\
            which is not implemented here.",
       i = "Reduce the predictor count, or predict without \\
-           {.arg ensemble_configs_dir}."
+           {.arg ensemble_configs_dir}.",
+      # Text expansion is the easy way to get here without meaning to: each
+      # text column becomes `text_n_components` features, 30 by default,
+      # so a handful of them on a wide table is most of a budget.
+      i = "Text columns count {.val 30} features each once expanded; \\
+           {.code text_n_components} lowers that, and \\
+           {.code transform_text = FALSE} codes them as categoricals instead."
     ))
   }
 

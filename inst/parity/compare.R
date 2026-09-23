@@ -716,12 +716,22 @@ parity_tabpfn26 <- function(reference_dir, fixture_dir, fixture,
 #' float32 that moves the last bits. Hence the `-fp32` stage names, which
 #' carry a float32-noise tolerance rather than zero.
 #'
-#' @param reference_dir Directory written by `tabpfn3_reference.py`.
+#' TabPFN v3.5 is graded by the same function. Its forward pass differs
+#' from v3's -- a Fourier cell embedder over an in-context ECDF, QK-norm,
+#' one multitask checkpoint -- but none of that changes what a comparison
+#' has to *do*: the stages, the paths and the self-check semantics are
+#' identical, so the backend is a parameter rather than a second copy.
+#' See [parity_tabpfn35()].
+#'
+#' @param reference_dir Directory written by `tabpfn3_reference.py`
+#'   (or `tabpfn35_reference.py`).
 #' @param fixture_dir,fixture Parity fixture location and name.
-#' @param model_dir Converted v3 artifacts for the matching head.
+#' @param model_dir Converted artifacts for the matching head.
+#' @param backend Which backend to load `model_dir` through.
 #' @keywords internal
 parity_tabpfn3 <- function(reference_dir, fixture_dir, fixture,
-                           label = fixture, model_dir) {
+                           label = fixture, model_dir,
+                           backend = "tabpfn3") {
   stopifnot(dir.exists(reference_dir))
   meta <- jsonlite::fromJSON(file.path(reference_dir, "reference.json"))
   fx   <- read_parity_fixture(fixture_dir, fixture)
@@ -739,7 +749,7 @@ parity_tabpfn3 <- function(reference_dir, fixture_dir, fixture,
   }
 
   task <- meta$task
-  ctx <- load_backend_model(model_dir, task = task, backend = "tabpfn3",
+  ctx <- load_backend_model(model_dir, task = task, backend = backend,
                             device = "cpu")
   net <- ctx$net
 
@@ -841,7 +851,7 @@ parity_tabpfn3 <- function(reference_dir, fixture_dir, fixture,
     r_probs <- torch::nnf_softmax(tempered[, 1:n_classes], dim = -1L)
     add("decode:probs", tensor_diff(as.array(r_probs), as.array(py$probs)))
 
-    mod <- fit(tabular_classifier(model_dir, backend = "tabpfn3",
+    mod <- fit(tabular_classifier(model_dir, backend = backend,
                                   device = "cpu", softmax_temperature = temp),
                fx$x_train, as.integer(fx$y_train))
     add("predict_proba:single",
@@ -860,6 +870,25 @@ parity_tabpfn3 <- function(reference_dir, fixture_dir, fixture,
   }
 
   list(summary = do.call(rbind, rows), meta = meta)
+}
+
+
+#' Compare the R TabPFN v3.5 backend against a stored Python dump
+#'
+#' The same comparison [parity_tabpfn3()] performs, against a reference
+#' written by `tabpfn35_reference.py` and loaded through the `tabpfn35`
+#' backend. What v3.5 adds to the architecture -- the in-context ECDF the
+#' cell embedder reads, and one checkpoint serving both tasks -- shows up
+#' in the reference dump rather than in the grading: the ECDF is part of
+#' the forward pass being compared, and the task is decided by the
+#' fixture's name on both sides.
+#'
+#' @inheritParams parity_tabpfn3
+#' @keywords internal
+parity_tabpfn35 <- function(reference_dir, fixture_dir, fixture,
+                            label = fixture, model_dir) {
+  parity_tabpfn3(reference_dir, fixture_dir, fixture, label = label,
+                 model_dir = model_dir, backend = "tabpfn35")
 }
 
 
@@ -924,6 +953,20 @@ parity_tolerances <- function() {
               # the reorganisation the reference itself does, or on the
               # 1e-5 scale bound, which is what a small fixture clears on
               # its own terms.
+              # The scale bound on these three is 5e-5, not the 1e-5 the
+              # other self-checks carry, because at this fixture size it
+              # was never the binding instrument for either backend:
+              # measured on `clf_large` (2,664 rows), R's own chunked-vs-
+              # plain gap is 2.1e-5 of scale on v3 and 2.7e-5 on v3.5,
+              # both above 1e-5, and both passed only on the ratio. The
+              # ratio itself tracks the ICL width -- 1.44 at v3's 512,
+              # 2.03 at v3.5's 1024 -- because the same reassociation
+              # spans twice as many float32 terms. R and Python chunk
+              # identically (`ceil(n / factor)` then `split`), so there is
+              # no structural difference for a tighter bound to catch: one
+              # would show up as orders of magnitude, not as a factor of
+              # two. `forward:chunked`, which is the actual
+              # cross-implementation claim, passes at 2.7e-4 against 1e-3.
               "selfcheck:chunked-fp32", "selfcheck:cached-fp32",
               # v3's stage-0-2 row/column chunking. Cross-implementation,
               # so the plain forward's bounds; and against R's own plain
@@ -964,7 +1007,7 @@ parity_tolerances <- function() {
                    1e-4,
                    NA, NA, 1e-4,
                    NA, 1e-5, 1e-5, NA,
-                   1e-4, 1e-4, NA, NA, 1e-5, 1e-5, 1e-4, 1e-4, 1e-5, NA, NA, NA),
+                   1e-4, 1e-4, NA, NA, 5e-5, 5e-5, 1e-4, 1e-4, 5e-5, NA, NA, NA),
     stringsAsFactors = FALSE
   )
 }

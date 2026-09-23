@@ -14,6 +14,7 @@ tabfound_impute(
   draw = c("auto", "sample", "grid", "quantile", "residual"),
   quantile_grid = 199L,
   proper = FALSE,
+  proper_frac = 0.632,
   where = NULL,
   post = NULL,
   seed = NULL,
@@ -59,9 +60,15 @@ of mass and the tails are truncated. \code{"sample"} has no grid.}
 
 \item{proper}{Resample the context once per imputation rather than
 conditioning on the observed rows as they are. \code{FALSE} (default) is
-no resampling, \code{TRUE} a bootstrap, \code{"bayes"} a Bayesian bootstrap.
+no resampling, \code{TRUE} a bootstrap, \code{"bayes"} a Bayesian bootstrap,
+\code{"subsample"} a subsample without replacement (see \code{proper_frac}).
 The default is against the theory and with the measurements; read
 \emph{Properness} before changing it.}
+
+\item{proper_frac}{Fraction of observed rows kept per imputation when
+\code{proper = "subsample"}. Defaults to 0.632, matching a bootstrap's
+expected distinct-row fraction — with zero duplicates, which is the
+point: it isolates distinctness loss from duplicate-row effects.}
 
 \item{where}{Optional logical matrix, same shape as \code{data}, marking
 the cells to impute. Defaults to the missing ones -- mice's \code{where}.

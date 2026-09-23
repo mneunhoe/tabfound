@@ -18,6 +18,10 @@ tabfound(x, ...)
   backend = NULL,
   device = "cpu",
   na_action = "auto",
+  transform_text = "auto",
+  transform_dates = "auto",
+  min_cardinality_for_text = 30L,
+  text_n_components = 30L,
   ...
 )
 
@@ -29,6 +33,10 @@ tabfound(x, ...)
   backend = NULL,
   device = "cpu",
   na_action = "auto",
+  transform_text = "auto",
+  transform_dates = "auto",
+  min_cardinality_for_text = 30L,
+  text_n_components = 30L,
   ...
 )
 
@@ -75,6 +83,11 @@ column-mean imputer in front instead (modal code for factors),
 \code{"fail"} refuses, and \code{"pass"} forces the data through as it is --
 which warns, and produces \code{NaN} predictions, on a backend that
 handles neither.}
+
+\item{transform_text, transform_dates, min_cardinality_for_text, text_n_components}{How text and date columns are expanded before they reach the model;
+see \code{\link[=tabular_classifier]{tabular_classifier()}}. \code{"auto"} follows the checkpoint's own
+recipe, which turns both on for TabPFN v3.5 and leaves them off
+elsewhere.}
 
 \item{y}{When \code{x} is a data frame or matrix, the outcome vector.}
 }

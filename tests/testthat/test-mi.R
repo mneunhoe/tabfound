@@ -313,6 +313,38 @@ test_that(".mi_context_rows resamples only when asked", {
 })
 
 
+test_that("proper = 'subsample' keeps distinct rows without duplicates", {
+  obs <- seq_len(100L)
+  set.seed(2)
+  draws <- replicate(20, .mi_context_rows(obs, "subsample", frac = 0.632),
+                     simplify = FALSE)
+  # Matched distinctness to a bootstrap (~63%), zero duplicates by construction.
+  expect_true(all(vapply(draws, length, integer(1)) == 63L))
+  expect_true(all(vapply(draws, function(d) !anyDuplicated(d), logical(1))))
+  expect_true(all(vapply(draws, function(d) all(d %in% obs), logical(1))))
+  # Small contexts still return at least two rows.
+  expect_length(.mi_context_rows(c(4L, 9L), "subsample", frac = 0.1), 2L)
+  expect_identical(.mi_context_rows(3L, "subsample"), 3L)
+
+  expect_error(
+    tabfound_impute(data.frame(a = c(1, 2, NA), b = 1:3), models = stub_models(),
+                    proper = "subsample", proper_frac = 0, verbose = FALSE),
+    "proper_frac"
+  )
+  expect_error(
+    tabfound_impute(data.frame(a = c(1, 2, NA), b = 1:3), models = stub_models(),
+                    proper = "sometimes", verbose = FALSE),
+    "must be"
+  )
+  d <- data.frame(a = c(rnorm(18), NA, NA), b = rnorm(20))
+  imp <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                         proper = "subsample", verbose = FALSE)
+  expect_identical(imp$proper, "subsample")
+  expect_identical(imp$proper_frac, 0.632)
+  expect_false(anyNA(imp$imputations[[1]]))
+})
+
+
 test_that("proper = TRUE widens the between-imputation variance", {
   # The reason `proper` exists: with a fixed context every chain draws
   # from the same conditional, so the m completed data sets differ only by

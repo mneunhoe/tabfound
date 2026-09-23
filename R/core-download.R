@@ -153,6 +153,48 @@
       license = "tabpfn-3-license-v1.0: non-commercial (see the repo)",
       description = "TabPFN v3 regressor, fine-tuned on synthetic time series"
     ),
+    # TabPFN v3.5. Two things set these apart from every entry above.
+    #
+    # `task = "both"`: from v3.5 on, one checkpoint serves classification
+    # and regression. The head is chosen per forward pass rather than
+    # baked into the weights, so splitting this into a classifier id and a
+    # regressor id would download the same 876 MB twice. `.catalog_id()`
+    # matches `"both"` against either task.
+    #
+    # `convert = "tabpfn35"`: the publisher ships safetensors, not a
+    # pickled `.ckpt`, with the real config in the file's own
+    # `__metadata__` header -- the repo's top-level `config.json` holds
+    # only the model name. So the converter lifts the header out and
+    # copies the tensors rather than round-tripping them through torch,
+    # and there is no `head` to cross-check.
+    "tabpfn-v3.5" = list(
+      backend = "tabpfn35", task = "both", family = "tabpfn-v3.5",
+      repo = "Prior-Labs/tabpfn_3_5",
+      file = "tabpfn-v3.5-20260909.safetensors",
+      convert = "tabpfn35", size_mb = 876,
+      license = "tabpfn-3-5-license-v1.0: research, evaluation and internal benchmarking; production use needs a commercial licence (see the repo)",
+      description = "TabPFN v3.5, multitask (classification and regression)"
+    ),
+    # As with the specialised v3 checkpoints, the two variants carry no
+    # `family`, so `"tabpfn-v3.5"` keeps meaning the default and these are
+    # reachable by exact id only. Both are the same architecture as the
+    # default and load through `tabpfn35`; only the config differs.
+    "tabpfn-v3.5-fast" = list(
+      backend = "tabpfn35", task = "both",
+      repo = "Prior-Labs/tabpfn_3_5",
+      file = "tabpfn-v3.5-fast-20260909.safetensors",
+      convert = "tabpfn35", size_mb = 334,
+      license = "tabpfn-3-5-license-v1.0: research, evaluation and internal benchmarking; production use needs a commercial licence (see the repo)",
+      description = "TabPFN v3.5 Fast (alpha), 8 ICL layers instead of 24"
+    ),
+    "tabpfn-v3.5-multiclass" = list(
+      backend = "tabpfn35", task = "both",
+      repo = "Prior-Labs/tabpfn_3_5",
+      file = "tabpfn-v3.5-20260909_multiclass.safetensors",
+      convert = "tabpfn35", size_mb = 876,
+      license = "tabpfn-3-5-license-v1.0: research, evaluation and internal benchmarking; production use needs a commercial licence (see the repo)",
+      description = "TabPFN v3.5, experimental multiclass variant (4 aggregation heads)"
+    ),
     "tabicl-v2-classifier" = list(
       backend = "tabicl", task = "classification", family = "tabicl",
       repo = "jingang/TabICL",
@@ -206,8 +248,13 @@
 #
 # An entry may answer to more than one family name: `"tabpfn"` stays
 # pinned to v2.5 so existing code keeps loading the same weights, and
-# `"tabpfn-v2.5"` / `"tabpfn-v2.6"` / `"tabpfn-v3"` name a version
-# explicitly.
+# `"tabpfn-v2.5"` / `"tabpfn-v2.6"` / `"tabpfn-v3"` / `"tabpfn-v3.5"` name
+# a version explicitly.
+#
+# An entry whose `task` is `"both"` answers to either task: from TabPFN
+# v3.5 on, one checkpoint serves classification and regression, so the
+# same artifacts are what `tabular_classifier()` and `tabular_regressor()`
+# each resolve to.
 # @keywords internal
 .catalog_id <- function(model, task = NULL) {
   if (!is.character(model) || length(model) != 1L) return(NULL)
@@ -215,7 +262,8 @@
   if (model %in% names(cat_)) return(model)
   if (is.null(task)) return(NULL)
   hit <- vapply(cat_, function(e) {
-    model %in% e$family && identical(e$task, task)
+    model %in% e$family &&
+      (identical(e$task, task) || identical(e$task, "both"))
   }, logical(1))
   if (sum(hit) == 1L) names(cat_)[hit] else NULL
 }
@@ -575,20 +623,27 @@ list_models <- function() {
 #' no network and no Python.
 #'
 #' TabFM and Mitra ship readable artifacts and need no conversion.
-#' TabPFN and TabICL do, and that step needs a Python with `torch` and
-#' `safetensors` — the checkpoints are nested Python pickles that R's
-#' torch bindings cannot read. Point `options(tabfound.python = )` or
-#' `TABFOUND_PYTHON` at a suitable interpreter if the default search does
-#' not find one.
+#' TabPFN up to v3 and TabICL do, and that step needs a Python with
+#' `torch` and `safetensors` — the checkpoints are nested Python pickles
+#' that R's torch bindings cannot read. TabPFN v3.5 is published as
+#' safetensors, so its conversion only lifts the config out of the file's
+#' header and needs `safetensors` alone. Point
+#' `options(tabfound.python = )` or `TABFOUND_PYTHON` at a suitable
+#' interpreter if the default search does not find one.
 #'
 #' @param model A catalogue id from [list_models()], or a family name
 #'   (`"tabpfn"`, `"tabpfn-v2.5"`, `"tabpfn-v2.6"`, `"tabpfn-v3"`,
-#'   `"tabicl"`, `"tabfm-1.0.0"`, `"mitra"`) together with `task`.
-#'   `"tabpfn"` stays pinned to v2.5; ask for a later generation by name.
-#'   The catalogue carries each family's default checkpoint only; the
-#'   specialised v3 variants (`_binary`, `_multiclass`, `_ood`,
-#'   `_mediumdata`, `_timeseries`) can be converted by hand with
-#'   `inst/python/tabpfn_convert_ckpt.py` and loaded from a local path.
+#'   `"tabpfn-v3.5"`, `"tabicl"`, `"tabfm-1.0.0"`, `"mitra"`) together
+#'   with `task`. `"tabpfn"` stays pinned to v2.5; ask for a later
+#'   generation by name. A family name resolves to that family's default
+#'   checkpoint; the specialised variants are catalogued too, but by exact
+#'   id only — the v3 ones as `tabpfn-v3-classifier-binary`,
+#'   `-multiclass`, `-ood`, `tabpfn-v3-regressor-mediumdata`, `-ood`,
+#'   `-timeseries`, and the v3.5 ones as `tabpfn-v3.5-fast` and
+#'   `tabpfn-v3.5-multiclass`.
+#'
+#'   `task` is ignored for TabPFN v3.5, whose single multitask checkpoint
+#'   serves both.
 #' @param task `"classification"` or `"regression"`, when `model` names a
 #'   family rather than a specific artifact set.
 #' @param force Re-download and re-convert even if the model is already

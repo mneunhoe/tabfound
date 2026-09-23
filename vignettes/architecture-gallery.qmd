@@ -35,7 +35,7 @@ the thing that makes a tabular foundation model a tabular foundation
 model, and which a language model has no equivalent of: **an attention
 layer has an axis**. It can run down a column, across a row's features,
 or over the rows of the table. Each attention block carries that axis as
-a tag, and it is the single most useful thing to compare across the six.
+a tag, and it is the single most useful thing to compare across the seven.
 
 ```{r}
 #| label: backends
@@ -58,8 +58,8 @@ extension picks the format — `.svg`, `.png` or `.pdf`.
 ### How these particular figures were made
 
 The vignette ships the SVGs rather than building them, because
-instantiating all six networks at their published widths allocates
-about 1.8 billion parameters and takes a couple of minutes — too much
+instantiating all seven networks at their published widths allocates
+about 2 billion parameters and takes a couple of minutes — too much
 to pay on every `R CMD build`. The script that made them is
 [`inst/gallery/make-gallery.R`](https://github.com/marcel-neunhoeffer/tabfound/blob/main/inst/gallery/make-gallery.R):
 
@@ -148,7 +148,7 @@ the TabFM classifier"}
 
 ### Mitra
 
-The flattest of the six. No column stage, no row stage, no in-context
+The flattest of the seven. No column stage, no row stage, no in-context
 stage — one stack of twelve identical layers, each attending across
 rows and then across features, with an MLP after each. The target is
 feature column 1, and the input transform is a fixed quantile-rank
@@ -173,6 +173,25 @@ plot_architecture(clf, "tabpfn3-full.svg", detail = "full")
 
 ![TabPFN v3, sublayers expanded](figures/tabpfn3-full.svg){fig-alt="TabPFN
 v3 with each repeated block expanded into its sublayers"}
+
+## TabPFN v3.5
+
+The same three stages as v3, with two visible changes. The cell embedder
+is no longer a linear: a learned Fourier bank reads each value, and a
+second projection reads its **in-context ECDF rank** -- where that cell
+sits in its own column's distribution over the training rows -- so a
+column's scale is accounted for before stage 1 begins. And the decoder
+carries *both* heads, because one checkpoint serves both tasks; the
+diagram draws the one the task selects and names the other as carried
+but not run.
+
+![TabPFN v3.5 classifier](figures/tabpfn35.svg){fig-alt="Stacked block
+diagram of the TabPFN v3.5 classifier, from the in-context ECDF and
+Fourier cell embedder through the per-column distribution embedder, the
+column aggregator and the in-context stack to the many-class decoder."}
+
+![TabPFN v3.5, sublayers expanded](figures/tabpfn35-full.svg){fig-alt="The
+same diagram with every sublayer of each repeated block drawn out."}
 
 ## Themes
 

@@ -39,11 +39,14 @@ list_backends()
 4   tabpfn           TabPFN v2 per-feature transformer (Prior-Labs)       tabpfn (PyPI)
 5 tabpfn26                                 TabPFN v2.6 (Prior-Labs) tabpfn 8.2.0 (PyPI)
 6  tabpfn3                                   TabPFN v3 (Prior-Labs) tabpfn 8.2.0 (PyPI)
+7 tabpfn35                      TabPFN v3.5, multitask (Prior-Labs) tabpfn 9.0.0 (PyPI)
 ```
 
-The three TabPFN generations are separate backends rather than options on
+The four TabPFN generations are separate backends rather than options on
 one, because they are separate architectures: v2.6 moved the
-preprocessing inside the network, and v3 replaced the decoder as well.
+preprocessing inside the network, v3 replaced the decoder as well, and
+v3.5 replaced the cell embedder and folded both heads into one
+checkpoint.
 Each is registered independently and graded independently.
 
 The `parity` column is the point of the package: each backend is checked
@@ -121,6 +124,38 @@ version by name:
 #| eval: false
 clf <- tabular_classifier("tabpfn-v2.6-classifier")
 fit <- tabfound(Species ~ ., data = iris_train, model = "tabpfn-v3")
+fit <- tabfound(Species ~ ., data = iris_train, model = "tabpfn-v3.5")
+```
+
+### One checkpoint, both tasks
+
+v3.5 is the first generation where the head is chosen per forward pass
+rather than baked into the weights. There is no `-classifier` /
+`-regressor` pair to choose between: the same id resolves under both
+constructors, and `list_models()` reports its task as `both`.
+
+```{r}
+#| eval: false
+clf <- fit(tabular_classifier("tabpfn-v3.5"), iris[1:4], iris$Species)
+reg <- fit(tabular_regressor("tabpfn-v3.5"), iris[2:4], iris$Sepal.Length)
+```
+
+Two variants are catalogued by exact id: `"tabpfn-v3.5-fast"` (334 MB
+against 876 MB, 8 ICL layers instead of 24 — an alpha checkpoint the
+publisher reports as up to 6x faster) and `"tabpfn-v3.5-multiclass"`
+(experimental). As with v3's variants they carry no family name, so
+`"tabpfn-v3.5"` keeps meaning the default.
+
+v3.5 also brings its estimator's text and date handling. A character
+column with more than 30 distinct values becomes 30 LSA features over its
+character n-grams, and a `Date` or `POSIXct` becomes calendar features --
+on by default for v3.5, opt-in elsewhere with `transform_text = TRUE` and
+`transform_dates = TRUE`:
+
+```{r}
+#| eval: false
+fit <- tabfound(price ~ ., data = listings, model = "tabpfn-v3.5")
+fit$expansion      # which columns were expanded, and into how many features
 ```
 
 v3 publishes six specialised checkpoints alongside its two defaults, and
@@ -155,8 +190,9 @@ resolve; they are not distinct models. Family names stay on the defaults:
 `"tabpfn-v3"` plus a task never gives you a variant.
 
 ::: {.callout-warning}
-TabPFN v2.6 and v3 weights are released under `tabpfn-2.6-license-v1.0`
-and `tabpfn-3-license-v1.0`, which permit research, evaluation and
+TabPFN v2.6, v3 and v3.5 weights are released under
+`tabpfn-2.6-license-v1.0`, `tabpfn-3-license-v1.0` and
+`tabpfn-3-5-license-v1.0`, which permit research, evaluation and
 internal benchmarking but **not commercial or production use**. v2.5 is
 not under those terms. `list_models()` prints the licence and the
 download prompt repeats it — read it before you build on them.
@@ -455,7 +491,7 @@ actually handle:
 
 | backend | what the network does with `NA` | `"auto"` resolves to |
 |---|---|---|
-| `tabpfn`, `tabpfn26`, `tabpfn3` | encodes an explicit is-missing indicator | `pass` |
+| `tabpfn`, `tabpfn26`, `tabpfn3`, `tabpfn35` | encodes an explicit is-missing indicator | `pass` |
 | `tabfm` | maps it to a sentinel value | `pass` |
 | `tabicl` | propagates it — you get `NaN` predictions | `impute` |
 | `mitra` | **silently deletes the whole column** | `impute` |
@@ -489,7 +525,7 @@ fitting.
 A single forward pass is the default, and it is what every number above
 was measured with. The reference estimators average several passes over
 shuffled and re-preprocessed views of the same data, and `tabpfn`,
-`tabpfn26` and `tabpfn3` can all do that here.
+`tabpfn26`, `tabpfn3` and `tabpfn35` can all do that here.
 
 A member is described entirely by its config — which primary transform,
 whether the transformed block replaces or is appended to the originals,
@@ -557,7 +593,7 @@ clf <- tabular_classifier("tabpfn-v2.5-classifier",
 ```
 
 `kv_cache` works on every backend; `save_peak_memory_factor` on
-`tabpfn26` and `tabpfn3` only. Asking a backend for a path it does not
+`tabpfn26`, `tabpfn3` and `tabpfn35` only. Asking a backend for a path it does not
 have is an error rather than a silent no-op. Both are off by default.
 
 **`kv_cache`** conditions on the training rows once per `predict()` call
@@ -760,6 +796,7 @@ library(tabfound)
 download_model("tabpfn-v2.5-classifier")
 download_model("tabpfn-v2.5-regressor")
 download_model("tabpfn-v3-classifier")      # non-commercial licence
+download_model("tabpfn-v3.5")               # one artifact, both tasks
 download_model("tabicl-v2-classifier")
 download_model("tabicl-v2-regressor")
 download_model("mitra-classifier")
@@ -781,6 +818,7 @@ the `parity` column lives in `inst/parity/`; run it with
 Rscript inst/parity/run-parity.R tabpfn
 Rscript inst/parity/run-parity.R tabpfn26
 Rscript inst/parity/run-parity.R tabpfn3
+Rscript inst/parity/run-parity.R tabpfn35
 Rscript inst/parity/run-parity.R tabfm
 Rscript inst/parity/run-parity.R tabicl
 Rscript inst/parity/run-parity.R mitra

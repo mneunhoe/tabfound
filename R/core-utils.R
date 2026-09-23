@@ -496,3 +496,32 @@ tabfound_threads <- function(n = NULL, interop = NULL) {
   }
   invisible(current())
 }
+
+
+#' Round doubles to the nearest float32, keeping them as doubles
+#'
+#' R has no single-precision type, but some reference preprocessing casts
+#' to `float32` partway through and carries on from the rounded value --
+#' skrub's `DatetimeEncoder` stores seconds since the epoch as float32,
+#' which near 2024 is a resolution of 128 seconds, and its `StringEncoder`
+#' hands a float32 tf-idf matrix to the SVD. Skipping the rounding would
+#' give an R port that is *more* precise than the reference and therefore
+#' different from it.
+#'
+#' `writeBin(size = 4)` performs the IEEE round-to-nearest-even conversion
+#' NumPy's `astype(np.float32)` does, subnormals included, so this is exact
+#' rather than an approximation of it. Values beyond float32's range become
+#' `Inf`, as they do in NumPy.
+#'
+#' @param x Numeric vector or matrix.
+#' @return `x`, rounded, with `NA` preserved and dimensions kept.
+#' @keywords internal
+.round_float32 <- function(x) {
+  d <- dim(x)
+  v <- as.numeric(x)
+  out <- readBin(writeBin(v, raw(), size = 4L), "double", size = 4L,
+                 n = length(v))
+  out[is.na(v) & !is.nan(v)] <- NA_real_
+  dim(out) <- d
+  out
+}

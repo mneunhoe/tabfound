@@ -81,11 +81,66 @@ clf <- tabfound_load("clf.tabfound")
 | `tabpfn` (TabPFN v2 / v2.5, Prior-Labs) | working — classifier and regressor, single pass, n-member ensemble, KV cache, chunked forward | `tabpfn` 8.2.0 on PyPI |
 | `tabpfn26` (TabPFN v2.6, Prior-Labs) | working — classifier and regressor, single pass and n-member ensemble | `tabpfn` 8.2.0 on PyPI |
 | `tabpfn3` (TabPFN v3, Prior-Labs) | working — classifier and regressor, single pass and n-member ensemble, KV cache, chunked forward, row/column stage chunking | `tabpfn` 8.2.0 on PyPI |
+| `tabpfn35` (TabPFN v3.5, Prior-Labs) | working — one multitask checkpoint serving both tasks, single pass and n-member ensemble, KV cache, chunked forward, row/column stage chunking | `tabpfn` 9.0.0 on PyPI |
 | `tabfm` (Google TabFM 1.0.0) | working — classifier and regressor, preprocessing + 32-member ensemble, KV cache, row stage chunking | `tabfm` on PyPI, float32 |
 | `tabicl` (TabICL v2, soda-inria) | working — classifier and regressor, preprocessing + 8-member ensemble, KV cache, row stage chunking | `tabicl` 2.1.1 on PyPI |
 | `mitra` (Mitra, AutoGluon) | working — classifier and regressor, preprocessing + ensemble, KV cache, chunked forward (inference only, no fine-tuning) | AutoGluon `Tab2D` |
 
 `list_backends()` reports what is registered in your install.
+
+## Text and date columns
+
+A free-text column and a timestamp are the two kinds of column a tabular
+model is worst at receiving raw. Coded as a categorical, a review field is
+an arbitrary integer per distinct sentence, and an unseen sentence at
+predict time is a missing value. As a single number, a timestamp keeps its
+order and loses its calendar -- December is nowhere near January.
+
+So `tabfound()` expands them first, the way TabPFN v3.5's Python estimator
+does:
+
+```r
+fit <- tabfound(price ~ ., data = listings, model = "tabpfn-v3.5")
+fit$expansion
+#> Text and date expansion
+#> * dates: listed_on
+#> * text (30 components each): description
+```
+
+- **Text.** A character column with more than `min_cardinality_for_text`
+  (30) distinct values that do not all parse as numbers becomes
+  `text_n_components` (30) features: tf-idf over character 3- and 4-grams
+  within word boundaries, reduced by a truncated SVD and block-normalised.
+  An unseen string is placed by the n-grams it shares with the training
+  column; a missing one becomes a row of zeros.
+- **Dates.** A `Date` or `POSIXct` becomes year, minute, second, seconds
+  since the epoch and day of year, plus sine/cosine pairs for month, day,
+  hour and weekday -- read in the column's own timezone. A column that is
+  always at midnight gets no time-of-day features.
+- **Durations.** A `difftime` becomes its length in seconds, always. (It
+  used to be its magnitude in whatever unit it carried, so the same
+  duration was 1.5 or 90.)
+
+`transform_text` and `transform_dates` default to `"auto"`, which follows
+the checkpoint's own recipe: on for TabPFN v3.5, off for every other
+backend -- where they are available but opt-in, with `TRUE`. Off, a text
+column is a categorical and a date a single number, exactly as before.
+Declared `categorical_features` are moved to wherever their columns sit
+after expansion.
+
+**Parity.** The date features are bit-exact against the reference. The
+text features match scikit-learn's algorithm to 1e-13, including its
+randomized SVD: that draws a Gaussian test matrix from
+`numpy.random.RandomState(0)`, and on short text -- few rows, many
+distinct n-grams -- the trailing components are decided by that draw
+rather than by the data, so the NumPy generator is reproduced exactly. What
+remains against skrub's actual output, 2e-5 to 2e-4, is its float32
+arithmetic, which R cannot run and scikit-learn's own float64 path differs
+from by the same amount.
+
+Three columns of free text on a wide table can exceed an ensemble member's
+feature budget -- each is 30 features -- and the R side aborts there
+rather than subsampling. `text_n_components` lowers the cost.
 
 ## The formula interface
 
@@ -665,11 +720,33 @@ by name:
 ```r
 clf <- tabular_classifier("tabpfn-v2.6-classifier")
 fit <- tabfound(Species ~ ., data = iris, model = "tabpfn-v3")
+fit <- tabfound(Species ~ ., data = iris, model = "tabpfn-v3.5")
 ```
 
-TabPFN v2.6 and v3 weights are released under `tabpfn-2.6-license-v1.0`
-and `tabpfn-3-license-v1.0`, which permit research, evaluation and
-internal benchmarking but **not commercial or production use**.
+**TabPFN v3.5 is one checkpoint for both tasks.** From this generation on
+the head is chosen per forward pass rather than baked into the weights,
+so there is no `-classifier` / `-regressor` pair to pick between: the
+same `"tabpfn-v3.5"` resolves under `tabular_classifier()` and
+`tabular_regressor()` alike, and `list_models()` shows its task as
+`both`. One download, 876 MB, serves everything.
+
+```r
+# The same artifacts, both ways round.
+clf <- fit(tabular_classifier("tabpfn-v3.5"), iris[1:4], iris$Species)
+reg <- fit(tabular_regressor("tabpfn-v3.5"), iris[2:4], iris$Sepal.Length)
+```
+
+Two v3.5 variants are catalogued by exact id only, so `"tabpfn-v3.5"`
+keeps meaning the default: `"tabpfn-v3.5-fast"` (334 MB, 8 ICL layers
+instead of 24, an alpha checkpoint the publisher reports as up to 6x
+faster) and `"tabpfn-v3.5-multiclass"` (experimental).
+
+TabPFN v2.6, v3 and v3.5 weights are released under
+`tabpfn-2.6-license-v1.0`, `tabpfn-3-license-v1.0` and
+`tabpfn-3-5-license-v1.0`. All three permit research, evaluation and
+internal benchmarking but **not commercial or production use**; v3.5's
+says so in those words and points at a separate Commercial Enterprise
+License.
 `list_models()` prints the licence, and the download prompt repeats it.
 
 v3 publishes six specialised checkpoints alongside the two defaults, and
@@ -1496,8 +1573,58 @@ seeds it, so its own flips differ between two of its own runs.
   backends have no counterpart. They are throughput paths, not different
   arithmetic.
 
+**TabPFN v3.5.**
+
+- The architecture is ported in full and verified end to end: 63/63
+  parity checks against `tabpfn` 9.0.0 across seven fixtures and both
+  heads, covering the plain forward, `save_peak_memory_factor`, the
+  row/column stage chunking and the KV cache. That includes the two
+  things that are new in this generation — the learned Fourier cell
+  embedder, and the bucketed **in-context ECDF** it reads, which gives
+  every cell its column's midrank before stage 1 sees it.
+- **One checkpoint, both tasks.** The head is a forward-pass argument,
+  not a property of the weights, so the artifacts have no `head` field
+  and the catalogue lists their task as `both`. Everything downstream —
+  `tabfound()`, the ensembling, the bar distribution — is unchanged.
+- The KV cache carries the ECDF bucket context as well as the scaler
+  statistics, which v3's did not have to. Without it a cached prediction
+  would rank a test cell against the test rows rather than the training
+  ones, which is a different model rather than a cheaper one.
+- **Text and datetime preprocessing is ported**, and on by default for
+  v3.5 because its checkpoint's recipe turns it on. A character column
+  with more than 30 distinct values that are not all numbers becomes 30
+  features, by latent semantic analysis over its character 3- and
+  4-grams (skrub's `StringEncoder`); a `Date` or `POSIXct` becomes year,
+  minute, second, seconds since the epoch, day of year, and circular
+  month, day, hour and weekday. See [Text and date columns](#text-and-date-columns).
+- No ensemble config generator of its own, as for v3: `.native_presets()`
+  still covers v2.5 and v2.6 only, so v3.5 ensembles come from a Python
+  dump. Its recipe is much the simpler one — a single `"none"` transform
+  with `ordinal_shuffled` categoricals and 768 features per estimator —
+  so a native preset would be easy to add later.
+- `FEATURE_SUBSAMPLING_METHOD = "balanced"`, which the published
+  `inference_config` sets, is not implemented; a member whose predictor
+  count exceeds its budget errors, as for v2.6 and v3.
+- One dataset per call, and the same `torch.compile` / int8-quantisation
+  / alternate-kernel omissions as v3.
+- **The memory preflight is calibrated to 32,768 rows and should not be
+  extrapolated past it.** Inside that envelope the constants behave: all
+  21 measured points sit at or below their own estimate. Outside it they
+  under-predict, and by more than the other backends do — holding out the
+  32k row and refitting on the rest puts the estimate at 0.75x the
+  measured peak at 16 features, where TabPFN v3 under the same treatment
+  gives 1.01x. So `memory_envelope()` and `suggest_chunk_sizes()` are
+  advice, not a guarantee, above roughly 32k rows on this backend; leave
+  headroom or measure. The constants were fitted on the 876 MB default
+  checkpoint, so the Fast variant is covered conservatively rather than
+  tightly.
+
 ## License
 
 MIT for this package. Model weights carry their own licenses — notably
 Google's TabFM weights are released under a **non-commercial** license,
-separate from its Apache-2.0 source.
+separate from its Apache-2.0 source, and the TabPFN v2.6 / v3 / v3.5
+weights under Prior Labs' own licenses, which allow research, evaluation
+and internal benchmarking but reserve production and commercial use. The
+`tabpfn` Python package those backends are verified against is Apache-2.0;
+only the checkpoints are restricted.

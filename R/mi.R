@@ -401,9 +401,13 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 # smoothly (no row is ever dropped outright, and none is duplicated as
 # hard).
 # @keywords internal
-.mi_context_rows <- function(obs_idx, proper) {
+.mi_context_rows <- function(obs_idx, proper, frac = 0.632) {
   n <- length(obs_idx)
   if (identical(proper, "none") || n < 2L) return(obs_idx)
+  if (identical(proper, "subsample")) {
+    k <- max(2L, floor(frac * n))
+    return(sample(obs_idx, size = k, replace = FALSE))
+  }
   w <- if (identical(proper, "bayes")) {
     g <- stats::rexp(n)
     if (sum(g) <= 0) NULL else g / sum(g)
@@ -565,9 +569,14 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #' @param quantile_grid Number of quantile levels for `draw = "quantile"`.
 #' @param proper Resample the context once per imputation rather than
 #'   conditioning on the observed rows as they are. `FALSE` (default) is
-#'   no resampling, `TRUE` a bootstrap, `"bayes"` a Bayesian bootstrap.
+#'   no resampling, `TRUE` a bootstrap, `"bayes"` a Bayesian bootstrap,
+#'   `"subsample"` a subsample without replacement (see `proper_frac`).
 #'   The default is against the theory and with the measurements; read
 #'   *Properness* before changing it.
+#' @param proper_frac Fraction of observed rows kept per imputation when
+#'   `proper = "subsample"`. Defaults to 0.632, matching a bootstrap's
+#'   expected distinct-row fraction — with zero duplicates, which is the
+#'   point: it isolates distinctness loss from duplicate-row effects.
 #' @param where Optional logical matrix, same shape as `data`, marking
 #'   the cells to impute. Defaults to the missing ones -- mice's `where`.
 #'   Marking an *observed* cell overimputes it, which is how you check a
@@ -610,11 +619,13 @@ tabfound_impute <- function(data, m = 5L, models = NULL, maxit = 5L,
                             draw = c("auto", "sample", "grid", "quantile",
                                      "residual"),
                             quantile_grid = 199L, proper = FALSE,
+                            proper_frac = 0.632,
                             where = NULL, post = NULL, seed = NULL,
                             verbose = TRUE, ...) {
   cl     <- match.call()
   draw   <- match.arg(draw)
   proper <- .mi_resolve_proper(proper)
+  proper_frac <- .mi_resolve_proper_frac(proper_frac)
   if (!is.null(seed)) set.seed(seed)
 
   if (is.matrix(data)) data <- as.data.frame(data, stringsAsFactors = FALSE)
@@ -686,7 +697,7 @@ tabfound_impute <- function(data, m = 5L, models = NULL, maxit = 5L,
     # "draw the parameters, then sample" structure that makes an imputer
     # proper. With `proper = "none"` it is just the observed rows.
     ctx_rows <- lapply(stats::setNames(visit, visit), function(v) {
-      .mi_context_rows(which(!is.na(mdf[[v]])), proper)
+      .mi_context_rows(which(!is.na(mdf[[v]])), proper, frac = proper_frac)
     })
     # Start from the observed marginal, so the first sweep conditions on
     # something plausible rather than on NA.
@@ -716,7 +727,8 @@ tabfound_impute <- function(data, m = 5L, models = NULL, maxit = 5L,
     list(data = data, imputations = imps, m = m, maxit = maxit,
          method = meth, where = where, nmis = nmis, visit_sequence = visit,
          chain_mean = chain_mean, chain_var = chain_var,
-         predictors = pm, draw = draw, proper = proper, seed = seed,
+         predictors = pm, draw = draw, proper = proper, proper_frac = proper_frac,
+         seed = seed,
          backend = c(classification = models$source[["classification"]],
                      regression     = models$source[["regression"]]),
          call = cl),
@@ -815,14 +827,26 @@ tabfound_impute <- function(data, m = 5L, models = NULL, maxit = 5L,
   if (isTRUE(proper))  return("bootstrap")
   if (isFALSE(proper)) return("none")
   if (is.character(proper) && length(proper) == 1L &&
-      proper %in% c("bootstrap", "bayes", "none")) {
+      proper %in% c("bootstrap", "bayes", "subsample", "none")) {
     return(proper)
   }
   cli::cli_abort(c(
     "{.arg proper} must be {.val {TRUE}}, {.val {FALSE}}, or one of \\
-     {.val {c('bootstrap', 'bayes', 'none')}}.",
+     {.val {c('bootstrap', 'bayes', 'subsample', 'none')}}.",
     x = "Got {.val {proper}}."
   ))
+}
+
+# @keywords internal
+.mi_resolve_proper_frac <- function(frac) {
+  frac <- suppressWarnings(as.numeric(frac))
+  if (length(frac) != 1L || is.na(frac) || frac <= 0 || frac >= 1) {
+    cli::cli_abort(c(
+      "{.arg proper_frac} must be a single number in (0, 1).",
+      x = "Got {.val {frac}}."
+    ))
+  }
+  frac
 }
 
 # The promise this function makes is that every cell it reports in

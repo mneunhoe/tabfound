@@ -51,6 +51,21 @@ FIXTURE_DIR <- file.path(here, "fixtures")
 REF_ROOT    <- file.path(here, "reference")
 PY          <- Sys.getenv("TABFOUND_REF_PYTHON", ".venvs/ref/bin/python")
 
+# Not every backend can share one interpreter any more. TabPFN v3.5 needs
+# the Python reference at 9.0.0, and the v2.6 / v3 fixtures were cut
+# against 8.2.0 -- upgrading in place would make those two
+# `--regenerate`-able only against a newer reference than they record. So
+# a backend may name its own venv, and falls back to the shared one.
+py_for <- function(backend) {
+  var <- paste0("TABFOUND_REF_PYTHON_", toupper(backend))
+  explicit <- Sys.getenv(var, "")
+  if (nzchar(explicit)) return(explicit)
+  guess <- file.path(".venvs", paste0("ref", sub("^tabpfn", "", backend)),
+                     "bin", "python")
+  if (identical(backend, "tabpfn35") && file.exists(guess)) return(guess)
+  PY
+}
+
 if (!dir.exists(FIXTURE_DIR)) {
   cat("Generating fixtures...\n")
   write_parity_fixtures(FIXTURE_DIR)
@@ -377,6 +392,103 @@ run_tabpfn3 <- function() {
 
 
 # ---------------------------------------------------------------------------
+# TabPFN v3.5
+# ---------------------------------------------------------------------------
+
+run_tabpfn35 <- function() {
+  cat("\n=== backend: tabpfn35 ===\n")
+  # One directory, not two. v3.5 is a single multitask checkpoint, so
+  # there is no classifier artifact and no regressor artifact to point at
+  # separately -- the same store entry serves both fixtures.
+  dir <- env_dir("TABFOUND_TABPFN35_DIR", "converted v3.5 artifacts")
+
+  # The same seven fixtures the other backends use. `clf_binary_missing`
+  # exercises the indicator channel, the mean imputation and the
+  # zero-variance branch of the scaler in one pass -- and, new in v3.5,
+  # the ECDF ranking of a column whose test rows include imputed cells.
+  # `clf_large` is the only one big enough for the stage-0-2 row/column
+  # chunking to fire on either side.
+  fixtures <- c("clf_iris", "clf_binary_missing", "clf_tiny", "clf_large",
+                "reg_iris", "reg_skewed", "reg_tiny")
+
+  if (regenerate) {
+    ckpt <- Sys.getenv("TABFOUND_TABPFN35_CKPT", "")
+    py <- py_for("tabpfn35")
+    for (fx in fixtures) {
+      if (!nzchar(ckpt) || !file.exists(ckpt)) {
+        cat(sprintf("  SKIP regenerate %s: checkpoint not found\n", fx)); next
+      }
+      out <- file.path(REF_ROOT, "tabpfn35", fx)
+      unlink(out, recursive = TRUE)
+      cat(sprintf("  regenerating %s ...\n", fx))
+      st <- system2(py, c(file.path(here, "tabpfn35_reference.py"),
+                          "--fixture-dir", FIXTURE_DIR, "--fixture", fx,
+                          "--ckpt", ckpt, "--out", out),
+                    stdout = TRUE, stderr = TRUE)
+      status <- attr(st, "status")
+      if (!is.null(status) && status != 0L) {
+        cat(paste(tail(st, 15), collapse = "\n"), "\n")
+        cat(sprintf("  FAILED to regenerate %s\n", fx))
+      }
+    }
+  }
+
+  all_rows <- list()
+  for (fx in fixtures) {
+    ref <- file.path(REF_ROOT, "tabpfn35", fx)
+    if (is.null(dir) || !file.exists(file.path(ref, "reference.json"))) {
+      cat(sprintf("  SKIP %s (no reference dump or model dir)\n", fx)); next
+    }
+    res <- parity_tabpfn35(ref, FIXTURE_DIR, fx, fx, dir)
+    all_rows[[fx]] <- print_parity(res)
+  }
+
+  combined <- do.call(rbind, all_rows)
+  if (is.null(combined)) return(invisible(NULL))
+  combined$known <- FALSE
+  invisible(combined)
+}
+
+
+# ---------------------------------------------------------------------------
+# Text and datetime preprocessing (TabPFN v3.5's estimator)
+# ---------------------------------------------------------------------------
+
+run_textdate <- function() {
+  cat("\n=== text and datetime preprocessing ===\n")
+  # No weights involved: this grades the frame-level expanders that run
+  # before any network, against tabpfn's own `DateTransformer` and
+  # `TextTransformer`. The reference needs skrub and tabpfn 9.0.0, so it
+  # regenerates with the v3.5 interpreter, not the shared one.
+  out <- file.path(here, "textdate", "textdate.safetensors")
+  if (regenerate) {
+    py <- py_for("tabpfn35")
+    cat(sprintf("  regenerating with %s ...\n", py))
+    st <- system2(py, c(file.path(here, "textdate_reference.py"), "--out", out),
+                  stdout = TRUE, stderr = TRUE)
+    status <- attr(st, "status")
+    if (!is.null(status) && status != 0L) {
+      cat(paste(utils::tail(st, 15), collapse = "\n"), "\n")
+      cat("  FAILED to regenerate\n")
+    }
+  }
+  # Graded by the same assertions the test suite runs, so the two cannot
+  # drift apart.
+  tests <- file.path(here, "..", "..", "tests", "testthat")
+  if (!dir.exists(tests)) {
+    cat("  SKIP grading: run from a source checkout to find the tests\n")
+    return(invisible(NULL))
+  }
+  res <- as.data.frame(testthat::test_dir(
+    tests, filter = "prep-text|prep-datetime|prep-frame|py-numpy-random",
+    reporter = "summary", load_package = "none", stop_on_failure = FALSE
+  ))
+  cat(sprintf("  %d assertions, %d failed\n", sum(res$passed) + sum(res$failed),
+              sum(res$failed)))
+  invisible(NULL)
+}
+
+# ---------------------------------------------------------------------------
 # TabFM
 # ---------------------------------------------------------------------------
 
@@ -547,6 +659,8 @@ for (b in backends) {
     tabpfn   = run_tabpfn(),
     tabpfn26 = run_tabpfn26(),
     tabpfn3  = run_tabpfn3(),
+    tabpfn35 = run_tabpfn35(),
+    textdate = run_textdate(),
     tabfm  = run_tabfm(),
     tabicl = run_tabicl(),
     mitra  = run_mitra(),

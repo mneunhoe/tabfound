@@ -45,6 +45,10 @@ GALLERY <- list(
        id = "tabpfn-v2.6-classifier", env = "TABFOUND_GALLERY_TABPFN26"),
   list(key = "tabpfn3",  backend = "tabpfn3",  task = "classification",
        id = "tabpfn-v3-classifier",   env = "TABFOUND_GALLERY_TABPFN3"),
+  # v3.5 has no per-task checkpoint, so `task` here picks which of the
+  # two heads the diagram draws rather than which artifacts to read.
+  list(key = "tabpfn35", backend = "tabpfn35", task = "classification",
+       id = "tabpfn-v3.5",            env = "TABFOUND_GALLERY_TABPFN35"),
   list(key = "tabicl",   backend = "tabicl",   task = "classification",
        id = "tabicl-v2-classifier",   env = "TABFOUND_GALLERY_TABICL"),
   # TabFM and Mitra publish their config next to the weights, so the
@@ -60,6 +64,7 @@ GALLERY <- list(
 # Extra renderings the vignette uses to show the options off.
 EXTRAS <- list(
   list(key = "tabpfn3", suffix = "-full", detail = "full"),
+  list(key = "tabpfn35", suffix = "-full", detail = "full"),
   list(key = "tabicl",  suffix = "-dark", theme  = "dark")
 )
 

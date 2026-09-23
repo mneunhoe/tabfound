@@ -9,12 +9,17 @@ download_model(model, task = NULL, force = FALSE, python = NULL, quiet = FALSE)
 \arguments{
 \item{model}{A catalogue id from \code{\link[=list_models]{list_models()}}, or a family name
 (\code{"tabpfn"}, \code{"tabpfn-v2.5"}, \code{"tabpfn-v2.6"}, \code{"tabpfn-v3"},
-\code{"tabicl"}, \code{"tabfm-1.0.0"}, \code{"mitra"}) together with \code{task}.
-\code{"tabpfn"} stays pinned to v2.5; ask for a later generation by name.
-The catalogue carries each family's default checkpoint only; the
-specialised v3 variants (\verb{_binary}, \verb{_multiclass}, \verb{_ood},
-\verb{_mediumdata}, \verb{_timeseries}) can be converted by hand with
-\code{inst/python/tabpfn_convert_ckpt.py} and loaded from a local path.}
+\code{"tabpfn-v3.5"}, \code{"tabicl"}, \code{"tabfm-1.0.0"}, \code{"mitra"}) together
+with \code{task}. \code{"tabpfn"} stays pinned to v2.5; ask for a later
+generation by name. A family name resolves to that family's default
+checkpoint; the specialised variants are catalogued too, but by exact
+id only — the v3 ones as \code{tabpfn-v3-classifier-binary},
+\code{-multiclass}, \code{-ood}, \code{tabpfn-v3-regressor-mediumdata}, \code{-ood},
+\code{-timeseries}, and the v3.5 ones as \code{tabpfn-v3.5-fast} and
+\code{tabpfn-v3.5-multiclass}.
+
+\code{task} is ignored for TabPFN v3.5, whose single multitask checkpoint
+serves both.}
 
 \item{task}{\code{"classification"} or \code{"regression"}, when \code{model} names a
 family rather than a specific artifact set.}
@@ -39,11 +44,13 @@ no network and no Python.
 }
 \details{
 TabFM and Mitra ship readable artifacts and need no conversion.
-TabPFN and TabICL do, and that step needs a Python with \code{torch} and
-\code{safetensors} — the checkpoints are nested Python pickles that R's
-torch bindings cannot read. Point \code{options(tabfound.python = )} or
-\code{TABFOUND_PYTHON} at a suitable interpreter if the default search does
-not find one.
+TabPFN up to v3 and TabICL do, and that step needs a Python with
+\code{torch} and \code{safetensors} — the checkpoints are nested Python pickles
+that R's torch bindings cannot read. TabPFN v3.5 is published as
+safetensors, so its conversion only lifts the config out of the file's
+header and needs \code{safetensors} alone. Point
+\code{options(tabfound.python = )} or \code{TABFOUND_PYTHON} at a suitable
+interpreter if the default search does not find one.
 }
 \examples{
 \dontrun{

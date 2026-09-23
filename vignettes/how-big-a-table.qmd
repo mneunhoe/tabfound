@@ -24,6 +24,7 @@ MODELS <- c(
   "TabPFN v2.5" = "tabpfn-v2.5-classifier",
   "TabPFN v2.6" = "tabpfn-v2.6-classifier",
   "TabPFN v3"   = "tabpfn-v3-classifier",
+  "TabPFN v3.5" = "tabpfn-v3.5",
   "TabICL"      = "tabicl-v2-classifier",
   "TabFM"       = "tabfm-1.0.0-classifier",
   "Mitra"       = "mitra-classifier"
@@ -123,10 +124,16 @@ Three things stand out, and all three are measured rather than assumed:
   Not because its state is smaller: v3 carries one vector per *column*
   per row where v2.6 carries one per group of three, and Mitra one per
   feature per row on both axes at once. It reaches further because it is
-  the only backend that never holds that state for the whole table —
-  `row_chunk_size` runs the first three stages a chunk of rows at a time,
-  which turns the term that decides the ceiling from something that grows
-  with the table into a constant. See "what the knobs buy".
+  one of the two backends that never hold that state for the whole table
+  — `row_chunk_size` runs the first three stages a chunk of rows at a
+  time, which turns the term that decides the ceiling from something that
+  grows with the table into a constant. See "what the knobs buy".
+* **TabPFN v3.5 has the same mechanism and about half the reach.** Same
+  three stages, same row and column chunking, but a 1024-wide in-context
+  stack against v3's 512 and 876 MB of weights against 213 MB, so the
+  fixed cost is higher and every row costs more. At 8 GB it does not fit
+  at all; the ordering between it and v3 is about width, not about
+  whether the chunking works.
 * **TabFM is in a different regime.** 6.5 GB of weights are resident
   before anything happens, and its 32-member default multiplies what
   comes after.
@@ -140,8 +147,8 @@ the rows costs:
 ```{r}
 #| label: features
 cols <- c(10, 25, 50, 100, 200)
-envelope_table(models = MODELS[c("TabPFN v2.6", "TabPFN v3", "TabICL",
-                                 "Mitra")],
+envelope_table(models = MODELS[c("TabPFN v2.6", "TabPFN v3", "TabPFN v3.5",
+                                 "TabICL", "Mitra")],
                n_features = cols, available = 32e9,
                labels = paste(cols, "cols"))
 ```
@@ -330,10 +337,11 @@ than the memory table does.
 
 | if your table is | use | why |
 |---|---|---|
-| under ~2,000 rows, any width | anything | all six are comfortable |
+| under ~2,000 rows, any width | anything | all seven are comfortable |
 | a few thousand rows, ≤ 100 columns | TabPFN v3 | furthest reach, seconds not minutes |
-| tens of thousands of rows | TabPFN v3 | the only backend that bounds the row axis of its embedding tensor; 32,768 × 120 measures 18 GB |
-| wide (200+ columns) | TabPFN v2.6, with `save_peak_memory_factor` | v3's chunking bounds rows, not columns, and its state is a vector per column |
+| tens of thousands of rows | TabPFN v3 | one of the two backends that bound the row axis of their embedding tensor, and the roomier of them; 32,768 × 120 measures 18 GB against v3.5's 23 GB |
+| tens of thousands of rows, and you want v3.5 | TabPFN v3.5 | same chunking, about half the reach; budget roughly twice v3's memory for the same table |
+| wide (200+ columns) | TabPFN v2.6, with `save_peak_memory_factor` | the v3 and v3.5 chunking bounds rows, not columns, and their state is a vector per column |
 | large and you want TabICL's ensembling | TabICL with `n_estimators` lowered | the default 8 costs about three times what one does |
 | small (hundreds of rows) | Mitra or TabFM are fine here | this is the size they were published for |
 

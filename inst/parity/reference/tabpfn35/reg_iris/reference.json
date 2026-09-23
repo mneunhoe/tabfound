@@ -1,0 +1,27 @@
+{
+  "fixture": "reg_iris",
+  "task": "regression",
+  "task_type": "regression",
+  "tabpfn_version": "9.0.0",
+  "torch_version": "2.14.0",
+  "ckpt": "tabpfn-v3.5-20260909.safetensors",
+  "architecture": "tabpfn_v3_5",
+  "head": "multitask",
+  "n_out": 5000,
+  "n_classes": null,
+  "n_bar_bins": 5000,
+  "softmax_temperature": 0.9,
+  "quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "n_train": 100,
+  "n_test": 50,
+  "n_features": 3,
+  "save_peak_memory_factor": 8,
+  "row_chunk_size": 2048,
+  "col_chunk_size": 4,
+  "cell_ecdf_num_buckets": 8192,
+  "stage_chunking_active": false
+}

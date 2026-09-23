@@ -186,30 +186,23 @@ detect_backend <- function(config) {
 }
 
 
-#' Build and weight-load a model through its backend
+#' Resolve a model's artifacts, config and backend, without loading weights
 #'
-#' Shared plumbing for [tabular_classifier()] and [tabular_regressor()]:
-#' resolve artifacts, read the config, pick a backend, construct the
-#' network, copy the weights in, move to device, set eval mode.
+#' The first half of [load_backend_model()], split out so a caller can ask
+#' what a checkpoint *is* -- its backend, and the `inference_config` recipe
+#' it carries -- before committing to building it. [tabfound()] needs that
+#' to decide whether text and date columns are expanded, and it has to
+#' decide before it can say which columns are categorical, which it must
+#' say before the model is constructed.
 #'
-#' @param model Local directory, Hub repo id, or registered alias.
-#' @param task `"classification"` or `"regression"`.
-#' @param backend Optional backend name; inferred from the config when
-#'   `NULL`.
-#' @param device Device string.
-#' @param subfolder Optional artifact subfolder, overriding the
-#'   backend's default for this task.
-#' @return A list with `net`, `config`, `backend`, `device`, `task` and
-#'   `model_ref` (the resolved model string, kept so a saved model can be
-#'   rebuilt -- see [tabfound_save()]).
+#' Reads only `config.json`. A catalogue id still resolves to the local
+#' store, asking to download first if needed, exactly as loading would --
+#' so nothing is fetched here that loading would not fetch a moment later.
+#'
+#' @inheritParams load_backend_model
+#' @return `list(paths, config, backend)`.
 #' @keywords internal
-load_backend_model <- function(model, task, backend = NULL,
-                               device = "cpu", subfolder = NULL) {
-  device <- resolve_device(device)
-  # Keep the caller's original string: it is what `tabfound_save()`
-  # records, so a reloaded model re-resolves through the same path rather
-  # than hard-coding today's cache location.
-  model_ref <- model
+.resolve_backend_config <- function(model, task, backend = NULL, subfolder = NULL) {
   # A catalogue id or family name resolves to the local store, asking
   # first if the weights are not there yet. Everything else -- a path, a
   # Hub repo id, a registered alias -- passes straight through.
@@ -250,6 +243,38 @@ load_backend_model <- function(model, task, backend = NULL,
       i = "Use {.fn {if (cfg_task == 'classification') 'tabular_classifier' else 'tabular_regressor'}} instead."
     ))
   }
+
+  list(paths = paths, config = config, backend = bk)
+}
+
+#' Build and weight-load a model through its backend
+#'
+#' Shared plumbing for [tabular_classifier()] and [tabular_regressor()]:
+#' resolve artifacts, read the config, pick a backend, construct the
+#' network, copy the weights in, move to device, set eval mode.
+#'
+#' @param model Local directory, Hub repo id, or registered alias.
+#' @param task `"classification"` or `"regression"`.
+#' @param backend Optional backend name; inferred from the config when
+#'   `NULL`.
+#' @param device Device string.
+#' @param subfolder Optional artifact subfolder, overriding the
+#'   backend's default for this task.
+#' @return A list with `net`, `config`, `backend`, `device`, `task` and
+#'   `model_ref` (the resolved model string, kept so a saved model can be
+#'   rebuilt -- see [tabfound_save()]).
+#' @keywords internal
+load_backend_model <- function(model, task, backend = NULL,
+                               device = "cpu", subfolder = NULL) {
+  device <- resolve_device(device)
+  # Keep the caller's original string: it is what `tabfound_save()`
+  # records, so a reloaded model re-resolves through the same path rather
+  # than hard-coding today's cache location.
+  model_ref <- model
+  resolved <- .resolve_backend_config(model, task, backend, subfolder)
+  paths <- resolved$paths
+  config <- resolved$config
+  bk <- resolved$backend
 
   cli::cli_alert_info("Loading weights ({.val {bk$name}} backend)...")
   weights <- read_safetensors(paths$weights)

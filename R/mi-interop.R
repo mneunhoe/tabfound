@@ -202,6 +202,8 @@ as_amelia.tabfound_mi <- function(x, ...) {
 #'   default (`FALSE`) and same rationale as [tabfound_impute()], whose
 #'   *Properness* section explains why the correction is off by default
 #'   for these models.
+#' @param proper_frac Fraction kept per imputation when `proper = "subsample"`;
+#'   see [tabfound_impute()].
 #' @param ... Unused; absorbs the rest of what mice passes down.
 #' @return A vector of length `sum(wy)`, in `y`'s own type.
 #' @examples
@@ -213,9 +215,11 @@ as_amelia.tabfound_mi <- function(x, ...) {
 #' }
 #' @export
 mice.impute.tabfound <- function(y, ry, x, wy = NULL, models = NULL,
-                                 draw = "auto", proper = FALSE, ...) {
+                                 draw = "auto", proper = FALSE, proper_frac = 0.632,
+                                 ...) {
   if (is.null(wy)) wy <- !ry
   proper <- .mi_resolve_proper(proper)
+  proper_frac <- .mi_resolve_proper_frac(proper_frac)
   models <- models %||% getOption("tabfound.models")
   if (is.null(models)) {
     cli::cli_abort(c(
@@ -230,7 +234,7 @@ mice.impute.tabfound <- function(y, ry, x, wy = NULL, models = NULL,
   # enough (blocks, `where`) that `as.matrix()` on it would be the same
   # silent character-matrix trap `fit()` guards against.
   x <- .as_model_matrix(x, "x")
-  ctx   <- .mi_context_rows(which(ry), proper)
+  ctx   <- .mi_context_rows(which(ry), proper, frac = proper_frac)
   X_obs <- x[ctx, , drop = FALSE]
   X_mis <- x[wy, , drop = FALSE]
 

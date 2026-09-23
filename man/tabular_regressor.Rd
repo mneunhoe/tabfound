@@ -9,6 +9,10 @@ tabular_regressor(
   backend = NULL,
   device = "cpu",
   categorical_features = NULL,
+  transform_text = "auto",
+  transform_dates = "auto",
+  min_cardinality_for_text = 30L,
+  text_n_components = 30L,
   ...
 )
 }
@@ -27,6 +31,27 @@ is much stronger than inferring: inference only catches columns with
 fewer than four distinct values, so an ordinal-coded factor with five
 levels is invisible to it. \code{\link[=tabfound]{tabfound()}} fills this in from the frame's
 factor columns automatically.}
+
+\item{transform_text}{Expand text columns into numeric features at
+\code{\link[=fit]{fit()}}: \code{"auto"} (default) does so when the checkpoint's own recipe
+asks for it -- TabPFN v3.5's does -- and not otherwise; \code{TRUE} or
+\code{FALSE} decides for every backend. A text column is a character column
+with more than \code{min_cardinality_for_text} distinct values that are not
+all numbers; it becomes \code{text_n_components} features, by latent
+semantic analysis over its character n-grams, exactly as TabPFN's
+Python estimator computes them. Off, such a column is coded as a
+categorical, as it always has been.}
+
+\item{transform_dates}{Expand \code{Date} and \code{POSIXct} columns into calendar
+features: year, minute, second, seconds since the epoch, day of year,
+and circular month, day, hour and weekday. \code{"auto"} as for
+\code{transform_text}. Off, a date becomes a single number, as it always
+has. A \code{difftime} becomes its length in seconds either way.}
+
+\item{min_cardinality_for_text}{Distinct-value count above which a
+character column counts as text rather than categorical.}
+
+\item{text_n_components}{Features each text column becomes, at most.}
 
 \item{...}{Backend-specific arguments, e.g. \code{ensemble_configs_dir} or
 \code{softmax_temperature}.}

@@ -12,6 +12,7 @@ mice.impute.tabfound(
   models = NULL,
   draw = "auto",
   proper = FALSE,
+  proper_frac = 0.632,
   ...
 )
 }
@@ -34,6 +35,9 @@ mice's own \code{norm.boot} / \code{polyreg.boot} do. Same argument, same
 default (\code{FALSE}) and same rationale as \code{\link[=tabfound_impute]{tabfound_impute()}}, whose
 \emph{Properness} section explains why the correction is off by default
 for these models.}
+
+\item{proper_frac}{Fraction kept per imputation when \code{proper = "subsample"};
+see \code{\link[=tabfound_impute]{tabfound_impute()}}.}
 
 \item{...}{Unused; absorbs the rest of what mice passes down.}
 }

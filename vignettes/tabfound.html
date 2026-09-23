@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-08-07">
+<meta name="dcterms.date" content="2026-09-22">
 
 <title>Tabular foundation models with tabfound</title>
 <style>
@@ -94,6 +94,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#getting-the-weights" id="toc-getting-the-weights" class="nav-link" data-scroll-target="#getting-the-weights">Getting the weights</a>
   <ul class="collapse">
   <li><a href="#versions-are-named-never-inferred" id="toc-versions-are-named-never-inferred" class="nav-link" data-scroll-target="#versions-are-named-never-inferred">Versions are named, never inferred</a></li>
+  <li><a href="#one-checkpoint-both-tasks" id="toc-one-checkpoint-both-tasks" class="nav-link" data-scroll-target="#one-checkpoint-both-tasks">One checkpoint, both tasks</a></li>
   <li><a href="#what-conversion-needs" id="toc-what-conversion-needs" class="nav-link" data-scroll-target="#what-conversion-needs">What conversion needs</a></li>
   </ul></li>
   <li><a href="#classification-iris" id="toc-classification-iris" class="nav-link" data-scroll-target="#classification-iris">Classification: <code>iris</code></a>
@@ -107,7 +108,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#missing-values-differ-by-backend-and-it-matters" id="toc-missing-values-differ-by-backend-and-it-matters" class="nav-link" data-scroll-target="#missing-values-differ-by-backend-and-it-matters">Missing values differ by backend, and it matters</a></li>
   </ul></li>
   <li><a href="#ensembling-tabpfn-backends" id="toc-ensembling-tabpfn-backends" class="nav-link" data-scroll-target="#ensembling-tabpfn-backends">Ensembling (TabPFN backends)</a></li>
-  <li><a href="#making-prediction-cheaper-tabpfn-backends" id="toc-making-prediction-cheaper-tabpfn-backends" class="nav-link" data-scroll-target="#making-prediction-cheaper-tabpfn-backends">Making prediction cheaper (TabPFN backends)</a></li>
+  <li><a href="#making-prediction-cheaper" id="toc-making-prediction-cheaper" class="nav-link" data-scroll-target="#making-prediction-cheaper">Making prediction cheaper</a></li>
   <li><a href="#multiple-imputation-and-synthetic-data" id="toc-multiple-imputation-and-synthetic-data" class="nav-link" data-scroll-target="#multiple-imputation-and-synthetic-data">Multiple imputation and synthetic data</a></li>
   <li><a href="#model-objects-and-saving" id="toc-model-objects-and-saving" class="nav-link" data-scroll-target="#model-objects-and-saving">Model objects and saving</a></li>
   <li><a href="#the-engine-underneath" id="toc-the-engine-underneath" class="nav-link" data-scroll-target="#the-engine-underneath">The engine underneath</a></li>
@@ -138,7 +139,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">August 7, 2026</p>
+      <p class="date">September 22, 2026</p>
     </div>
   </div>
   
@@ -163,8 +164,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 3   tabicl        TabICL v2 column/row/ICL transformer (soda-inria)       tabicl (PyPI)
 4   tabpfn           TabPFN v2 per-feature transformer (Prior-Labs)       tabpfn (PyPI)
 5 tabpfn26                                 TabPFN v2.6 (Prior-Labs) tabpfn 8.2.0 (PyPI)
-6  tabpfn3                                   TabPFN v3 (Prior-Labs) tabpfn 8.2.0 (PyPI)</code></pre>
-<p>The three TabPFN generations are separate backends rather than options on one, because they are separate architectures: v2.6 moved the preprocessing inside the network, and v3 replaced the decoder as well. Each is registered independently and graded independently.</p>
+6  tabpfn3                                   TabPFN v3 (Prior-Labs) tabpfn 8.2.0 (PyPI)
+7 tabpfn35                      TabPFN v3.5, multitask (Prior-Labs) tabpfn 9.0.0 (PyPI)</code></pre>
+<p>The four TabPFN generations are separate backends rather than options on one, because they are separate architectures: v2.6 moved the preprocessing inside the network, v3 replaced the decoder as well, and v3.5 replaced the cell embedder and folded both heads into one checkpoint. Each is registered independently and graded independently.</p>
 <p>The <code>parity</code> column is the point of the package: each backend is checked end-to-end against the reference Python implementation it was ported from, stage by stage. See <code>inst/parity/</code> for the numbers.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
@@ -218,12 +220,27 @@ v "tabpfn-v2.5-classifier" ready in
 <p><strong><code>"tabpfn"</code> stays pinned to v2.5.</strong> Adding v2.6 and v3 to the package does not repoint existing code onto different weights — you ask for a version by name:</p>
 <div class="cell">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>)</span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris_train, <span class="at">model =</span> <span class="st">"tabpfn-v3"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris_train, <span class="at">model =</span> <span class="st">"tabpfn-v3"</span>)</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris_train, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+</section>
+<section id="one-checkpoint-both-tasks" class="level3">
+<h3 class="anchored" data-anchor-id="one-checkpoint-both-tasks">One checkpoint, both tasks</h3>
+<p>v3.5 is the first generation where the head is chosen per forward pass rather than baked into the weights. There is no <code>-classifier</code> / <code>-regressor</code> pair to choose between: the same id resolves under both constructors, and <code>list_models()</code> reports its task as <code>both</code>.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Species)</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">2</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Sepal.Length)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Two variants are catalogued by exact id: <code>"tabpfn-v3.5-fast"</code> (334 MB against 876 MB, 8 ICL layers instead of 24 — an alpha checkpoint the publisher reports as up to 6x faster) and <code>"tabpfn-v3.5-multiclass"</code> (experimental). As with v3’s variants they carry no family name, so <code>"tabpfn-v3.5"</code> keeps meaning the default.</p>
+<p>v3.5 also brings its estimator’s text and date handling. A character column with more than 30 distinct values becomes 30 LSA features over its character n-grams, and a <code>Date</code> or <code>POSIXct</code> becomes calendar features – on by default for v3.5, opt-in elsewhere with <code>transform_text = TRUE</code> and <code>transform_dates = TRUE</code>:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(price <span class="sc">~</span> ., <span class="at">data =</span> listings, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>fit<span class="sc">$</span>expansion      <span class="co"># which columns were expanded, and into how many features</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>v3 publishes six specialised checkpoints alongside its two defaults, and all eight are catalogued. They are <strong>the same architecture</strong> — identical config, identical state-dict keys and shapes — so they load through the same backend with no special handling:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3-classifier-binary"</span>)</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3-regressor-timeseries"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3-classifier-binary"</span>)</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3-regressor-timeseries"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <table class="caption-top table">
 <colgroup>
@@ -274,7 +291,7 @@ Warning
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>TabPFN v2.6 and v3 weights are released under <code>tabpfn-2.6-license-v1.0</code> and <code>tabpfn-3-license-v1.0</code>, which permit research, evaluation and internal benchmarking but <strong>not commercial or production use</strong>. v2.5 is not under those terms. <code>list_models()</code> prints the licence and the download prompt repeats it — read it before you build on them.</p>
+<p>TabPFN v2.6, v3 and v3.5 weights are released under <code>tabpfn-2.6-license-v1.0</code>, <code>tabpfn-3-license-v1.0</code> and <code>tabpfn-3-5-license-v1.0</code>, which permit research, evaluation and internal benchmarking but <strong>not commercial or production use</strong>. v2.5 is not under those terms. <code>list_models()</code> prints the licence and the download prompt repeats it — read it before you build on them.</p>
 </div>
 </div>
 <p>If you skip the download step, the first load asks:</p>
@@ -291,19 +308,19 @@ Download it now? (yes/No/cancel)</code></pre>
 <h3 class="anchored" data-anchor-id="what-conversion-needs">What conversion needs</h3>
 <p>TabFM and Mitra ship <code>model.safetensors</code> + <code>config.json</code> directly, so their download is a plain fetch. <strong>TabPFN and TabICL publish PyTorch pickles</strong>, which R cannot read — the checkpoints are nested Python dicts holding a state dict alongside hyperparameters, and R’s torch bindings reject them outright. Converting those needs a Python with <code>torch</code> and <code>safetensors</code>, once:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">options</span>(<span class="at">tabfound.python =</span> <span class="st">"~/.venvs/tabfound/bin/python"</span>)   <span class="co"># or TABFOUND_PYTHON</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">options</span>(<span class="at">tabfound.python =</span> <span class="st">"~/.venvs/tabfound/bin/python"</span>)   <span class="co"># or TABFOUND_PYTHON</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Nothing calls Python again afterwards. The manual route still works if you prefer to drive it yourself:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">hf</span> download Prior-Labs/tabpfn_2_5 tabpfn-v2.5-classifier-v2.5_default.ckpt <span class="at">--local-dir</span> ckpts</span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> inst/python/tabpfn_convert_ckpt.py <span class="dt">\</span></span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--src</span> ckpts/tabpfn-v2.5-classifier-v2.5_default.ckpt <span class="dt">\</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--dst-weights</span> ckpts/converted/tabpfn-v2.5-clf/model.safetensors <span class="dt">\</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--dst-config</span>  ckpts/converted/tabpfn-v2.5-clf/config.json <span class="dt">\</span></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--head</span> classifier</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">hf</span> download Prior-Labs/tabpfn_2_5 tabpfn-v2.5-classifier-v2.5_default.ckpt <span class="at">--local-dir</span> ckpts</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> inst/python/tabpfn_convert_ckpt.py <span class="dt">\</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--src</span> ckpts/tabpfn-v2.5-classifier-v2.5_default.ckpt <span class="dt">\</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--dst-weights</span> ckpts/converted/tabpfn-v2.5-clf/model.safetensors <span class="dt">\</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--dst-config</span>  ckpts/converted/tabpfn-v2.5-clf/config.json <span class="dt">\</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--head</span> classifier</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>and then a directory path works anywhere a model name does:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris_train,</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"ckpts/converted/tabpfn-v2.5-clf"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris_train,</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"ckpts/converted/tabpfn-v2.5-clf"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>You never name the backend. <code>tabfound()</code> reads <code>config.json</code> and works out which architecture it is looking at.</p>
 </section>
@@ -311,15 +328,15 @@ Download it now? (yes/No/cancel)</code></pre>
 <section id="classification-iris" class="level2">
 <h2 class="anchored" data-anchor-id="classification-iris">Classification: <code>iris</code></h2>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">42</span>)</span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>train <span class="ot">&lt;-</span> <span class="fu">sort</span>(<span class="fu">sample</span>(<span class="fu">nrow</span>(iris), <span class="dv">100</span>))</span>
-<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>test  <span class="ot">&lt;-</span> <span class="fu">setdiff</span>(<span class="fu">seq_len</span>(<span class="fu">nrow</span>(iris)), train)</span>
-<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris[train, ],</span>
-<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabpfn-v2.5-classifier"</span>)</span>
-<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>fit</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">42</span>)</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>train <span class="ot">&lt;-</span> <span class="fu">sort</span>(<span class="fu">sample</span>(<span class="fu">nrow</span>(iris), <span class="dv">100</span>))</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>test  <span class="ot">&lt;-</span> <span class="fu">setdiff</span>(<span class="fu">seq_len</span>(<span class="fu">nrow</span>(iris)), train)</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris[train, ],</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabpfn-v2.5-classifier"</span>)</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>fit</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <pre><code>tabfound fit &lt;tabpfn&gt;, mode "classification"
 * 4 predictors: Sepal.Length, Sepal.Width, Petal.Length, and Petal.Width
@@ -328,7 +345,7 @@ Download it now? (yes/No/cancel)</code></pre>
 <p><code>mode</code> was inferred: <code>Species</code> is a factor, so this is classification. Nothing to configure.</p>
 <p><code>predict()</code> returns a tibble, with the column names the tidymodels conventions use:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, iris[test, ]), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, iris[test, ]), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <pre><code># A tibble: 3 x 1
   .pred_class
@@ -337,7 +354,7 @@ Download it now? (yes/No/cancel)</code></pre>
 2 setosa
 3 setosa</code></pre>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, iris[test, ], <span class="at">type =</span> <span class="st">"prob"</span>), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, iris[test, ], <span class="at">type =</span> <span class="st">"prob"</span>), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <pre><code># A tibble: 3 x 3
   .pred_setosa .pred_versicolor .pred_virginica
@@ -349,17 +366,17 @@ Download it now? (yes/No/cancel)</code></pre>
 <h3 class="anchored" data-anchor-id="every-backend-same-call">Every backend, same call</h3>
 <p>Only the <code>model</code> argument changes:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>models <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="at">tabpfn  =</span> <span class="st">"tabpfn-v2.5-classifier"</span>,</span>
-<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabpfn3 =</span> <span class="st">"tabpfn-v3-classifier"</span>,</span>
-<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabicl  =</span> <span class="st">"tabicl-v2-classifier"</span>,</span>
-<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>            <span class="at">mitra   =</span> <span class="st">"mitra-classifier"</span>,</span>
-<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabfm   =</span> <span class="st">"tabfm-1.0.0-classifier"</span>)</span>
-<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (nm <span class="cf">in</span> <span class="fu">names</span>(models)) {</span>
-<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>  fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris[train, ], <span class="at">model =</span> models[[nm]])</span>
-<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>  acc <span class="ot">&lt;-</span> <span class="fu">mean</span>(<span class="fu">predict</span>(fit, iris[test, ])<span class="sc">$</span>.pred_class <span class="sc">==</span> iris<span class="sc">$</span>Species[test])</span>
-<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">"%-8s accuracy %.3f</span><span class="sc">\n</span><span class="st">"</span>, nm, acc))</span>
-<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>models <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="at">tabpfn  =</span> <span class="st">"tabpfn-v2.5-classifier"</span>,</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabpfn3 =</span> <span class="st">"tabpfn-v3-classifier"</span>,</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabicl  =</span> <span class="st">"tabicl-v2-classifier"</span>,</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>            <span class="at">mitra   =</span> <span class="st">"mitra-classifier"</span>,</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabfm   =</span> <span class="st">"tabfm-1.0.0-classifier"</span>)</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (nm <span class="cf">in</span> <span class="fu">names</span>(models)) {</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>  fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris[train, ], <span class="at">model =</span> models[[nm]])</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>  acc <span class="ot">&lt;-</span> <span class="fu">mean</span>(<span class="fu">predict</span>(fit, iris[test, ])<span class="sc">$</span>.pred_class <span class="sc">==</span> iris<span class="sc">$</span>Species[test])</span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">"%-8s accuracy %.3f</span><span class="sc">\n</span><span class="st">"</span>, nm, acc))</span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Measured on this split (100 train / 50 test), CPU, macOS/arm64:</p>
 <table class="caption-top table">
@@ -417,13 +434,13 @@ Download it now? (yes/No/cancel)</code></pre>
 <h2 class="anchored" data-anchor-id="regression-cars">Regression: <code>cars</code></h2>
 <p><code>cars</code> is 50 observations of stopping distance against speed — one predictor, and a famously near-linear relationship.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">42</span>)</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>ctrain <span class="ot">&lt;-</span> <span class="fu">sort</span>(<span class="fu">sample</span>(<span class="fu">nrow</span>(cars), <span class="dv">35</span>))</span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>ctest  <span class="ot">&lt;-</span> <span class="fu">setdiff</span>(<span class="fu">seq_len</span>(<span class="fu">nrow</span>(cars)), ctrain)</span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(dist <span class="sc">~</span> speed, <span class="at">data =</span> cars[ctrain, ],</span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabpfn-v2.5-regressor"</span>)</span>
-<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, cars[ctest, ]), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">42</span>)</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>ctrain <span class="ot">&lt;-</span> <span class="fu">sort</span>(<span class="fu">sample</span>(<span class="fu">nrow</span>(cars), <span class="dv">35</span>))</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>ctest  <span class="ot">&lt;-</span> <span class="fu">setdiff</span>(<span class="fu">seq_len</span>(<span class="fu">nrow</span>(cars)), ctrain)</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(dist <span class="sc">~</span> speed, <span class="at">data =</span> cars[ctrain, ],</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabpfn-v2.5-regressor"</span>)</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, cars[ctest, ]), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The outcome is numeric, so <code>mode</code> is inferred as regression and the prediction column is <code>.pred</code>.</p>
 <p>Comparing the four against <code>lm()</code>:</p>
@@ -477,10 +494,10 @@ Download it now? (yes/No/cancel)</code></pre>
 <p>The backends have genuinely different output heads, and the API exposes that rather than flattening it. This is the section the imputation and synthesis vignettes build on: everything they do is a draw from one of these distributions.</p>
 <p><strong>TabPFN</strong> (all three generations) predicts a bar distribution over 5000 bins, so it can give quantiles <em>and</em> draw samples:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(dist <span class="sc">~</span> speed, <span class="at">data =</span> cars[ctrain, ],</span>
-<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabpfn-v2.5-regressor"</span>)</span>
-<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, cars[ctest, ], <span class="at">type =</span> <span class="st">"quantiles"</span>,</span>
-<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>             <span class="at">quantiles =</span> <span class="fu">c</span>(<span class="fl">0.1</span>, <span class="fl">0.5</span>, <span class="fl">0.9</span>)), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(dist <span class="sc">~</span> speed, <span class="at">data =</span> cars[ctrain, ],</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabpfn-v2.5-regressor"</span>)</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, cars[ctest, ], <span class="at">type =</span> <span class="st">"quantiles"</span>,</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>             <span class="at">quantiles =</span> <span class="fu">c</span>(<span class="fl">0.1</span>, <span class="fl">0.5</span>, <span class="fl">0.9</span>)), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <pre><code># A tibble: 3 x 3
   .pred_q0.1 .pred_q0.5 .pred_q0.9
@@ -489,42 +506,42 @@ Download it now? (yes/No/cancel)</code></pre>
 2       8.84       18.9       29.8
 3      14.0        24.4       36.5</code></pre>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>draws <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit, cars[ctest, ], <span class="at">type =</span> <span class="st">"sample"</span>,</span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>                 <span class="at">n_samples =</span> <span class="dv">200</span>, <span class="at">seed =</span> <span class="dv">1</span>)</span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(draws)   <span class="co"># 15 x 200 -- one row per test case, one column per draw</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>draws <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit, cars[ctest, ], <span class="at">type =</span> <span class="st">"sample"</span>,</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>                 <span class="at">n_samples =</span> <span class="dv">200</span>, <span class="at">seed =</span> <span class="dv">1</span>)</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(draws)   <span class="co"># 15 x 200 -- one row per test case, one column per draw</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><strong>TabICL</strong> predicts a 999-level quantile grid directly. <code>type = "grid"</code> hands you the whole thing:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(dist <span class="sc">~</span> speed, <span class="at">data =</span> cars[ctrain, ],</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabicl-v2-regressor"</span>)</span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(<span class="fu">predict</span>(fit, cars[ctest, ], <span class="at">type =</span> <span class="st">"grid"</span>))   <span class="co"># 15 x 999</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(dist <span class="sc">~</span> speed, <span class="at">data =</span> cars[ctrain, ],</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabicl-v2-regressor"</span>)</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(<span class="fu">predict</span>(fit, cars[ctest, ], <span class="at">type =</span> <span class="st">"grid"</span>))   <span class="co"># 15 x 999</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><strong>TabFM</strong> and <strong>Mitra</strong> emit a single value per row. Asking them for quantiles is an error rather than a fabrication:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(fit_tabfm, cars[ctest, ], <span class="at">type =</span> <span class="st">"quantiles"</span>)</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Error: The "tabfm" backend has no "quantiles" prediction.</span></span>
-<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; i Available: "mean".</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb26"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(fit_tabfm, cars[ctest, ], <span class="at">type =</span> <span class="st">"quantiles"</span>)</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Error: The "tabfm" backend has no "quantiles" prediction.</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; i Available: "mean".</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </section>
 <section id="column-types-and-missing-values" class="level2">
 <h2 class="anchored" data-anchor-id="column-types-and-missing-values">Column types and missing values</h2>
 <p>You do not need to encode anything by hand. Factors, characters, logicals and dates are all handled, and the encoding is remembered and re-applied to new data:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">4</span>)</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>n <span class="ot">&lt;-</span> <span class="dv">160</span></span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">num  =</span> <span class="fu">rnorm</span>(n),</span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">grp  =</span> <span class="fu">factor</span>(<span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>), n, <span class="cn">TRUE</span>)),</span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">flag =</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="cn">TRUE</span>, <span class="cn">FALSE</span>), n, <span class="cn">TRUE</span>),</span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">when =</span> <span class="fu">as.Date</span>(<span class="st">"2021-01-01"</span>) <span class="sc">+</span> <span class="fu">sample</span>(<span class="dv">0</span><span class="sc">:</span><span class="dv">400</span>, n, <span class="cn">TRUE</span>),</span>
-<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">txt  =</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">"lo"</span>, <span class="st">"hi"</span>), n, <span class="cn">TRUE</span>)</span>
-<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>d<span class="sc">$</span>num[<span class="fu">sample</span>(n, <span class="dv">12</span>)] <span class="ot">&lt;-</span> <span class="cn">NA</span>                      <span class="co"># some missing values</span></span>
-<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>d<span class="sc">$</span>y <span class="ot">&lt;-</span> <span class="fu">factor</span>(<span class="fu">ifelse</span>(d<span class="sc">$</span>num <span class="sc">&gt;</span> <span class="dv">0</span> <span class="sc">|</span> d<span class="sc">$</span>grp <span class="sc">==</span> <span class="st">"a"</span>, <span class="st">"yes"</span>, <span class="st">"no"</span>))</span>
-<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>d<span class="sc">$</span>y[<span class="fu">is.na</span>(d<span class="sc">$</span>y)] <span class="ot">&lt;-</span> <span class="st">"no"</span></span>
-<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(y <span class="sc">~</span> ., <span class="at">data =</span> d[<span class="dv">1</span><span class="sc">:</span><span class="dv">120</span>, ], <span class="at">model =</span> <span class="st">"tabpfn-v2.5-classifier"</span>)</span>
-<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>fit</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">4</span>)</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>n <span class="ot">&lt;-</span> <span class="dv">160</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">num  =</span> <span class="fu">rnorm</span>(n),</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">grp  =</span> <span class="fu">factor</span>(<span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>), n, <span class="cn">TRUE</span>)),</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">flag =</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="cn">TRUE</span>, <span class="cn">FALSE</span>), n, <span class="cn">TRUE</span>),</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">when =</span> <span class="fu">as.Date</span>(<span class="st">"2021-01-01"</span>) <span class="sc">+</span> <span class="fu">sample</span>(<span class="dv">0</span><span class="sc">:</span><span class="dv">400</span>, n, <span class="cn">TRUE</span>),</span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">txt  =</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">"lo"</span>, <span class="st">"hi"</span>), n, <span class="cn">TRUE</span>)</span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>d<span class="sc">$</span>num[<span class="fu">sample</span>(n, <span class="dv">12</span>)] <span class="ot">&lt;-</span> <span class="cn">NA</span>                      <span class="co"># some missing values</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>d<span class="sc">$</span>y <span class="ot">&lt;-</span> <span class="fu">factor</span>(<span class="fu">ifelse</span>(d<span class="sc">$</span>num <span class="sc">&gt;</span> <span class="dv">0</span> <span class="sc">|</span> d<span class="sc">$</span>grp <span class="sc">==</span> <span class="st">"a"</span>, <span class="st">"yes"</span>, <span class="st">"no"</span>))</span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>d<span class="sc">$</span>y[<span class="fu">is.na</span>(d<span class="sc">$</span>y)] <span class="ot">&lt;-</span> <span class="st">"no"</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(y <span class="sc">~</span> ., <span class="at">data =</span> d[<span class="dv">1</span><span class="sc">:</span><span class="dv">120</span>, ], <span class="at">model =</span> <span class="st">"tabpfn-v2.5-classifier"</span>)</span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>fit</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <pre><code>tabfound fit &lt;tabpfn&gt;, mode "classification"
 * 5 predictors: num, grp, flag, when, and txt
@@ -549,7 +566,7 @@ Download it now? (yes/No/cancel)</code></pre>
 </thead>
 <tbody>
 <tr class="odd">
-<td><code>tabpfn</code>, <code>tabpfn26</code>, <code>tabpfn3</code></td>
+<td><code>tabpfn</code>, <code>tabpfn26</code>, <code>tabpfn3</code>, <code>tabpfn35</code></td>
 <td>encodes an explicit is-missing indicator</td>
 <td><code>pass</code></td>
 </tr>
@@ -573,31 +590,31 @@ Download it now? (yes/No/cancel)</code></pre>
 <p>Mitra’s behaviour is the one to know about. A single <code>NA</code> makes that column’s quantiles all-<code>NaN</code>, which sends every value to bucket zero, which zeroes the column’s variance, which the zero-variance guard flattens. The output is perfectly finite and the feature is gone. This is the reference implementation’s own behaviour, verified against it — and it is why <code>tabfound()</code> imputes for that backend by default rather than leaving it to you to notice.</p>
 <p>If you force the issue, you get told:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound</span>(y <span class="sc">~</span> ., <span class="at">data =</span> d, <span class="at">model =</span> <span class="st">"tabicl-v2-classifier"</span>, <span class="at">na_action =</span> <span class="st">"pass"</span>)</span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Warning: The "tabicl" backend has no missing-value handling.</span></span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; x Predictions for rows with "NA" will be "NaN".</span></span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; i Use `na_action = "impute"` or impute before fitting.</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound</span>(y <span class="sc">~</span> ., <span class="at">data =</span> d, <span class="at">model =</span> <span class="st">"tabicl-v2-classifier"</span>, <span class="at">na_action =</span> <span class="st">"pass"</span>)</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Warning: The "tabicl" backend has no missing-value handling.</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; x Predictions for rows with "NA" will be "NaN".</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; i Use `na_action = "impute"` or impute before fitting.</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The built-in imputer is a plain column-mean fill. It is <em>not</em> a port of any reference implementation’s imputation and is not covered by the parity checks — it exists so that backends which cannot see <code>NA</code> at all are still usable. For anything serious, impute deliberately before fitting.</p>
 </section>
 </section>
 <section id="ensembling-tabpfn-backends" class="level2">
 <h2 class="anchored" data-anchor-id="ensembling-tabpfn-backends">Ensembling (TabPFN backends)</h2>
-<p>A single forward pass is the default, and it is what every number above was measured with. The reference estimators average several passes over shuffled and re-preprocessed views of the same data, and <code>tabpfn</code>, <code>tabpfn26</code> and <code>tabpfn3</code> can all do that here.</p>
+<p>A single forward pass is the default, and it is what every number above was measured with. The reference estimators average several passes over shuffled and re-preprocessed views of the same data, and <code>tabpfn</code>, <code>tabpfn26</code>, <code>tabpfn3</code> and <code>tabpfn35</code> can all do that here.</p>
 <p>A member is described entirely by its config — which primary transform, whether the transformed block replaces or is appended to the originals, whether an SVD block and polynomial products are added, the column shuffle, the class rotation. Build a set in pure R:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>X <span class="ot">&lt;-</span> <span class="fu">as.matrix</span>(iris[train, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]); y <span class="ot">&lt;-</span> iris<span class="sc">$</span>Species[train]</span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> <span class="fu">tempfile</span>(); <span class="fu">dir.create</span>(d)</span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a><span class="fu">generate_ensemble_configs_native</span>(X, y, <span class="at">n_estimators =</span> <span class="dv">4</span>L, <span class="at">head =</span> <span class="st">"classifier"</span>,</span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">variant =</span> <span class="st">"v2.5"</span>, <span class="at">output_dir =</span> d)</span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>c1 <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>), X, y)</span>
-<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>c4 <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>,</span>
-<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>                             <span class="at">ensemble_configs_dir =</span> d), X, y)</span>
-<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a><span class="fu">mean</span>(<span class="fu">predict</span>(c1, <span class="fu">as.matrix</span>(iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>])) <span class="sc">==</span> iris<span class="sc">$</span>Species[test])   <span class="co">#&gt; 0.98</span></span>
-<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a><span class="fu">mean</span>(<span class="fu">predict</span>(c4, <span class="fu">as.matrix</span>(iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>])) <span class="sc">==</span> iris<span class="sc">$</span>Species[test])   <span class="co">#&gt; 0.98</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb30"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>X <span class="ot">&lt;-</span> <span class="fu">as.matrix</span>(iris[train, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]); y <span class="ot">&lt;-</span> iris<span class="sc">$</span>Species[train]</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> <span class="fu">tempfile</span>(); <span class="fu">dir.create</span>(d)</span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="fu">generate_ensemble_configs_native</span>(X, y, <span class="at">n_estimators =</span> <span class="dv">4</span>L, <span class="at">head =</span> <span class="st">"classifier"</span>,</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">variant =</span> <span class="st">"v2.5"</span>, <span class="at">output_dir =</span> d)</span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>c1 <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>), X, y)</span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>c4 <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>,</span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>                             <span class="at">ensemble_configs_dir =</span> d), X, y)</span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a><span class="fu">mean</span>(<span class="fu">predict</span>(c1, <span class="fu">as.matrix</span>(iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>])) <span class="sc">==</span> iris<span class="sc">$</span>Species[test])   <span class="co">#&gt; 0.98</span></span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a><span class="fu">mean</span>(<span class="fu">predict</span>(c4, <span class="fu">as.matrix</span>(iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>])) <span class="sc">==</span> iris<span class="sc">$</span>Species[test])   <span class="co">#&gt; 0.98</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>No change on <code>iris</code> — with one test row separating 0.98 from 0.96 there is nothing for four members to buy. Ensembling earns its keep on harder problems; this block is here to show the mechanism, not to argue for it.</p>
 <p><code>variant</code> has to match your weights: it decides which member menu is used, and the generations do not share one. The implemented primary transforms are <code>none</code>, <code>squashing_scaler_default</code>, <code>squashing_scaler_max10</code>, <code>quantile_uni</code>, <code>quantile_uni_coarse</code>, <code>quantile_uni_fine</code> and <code>quantile_uni_extrapolate</code>, which between them cover every recipe the eight published v3 checkpoints and both v2 generations ask for. A dump naming anything else raises rather than substituting a near neighbour.</p>
@@ -605,16 +622,16 @@ Download it now? (yes/No/cancel)</code></pre>
 <p>One catch when combining it with <code>tabfound()</code>: the configs record a code permutation per encoded categorical column, sized from the matrix you pass in — so that matrix has to be the one the model will actually see. <code>tabfound()</code> molds the frame through hardhat first, which reorders columns, so generate from the molded matrix rather than the raw frame. A mismatch is caught rather than silently mis-encoded.</p>
 <p><code>softmax_temperature</code> defaults to <code>0.9</code>, matching the reference estimators. Pass <code>softmax_temperature = 1</code> for the untempered distribution.</p>
 </section>
-<section id="making-prediction-cheaper-tabpfn-backends" class="level2">
-<h2 class="anchored" data-anchor-id="making-prediction-cheaper-tabpfn-backends">Making prediction cheaper (TabPFN backends)</h2>
+<section id="making-prediction-cheaper" class="level2">
+<h2 class="anchored" data-anchor-id="making-prediction-cheaper">Making prediction cheaper</h2>
 <p>Recall consequence 2 from the top of this vignette: every prediction call re-encodes the whole training context. That makes cost grow with the <em>training</em> set, and grow again per batch of test rows. Two arguments change that.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>,</span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>                          <span class="at">kv_cache =</span> <span class="cn">TRUE</span>,             <span class="co"># condition once</span></span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>                          <span class="at">save_peak_memory_factor =</span> <span class="dv">8</span>) <span class="co"># smaller transients</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>,</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>                          <span class="at">kv_cache =</span> <span class="cn">TRUE</span>,             <span class="co"># condition once</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>                          <span class="at">save_peak_memory_factor =</span> <span class="dv">8</span>) <span class="co"># smaller transients</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p><code>kv_cache</code> works on <code>tabpfn</code>, <code>tabpfn26</code> and <code>tabpfn3</code>; <code>save_peak_memory_factor</code> on <code>tabpfn26</code> and <code>tabpfn3</code>. Asking a backend for a path it does not have is an error rather than a silent no-op. Both are off by default.</p>
-<p><strong><code>kv_cache</code></strong> conditions on the training rows once per <code>predict()</code> call and reuses that for every chunk and every ensemble member. The training rows reach the test rows through exactly two channels — the key/value projections of the between-items attention, and the preprocessing statistics fitted on the training rows — and both are computed once. Measured here on 1500 train / 3000 test rows, 10 columns:</p>
+<p><code>kv_cache</code> works on every backend; <code>save_peak_memory_factor</code> on <code>tabpfn26</code>, <code>tabpfn3</code> and <code>tabpfn35</code> only. Asking a backend for a path it does not have is an error rather than a silent no-op. Both are off by default.</p>
+<p><strong><code>kv_cache</code></strong> conditions on the training rows once per <code>predict()</code> call and reuses that for every chunk and every ensemble member. On TabPFN the training rows reach the test rows through exactly two channels — the key/value projections of the between-items attention, and the preprocessing statistics fitted on the training rows — and both are computed once. Measured here on 1500 train / 3000 test rows, 10 columns:</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
@@ -637,10 +654,17 @@ Download it now? (yes/No/cancel)</code></pre>
 <td style="text-align: right;"><strong>1.4 s</strong></td>
 <td style="text-align: right;">4.0e-06</td>
 </tr>
+<tr class="odd">
+<td>TabICL</td>
+<td style="text-align: right;">4.5 s</td>
+<td style="text-align: right;"><strong>2.1 s</strong></td>
+<td style="text-align: right;">2.9e-06</td>
+</tr>
 </tbody>
 </table>
-<p>The generations differ in what the cache costs you, and it is worth knowing which one you are on.</p>
+<p>The generations and architectures differ in what the cache costs you, and it is worth knowing which one you are on.</p>
 <p><strong>v2.5 and v3 pay nothing.</strong> Every statistic their networks fit comes from the training rows alone, so conditioning once cannot answer a different question. What remains is float32 reduction order — on v2.5 here, not even that.</p>
+<p><strong>TabICL, TabFM and Mitra pay nothing either</strong>, though each holds a different shape of thing. TabICL slices its context down to the labelled rows, so it caches one inducing summary per column block plus one key/value pair per ICL block. TabFM masks instead of slicing and runs the column stage twice, so it caches two sets of summaries plus its ICL key/values; masked positions contribute exactly zero, which leaves the two paths computing the same sum grouped differently — float32 rounding, around 1e-06 of the logit scale. Mitra’s support set is never told the query rows exist, so its cached predictions are <em>bit-identical</em>; the catch there is memory, because it has no multi-query path and every attention head has to be kept. <code>print()</code> on any of these caches reports how large it got.</p>
 <p><strong>v2.6 can.</strong> It moved two masks — the constant-column mask and the within-group informative mask — to a fit over train <em>and</em> test. Building a cache fits them on the training rows alone. Where those agree a cached prediction is bit-identical; where they don’t it is a genuinely different prediction. The clearest case is a column constant across the training rows but varying across the test rows: uncached it survives and is used, cached it was dropped before the cache existed. That is the reference’s own behaviour on the same fixtures, and the parity harness reports it one by one rather than averaging it away.</p>
 <p><strong><code>save_peak_memory_factor</code></strong> splits each sublayer’s work into that many chunks, shrinking the attention score matrix each one materialises. It buys peak memory, not speed — on the run above it cost about 25% in wall time — and it is bit-identical on v2.6 because it only reorganises work that was already independent. On v3 it is not quite: chunking changes the batch shapes the attention kernel sees, and the difference stays at float32 noise (~4e-06 of the logits’ own scale here).</p>
 </section>
@@ -649,19 +673,19 @@ Download it now? (yes/No/cancel)</code></pre>
 <p>Everything above throws away the model’s uncertainty at the last step: <code>predict()</code> returns a number. Two capabilities keep it instead, and each has its own vignette.</p>
 <p><strong>Multiple imputation</strong> draws each missing cell from the predictive distribution, so that the spread between the completed data sets carries into the pooled standard error:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb30"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>mods <span class="ot">&lt;-</span> <span class="fu">tabfound_models</span>(<span class="at">classifier =</span> <span class="st">"tabpfn-v2.5-classifier"</span>,</span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>                        <span class="at">regressor  =</span> <span class="st">"tabpfn-v2.5-regressor"</span>)</span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>imp <span class="ot">&lt;-</span> <span class="fu">tabfound_impute</span>(airquality[<span class="dv">1</span><span class="sc">:</span><span class="dv">60</span>, ], <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">maxit =</span> <span class="dv">3</span>)</span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(mice<span class="sc">::</span><span class="fu">pool</span>(<span class="fu">with</span>(imp, <span class="fu">lm</span>(Ozone <span class="sc">~</span> Wind <span class="sc">+</span> Temp))))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb32"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>mods <span class="ot">&lt;-</span> <span class="fu">tabfound_models</span>(<span class="at">classifier =</span> <span class="st">"tabpfn-v2.5-classifier"</span>,</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>                        <span class="at">regressor  =</span> <span class="st">"tabpfn-v2.5-regressor"</span>)</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>imp <span class="ot">&lt;-</span> <span class="fu">tabfound_impute</span>(airquality[<span class="dv">1</span><span class="sc">:</span><span class="dv">60</span>, ], <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">maxit =</span> <span class="dv">3</span>)</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(mice<span class="sc">::</span><span class="fu">pool</span>(<span class="fu">with</span>(imp, <span class="fu">lm</span>(Ozone <span class="sc">~</span> Wind <span class="sc">+</span> Temp))))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><code>as_mids()</code> hands the result to mice, <code>as_amelia()</code> to Amelia, and <code>mice(method = "tabfound")</code> runs the other direction. In a simulation where the truth is known by construction, TabPFN imputation removes 93% of the bias a complete-case analysis carries and restores nominal coverage. See <code>vignette("multiple-imputation", "tabfound")</code>.</p>
 <p><strong>Synthetic data</strong> points the same distributions at <em>every</em> cell: sequential fully conditional synthesis, each variable modelled on the real data given the variables before it and drawn at the synthetic values generated earlier in the pass.</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>sds <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(iris, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">seed =</span> <span class="dv">20260807</span>)</span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>synthpop<span class="sc">::</span><span class="fu">compare</span>(sds, iris)</span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(synthpop<span class="sc">::</span><span class="fu">lm.synds</span>(Petal.Width <span class="sc">~</span> Petal.Length <span class="sc">+</span> Species, <span class="fu">as_synds</span>(sds)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb33"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>sds <span class="ot">&lt;-</span> <span class="fu">tabfound_syn</span>(iris, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">models =</span> mods, <span class="at">seed =</span> <span class="dv">20260807</span>)</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>synthpop<span class="sc">::</span><span class="fu">compare</span>(sds, iris)</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(synthpop<span class="sc">::</span><span class="fu">lm.synds</span>(Petal.Width <span class="sc">~</span> Petal.Length <span class="sc">+</span> Species, <span class="fu">as_synds</span>(sds)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><code>as_synds()</code> opens the whole synthpop toolchain — utility, disclosure and the synthetic-data variance estimators — and <code>syn(method = "tabfound")</code> lets synthpop drive. The sampler mode and the properness bootstrap are real decisions with measured consequences; see <code>vignette("synthetic-data", "tabfound")</code>.</p>
 <p>Neither has a reference implementation to be verified against, so the parity harness has nothing to say about either. They are <em>uses</em> of the fitted models, not claims about them.</p>
@@ -670,72 +694,74 @@ Download it now? (yes/No/cancel)</code></pre>
 <h2 class="anchored" data-anchor-id="model-objects-and-saving">Model objects and saving</h2>
 <p>Fitted models have value semantics, like every other R modelling object. <code>fit()</code> returns a new object and leaves its input alone:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb32"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>m0 <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>)</span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>m1 <span class="ot">&lt;-</span> <span class="fu">fit</span>(m0, iris[train, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], iris[train, <span class="dv">5</span>])</span>
-<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a><span class="fu">is_fitted</span>(m0)   <span class="co"># FALSE -- m0 was not modified</span></span>
-<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a><span class="fu">is_fitted</span>(m1)   <span class="co"># TRUE</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb34"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>m0 <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>)</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>m1 <span class="ot">&lt;-</span> <span class="fu">fit</span>(m0, iris[train, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], iris[train, <span class="dv">5</span>])</span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a><span class="fu">is_fitted</span>(m0)   <span class="co"># FALSE -- m0 was not modified</span></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a><span class="fu">is_fitted</span>(m1)   <span class="co"># TRUE</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><code>saveRDS()</code> does <strong>not</strong> work on these objects. A torch module survives the round trip structurally, but its tensors come back as dangling pointers and the failure only appears later, in use. Use the dedicated functions:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb33"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_save</span>(m1, <span class="st">"model.tabfound"</span>)</span>
-<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>m2 <span class="ot">&lt;-</span> <span class="fu">tabfound_load</span>(<span class="st">"model.tabfound"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb35"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_save</span>(m1, <span class="st">"model.tabfound"</span>)</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>m2 <span class="ot">&lt;-</span> <span class="fu">tabfound_load</span>(<span class="st">"model.tabfound"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The saved file is about <strong>1.3 KB</strong>. Fitting stores context rows rather than learning parameters, so what gets written is your training data plus a reference to the weights on disk — not a copy of them. Reloading re-resolves the weights, so the artifacts (or the HuggingFace cache) need to still be reachable.</p>
 <p>If you do reach for <code>saveRDS()</code> anyway, using the result says so:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb34"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(<span class="fu">readRDS</span>(<span class="st">"oops.rds"</span>), iris[test, ])</span>
-<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Error: This model's weights are no longer available.</span></span>
-<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; x Its tensors are dangling pointers, which is what `saveRDS()` leaves</span></span>
-<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;   behind: it writes the object's shape but not the weights.</span></span>
-<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; i Use `tabfound_save()` and `tabfound_load()` instead.</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb36"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(<span class="fu">readRDS</span>(<span class="st">"oops.rds"</span>), iris[test, ])</span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Error: This model's weights are no longer available.</span></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; x Its tensors are dangling pointers, which is what `saveRDS()` leaves</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;   behind: it writes the object's shape but not the weights.</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; i Use `tabfound_save()` and `tabfound_load()` instead.</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </section>
 <section id="the-engine-underneath" class="level2">
 <h2 class="anchored" data-anchor-id="the-engine-underneath">The engine underneath</h2>
 <p><code>tabfound()</code> is a layer over a lower-level interface that takes a numeric matrix directly. Use it when you have already done your own encoding, or when you want backend-specific options:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb35"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>, <span class="at">device =</span> <span class="st">"cpu"</span>)</span>
-<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(clf, <span class="fu">as.matrix</span>(iris[train, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]), iris[train, <span class="dv">5</span>])</span>
-<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, <span class="fu">as.matrix</span>(iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]), <span class="at">type =</span> <span class="st">"prob"</span>)</span>
-<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Backend-specific arguments pass through:</span></span>
-<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>,</span>
-<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>                          <span class="at">softmax_temperature =</span> <span class="dv">1</span>)</span>
-<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">tabular_regressor</span>(<span class="st">"tabicl-v2-regressor"</span>, <span class="at">predict_chunk_size =</span> <span class="dv">256</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb37"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>, <span class="at">device =</span> <span class="st">"cpu"</span>)</span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(clf, <span class="fu">as.matrix</span>(iris[train, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]), iris[train, <span class="dv">5</span>])</span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, <span class="fu">as.matrix</span>(iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]), <span class="at">type =</span> <span class="st">"prob"</span>)</span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Backend-specific arguments pass through:</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.5-classifier"</span>,</span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>                          <span class="at">softmax_temperature =</span> <span class="dv">1</span>)</span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">tabular_regressor</span>(<span class="st">"tabicl-v2-regressor"</span>, <span class="at">predict_chunk_size =</span> <span class="dv">256</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>This layer does no column encoding, no missing-value policy and no outcome-type inference — it hands your matrix to the network as-is.</p>
 </section>
 <section id="a-note-on-what-is-and-is-not-ported" class="level2">
 <h2 class="anchored" data-anchor-id="a-note-on-what-is-and-is-not-ported">A note on what is and is not ported</h2>
-<p>Every <strong>network</strong> is complete and verified against its reference. The <strong>sklearn-style wrappers</strong> around them are ported unevenly, and the line runs between the TabPFN family and the rest.</p>
-<p><strong>The three TabPFN backends have their wrapper.</strong> Ensembling (feature shuffling, class rotation, preprocessing variants, SVD and polynomial blocks), the K/V cache and the chunked forward are all implemented and all graded — the ensemble against a dumped reference config directory, the cache and the chunking against both the reference’s own run of the same mechanism and this package’s plain forward.</p>
-<p><strong>TabICL, TabFM and Mitra do not.</strong> No ensembling, no caching, no reference-faithful feature preprocessing on top of the network. Their predictions match the reference <em>network</em> exactly but not the full estimator, which applies its own preprocessing first. Expect single-forward-pass quality, usually a little below the published ensemble numbers. TabFM additionally has no <code>TransformToNumerical</code> for categorical or datetime columns.</p>
+<p>Every <strong>network</strong> is complete and verified against its reference, and so is the <strong>sklearn-style wrapper</strong> around each one: the preprocessing pipeline, the ensemble of transformed views, and the K/V cache. What is missing is specific rather than wholesale.</p>
+<p><strong>The three TabPFN backends</strong> have ensembling (feature shuffling, class rotation, preprocessing variants, SVD and polynomial blocks), the K/V cache and the chunked forward, all graded — the ensemble against a dumped reference config directory, the cache and the chunking against both the reference’s own run of the same mechanism and this package’s plain forward.</p>
+<p><strong>TabICL, TabFM and Mitra</strong> have their preprocessing pipelines, their ensemble generators (Latin-square or random feature permutations, class shifts, per-member normalisation) and a K/V cache each. What they do not have: TabFM’s heavier <code>ensemble()</code> preset (feature crosses, SVD features, NNLS weights, probability calibration) and its <code>TransformToNumerical</code> datetime handling; TabICL’s many-class hierarchical path; Mitra’s fine-tuning, which AutoGluon does by default and an inference-only package cannot — so Mitra’s predictions match a <code>MitraClassifier(fine_tune = False)</code>, not the out-of-the-box one.</p>
 </section>
 <section id="reproducing-this" class="level2">
 <h2 class="anchored" data-anchor-id="reproducing-this">Reproducing this</h2>
 <p>Every model named in this vignette is fetched the same way. This is the whole setup:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb36"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
-<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-classifier"</span>)</span>
-<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-regressor"</span>)</span>
-<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v3-classifier"</span>)      <span class="co"># non-commercial licence</span></span>
-<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabicl-v2-classifier"</span>)</span>
-<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabicl-v2-regressor"</span>)</span>
-<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"mitra-classifier"</span>)</span>
-<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabfm-1.0.0-classifier"</span>)    <span class="co"># ~6.6 GB</span></span>
-<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a><span class="fu">list_models</span>()   <span class="co"># confirm what landed, and where</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb38"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-classifier"</span>)</span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v2.5-regressor"</span>)</span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v3-classifier"</span>)      <span class="co"># non-commercial licence</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabpfn-v3.5"</span>)               <span class="co"># one artifact, both tasks</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabicl-v2-classifier"</span>)</span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabicl-v2-regressor"</span>)</span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"mitra-classifier"</span>)</span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabfm-1.0.0-classifier"</span>)    <span class="co"># ~6.6 GB</span></span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a><span class="fu">list_models</span>()   <span class="co"># confirm what landed, and where</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>TabPFN and TabICL are converted on the way in, so <code>options(tabfound.python = )</code> has to point at an interpreter with <code>torch</code> and <code>safetensors</code> for those two. Skip this block entirely and each model asks on first use instead.</p>
 <p>Timings above are single-threaded CPU on macOS/arm64 with R 4.5.2 and <code>torch</code> 0.16.3, against TabPFN v2.5 and v3. The parity harness that backs the <code>parity</code> column lives in <code>inst/parity/</code>; run it with</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb37"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn</span>
-<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn26</span>
-<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn3</span>
-<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabfm</span>
-<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabicl</span>
-<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R mitra</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb39"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn26</span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn3</span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn35</span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabfm</span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabicl</span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R mitra</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The two capability vignettes reproduce the same way and add <code>mice</code>, <code>Amelia</code> and <code>synthpop</code>; neither needs any weights beyond TabPFN v2.5.</p>
 </section>
 <section id="licences" class="level2">

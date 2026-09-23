@@ -485,8 +485,12 @@ holdout_check <- function(rows, baseline = 0) {
 
 model_for <- function(backend) {
   cat_ <- tabfound:::.model_catalog()
+  # `"both"` is TabPFN v3.5's multitask checkpoint: one artifact serves
+  # classification and regression, so it is the classifier for this
+  # purpose as much as anything is.
   ids <- names(cat_)[vapply(cat_, function(e) {
-    identical(e$backend, backend) && identical(e$task, "classification")
+    identical(e$backend, backend) &&
+      (identical(e$task, "classification") || identical(e$task, "both"))
   }, logical(1))]
   ids <- Filter(function(id) tabfound:::.model_is_downloaded(id), ids)
   if (!length(ids)) return(NULL)
@@ -980,17 +984,19 @@ report <- function(cal, co, holdout = NULL) {
 # are recomputed rather than read back: they are a property of today's
 # `peak_terms()`, and re-deriving them is exactly what makes a re-fit
 # after a formula change mean something.
+# One reader for a stored chunk size, shared with the test suite: see
+# `tabfound:::.chunk_field()` for the four spellings it has to accept.
+chunk_field <- function(v) tabfound:::.chunk_field(v)
+
 # The options a stored point was measured under. Absent fields mean the
 # backend's own defaults, which is what every grid predating the chunked
 # one was run with.
 point_opts <- function(backend, r) {
   extra <- list(n_estimators = 1L)
-  if (!is.null(r$row_chunk_size) && !is.na(r$row_chunk_size)) {
-    extra$row_chunk_size <- as.integer(r$row_chunk_size)
-  }
-  if (!is.null(r$col_chunk_size) && !is.na(r$col_chunk_size)) {
-    extra$col_chunk_size <- as.integer(r$col_chunk_size)
-  }
+  rc <- chunk_field(r$row_chunk_size)
+  cc <- chunk_field(r$col_chunk_size)
+  if (!all(is.na(rc))) extra$row_chunk_size <- rc
+  if (!all(is.na(cc))) extra$col_chunk_size <- cc
   .resolve_opts(backend, extra)
 }
 
@@ -1119,9 +1125,13 @@ write_measurements <- function(cal, path) {
     weights_bytes = cal$weights_bytes,
     points = lapply(cal$rows, function(r) {
       r$stderr <- NULL
+      # Normalised on the way out, so "not set" is written as `null` however
+      # it was read -- rather than drifting to `{}` after every refit.
+      if ("row_chunk_size" %in% names(r)) r$row_chunk_size <- chunk_field(r$row_chunk_size)
+      if ("col_chunk_size" %in% names(r)) r$col_chunk_size <- chunk_field(r$col_chunk_size)
       r
     })
-  ), path, auto_unbox = TRUE, digits = NA, pretty = TRUE)
+  ), path, auto_unbox = TRUE, digits = NA, pretty = TRUE, na = "null")
   cat("  wrote ", path, "\n", sep = "")
 }
 
@@ -1373,10 +1383,17 @@ main <- function() {
     # back appended 42 chunked points to the unchunked file the first
     # time this ran -- a refit silently tripling its own input.
     own <- Filter(function(r) {
-      v <- r$row_chunk_size
-      if (chunked) isTRUE(!is.null(v) && !all(is.na(v)))
-      else is.null(v) || all(is.na(v))
+      v <- chunk_field(r$row_chunk_size)
+      if (chunked) !all(is.na(v)) else all(is.na(v))
     }, cal$rows)
+    # A refit that would write away every point it just read is a bug in
+    # the filter above, not a result. Measurements cost hours and the
+    # write below is unconditional, so refuse rather than truncate.
+    if (!length(own) && length(cal$rows)) {
+      stop("refusing to write 0 of ", length(cal$rows), " measured points ",
+           "to ", backend, ".json -- the row filter matched nothing, which ",
+           "means the stored chunk sizes were not understood.", call. = FALSE)
+    }
     write_measurements(
       list(backend = cal$backend, model_id = cal$model_id,
            weights_bytes = cal$weights_bytes, rows = own),

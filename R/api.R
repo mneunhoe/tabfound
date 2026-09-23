@@ -16,7 +16,8 @@
 # Construction
 # ---------------------------------------------------------------------------
 
-.new_tabfound_model <- function(ctx, spec, task, args) {
+.new_tabfound_model <- function(ctx, spec, task, args,
+                                preprocess = .preprocess_options()) {
   structure(
     list(
       spec      = spec,
@@ -26,9 +27,14 @@
       device    = ctx$device,
       backend   = ctx$backend$name,
       task      = task,
+      # How text and date columns are handled at `fit()`; see
+      # `R/prep-frame.R`. Options only -- what a fit decided lives in
+      # `state$expansion`.
+      preprocess = preprocess,
       # Enough to rebuild this object from disk; see `tabfound_save()`.
       model_ref = list(model = ctx$model_ref, backend = ctx$backend$name,
-                       device = ctx$device, args = args)
+                       device = ctx$device, args = args,
+                       preprocess = preprocess)
     ),
     class = c(if (task == "classification") "tabfound_classifier"
               else "tabfound_regressor",
@@ -73,6 +79,23 @@
 #'   fewer than four distinct values, so an ordinal-coded factor with five
 #'   levels is invisible to it. [tabfound()] fills this in from the frame's
 #'   factor columns automatically.
+#' @param transform_text Expand text columns into numeric features at
+#'   [fit()]: `"auto"` (default) does so when the checkpoint's own recipe
+#'   asks for it -- TabPFN v3.5's does -- and not otherwise; `TRUE` or
+#'   `FALSE` decides for every backend. A text column is a character column
+#'   with more than `min_cardinality_for_text` distinct values that are not
+#'   all numbers; it becomes `text_n_components` features, by latent
+#'   semantic analysis over its character n-grams, exactly as TabPFN's
+#'   Python estimator computes them. Off, such a column is coded as a
+#'   categorical, as it always has been.
+#' @param transform_dates Expand `Date` and `POSIXct` columns into calendar
+#'   features: year, minute, second, seconds since the epoch, day of year,
+#'   and circular month, day, hour and weekday. `"auto"` as for
+#'   `transform_text`. Off, a date becomes a single number, as it always
+#'   has. A `difftime` becomes its length in seconds either way.
+#' @param min_cardinality_for_text Distinct-value count above which a
+#'   character column counts as text rather than categorical.
+#' @param text_n_components Features each text column becomes, at most.
 #' @param ... Backend-specific arguments, e.g. `ensemble_configs_dir` or
 #'   `softmax_temperature`.
 #' @return An unfitted object of class `tabfound_classifier`. Fit it with
@@ -85,7 +108,12 @@
 #' }
 #' @export
 tabular_classifier <- function(model, backend = NULL, device = "cpu",
-                               categorical_features = NULL, ...) {
+                               categorical_features = NULL,
+                               transform_text = "auto", transform_dates = "auto",
+                               min_cardinality_for_text = 30L,
+                               text_n_components = 30L, ...) {
+  preprocess <- .preprocess_options(transform_text, transform_dates,
+                                    min_cardinality_for_text, text_n_components)
   ctx <- load_backend_model(model, task = "classification",
                             backend = backend, device = device)
   if (is.null(ctx$backend$classifier)) {
@@ -94,7 +122,7 @@ tabular_classifier <- function(model, backend = NULL, device = "cpu",
   args <- .predictor_args(ctx$backend$classifier, ctx, categorical_features,
                           list(...))
   .new_tabfound_model(ctx, do.call(ctx$backend$classifier, args),
-                      "classification", args[-1L])
+                      "classification", args[-1L], preprocess)
 }
 
 #' Load a tabular foundation model for regression
@@ -103,7 +131,12 @@ tabular_classifier <- function(model, backend = NULL, device = "cpu",
 #' @return An unfitted object of class `tabfound_regressor`.
 #' @export
 tabular_regressor <- function(model, backend = NULL, device = "cpu",
-                              categorical_features = NULL, ...) {
+                              categorical_features = NULL,
+                              transform_text = "auto", transform_dates = "auto",
+                              min_cardinality_for_text = 30L,
+                              text_n_components = 30L, ...) {
+  preprocess <- .preprocess_options(transform_text, transform_dates,
+                                    min_cardinality_for_text, text_n_components)
   ctx <- load_backend_model(model, task = "regression",
                             backend = backend, device = device)
   if (is.null(ctx$backend$regressor)) {
@@ -112,7 +145,7 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
   args <- .predictor_args(ctx$backend$regressor, ctx, categorical_features,
                           list(...))
   .new_tabfound_model(ctx, do.call(ctx$backend$regressor, args),
-                      "regression", args[-1L])
+                      "regression", args[-1L], preprocess)
 }
 
 
@@ -237,6 +270,15 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
 .respec_categoricals <- function(object, categorical_features) {
   if (is.null(categorical_features) || !length(categorical_features)) return(object)
   if (!is.null(object$model_ref$args$categorical_features)) return(object)
+  .rebuild_predictor(object, categorical_features)
+}
+
+# The rebuild itself, with no opinion about whether it should happen. Also
+# used when text or date expansion moves the columns an explicit
+# declaration pointed at: the declaration is the caller's, but the indices
+# it was written in no longer name the same columns.
+# @keywords internal
+.rebuild_predictor <- function(object, categorical_features) {
   bk  <- tryCatch(get_backend(object$backend), error = function(e) NULL)
   if (is.null(bk)) return(object)
   ctor <- if (inherits(object, "tabfound_classifier")) bk$classifier else bk$regressor
@@ -245,9 +287,15 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
   }
   ctx <- list(net = object$model, config = object$config, device = object$device,
               backend = bk, task = object$task, model_ref = object$model_ref$model)
+  # The new declaration replaces any old one rather than sitting beside it:
+  # `do.call()` refuses an argument named twice, and which of the two it
+  # would have meant is exactly the question.
+  rest <- object$model_ref$args
+  rest$categorical_features <- NULL
   args <- c(list(ctx), list(categorical_features = as.integer(categorical_features)),
-            object$model_ref$args)
-  out <- .new_tabfound_model(ctx, do.call(ctor, args), object$task, args[-1L])
+            rest)
+  out <- .new_tabfound_model(ctx, do.call(ctor, args), object$task, args[-1L],
+                             object$preprocess %||% .preprocess_options())
   out$model_ref <- object$model_ref
   out$model_ref$args <- args[-1L]
   out
@@ -349,6 +397,9 @@ fit <- function(object, X, y, ...) UseMethod("fit")
 #' @export
 fit.tabfound_model <- function(object, X, y, ...) {
   .check_weights_alive(object)
+  expanded <- .fit_expansion_for(object, X)
+  object <- expanded$object
+  X <- expanded$X
   .warn_undeclared_categoricals(object, X)
   train_levels <- .training_levels(.coerce_for_mold(X))
   X <- .as_model_matrix(X, "X")
@@ -368,8 +419,43 @@ fit.tabfound_model <- function(object, X, y, ...) {
   state$n_features    <- ncol(X)
   state$feature_names <- colnames(X)
   state$feature_levels <- train_levels
+  state$expansion     <- expanded$state
   object$state <- state
   object
+}
+
+# Text and date expansion for the engine API, before anything else sees
+# the frame. Returns the (possibly rebuilt) object alongside, because an
+# explicit `categorical_features` was written in the caller's column
+# positions, and expansion moves every column that follows an expanded
+# one.
+# @keywords internal
+.fit_expansion_for <- function(object, X) {
+  opts <- object$preprocess %||% .preprocess_options()
+  if (!.frame_needs_expansion(X, opts)) {
+    return(list(object = object, X = X, state = NULL))
+  }
+  declared_idx <- object$model_ref$args$categorical_features
+  declared <- if (length(declared_idx)) names(X)[declared_idx] else character()
+  fitted <- fit_frame_expansion(
+    X,
+    transform_text  = .resolve_transform_flag(opts$transform_text, object$config,
+                                              "TRANSFORM_TEXT", "transform_text"),
+    transform_dates = .resolve_transform_flag(opts$transform_dates, object$config,
+                                              "TRANSFORM_DATES", "transform_dates"),
+    min_cardinality_for_text = opts$min_cardinality_for_text,
+    text_n_components = opts$text_n_components,
+    declared = declared
+  )
+  if (length(declared_idx)) {
+    moved <- .expanded_indices_of(declared, fitted$state)
+    if (!identical(as.integer(moved), as.integer(declared_idx))) {
+      keep_ref <- object$model_ref
+      object <- .rebuild_predictor(object, moved)
+      object$model_ref <- keep_ref
+    }
+  }
+  list(object = object, X = fitted$data, state = fitted$state)
 }
 
 #' Predict from a tabular foundation model
@@ -426,6 +512,7 @@ predict.tabfound_regressor <- function(object, newdata,
 # @keywords internal
 .prepare_newdata <- function(object, newdata) {
   .kv_guard_check(object$state)
+  newdata <- .replay_expansion(object$state$expansion, newdata)
   newdata <- .as_model_matrix(newdata, "newdata", object$state$feature_levels)
   .check_newdata_schema(object, newdata)
   n_train <- object$state$n_train %||% NROW(object$state$X_train)
@@ -433,6 +520,26 @@ predict.tabfound_regressor <- function(object, newdata,
                 n_query = NROW(newdata), n_features = NCOL(newdata),
                 stage = "predict")
   newdata
+}
+
+# Lay new rows out as `fit()` laid out the training rows. Only a data frame
+# can carry text and date columns, so once a fit expanded any, a matrix is
+# refused rather than guessed into the expanded layout -- its raw width can
+# even match, which is what would let it through the schema check below.
+# @keywords internal
+.replay_expansion <- function(state, newdata) {
+  if (is.null(state)) return(newdata)
+  if (!is.data.frame(newdata)) {
+    if (length(state$dates) || length(state$text)) {
+      cli::cli_abort(c(
+        "The model expanded text or date columns at fit, so {.arg newdata} \
+         has to be a data frame carrying them.",
+        i = "Got a {.cls {class(newdata)[1]}}."
+      ))
+    }
+    return(newdata)
+  }
+  transform_frame_expansion(newdata, state)
 }
 
 # Without this, a wrong column count surfaces as a libtorch C++ stack
@@ -618,6 +725,7 @@ tabfound_save <- function(object, file) {
            mode      = object$mode,
            na_action = object$na_action,
            imputer   = object$imputer,
+           expansion = object$expansion,
            blueprint = object$blueprint),
       base)
   } else if (inherits(object, "tabfound_model")) {
@@ -690,6 +798,7 @@ tabfound_load <- function(file, device = NULL) {
   obj <- do.call(ctor, c(
     list(model = ref$model, backend = ref$backend,
          device = device %||% ref$device),
+    ref$preprocess,
     ref$args
   ))
   obj$state <- blob$state
@@ -708,6 +817,7 @@ tabfound_load <- function(file, device = NULL) {
     mode      = blob$mode,
     na_action = blob$na_action,
     imputer   = blob$imputer,
+    expansion = blob$expansion,
     blueprint = blob$blueprint,
     class     = "tabfound_fit"
   )
