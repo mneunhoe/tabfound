@@ -14,6 +14,7 @@ tabpfn26_reference.py    runs the bare TabPFN v2.6 network, dumps its forward pa
 tabpfn3_reference.py     runs the bare TabPFN v3 network, dumps its forward pass
 tabfm_reference.py       runs the PyPI `tabfm` network, dumps per-stage outputs
 tabicl_reference.py      runs the PyPI `tabicl` network, dumps per-stage outputs
+tabicl_e2e_reference.py  runs `TabICLClassifier` / `TabICLRegressor` end to end
 mitra_reference.py       runs AutoGluon's `Tab2D`, dumps per-stage outputs
 transforms_reference.py  pins the individual column transforms (no weights needed)
 transforms/              its output -- small, and ships with the package
@@ -67,7 +68,7 @@ checkout:
 Set up the reference environment with:
 
 ```bash
-uv venv --python 3.12 .venvs/ref && uv pip install --python .venvs/ref/bin/python torch safetensors numpy scikit-learn pandas tabpfn tabicl tabfm
+uv venv --python 3.12 .venvs/ref && uv pip install --python .venvs/ref/bin/python torch safetensors numpy scikit-learn pandas tabpfn "tabicl==2.2.0" tabfm
 ```
 
 ### TabPFN v2.6
@@ -495,7 +496,7 @@ The reference is run in **float32**. TabFM is designed for bfloat16 and
 `tabfm_v1_0_0.load()` casts to it by default; comparing bfloat16 against
 R torch's float32 would measure the dtype, not the port.
 
-### TabICL v2 vs `tabicl` 2.1.1 / torch 2.13.0
+### TabICL v2 vs `tabicl` 2.2.0 / torch 2.13.0
 
 ```
 16/16 checks within tolerance
@@ -568,20 +569,66 @@ Every comparison in `ensemble_reference.py` passes.
   including the imputation, the constant-column drop and the min-max
   target scaling.
 
-End to end against `TabICLClassifier` / `TabICLRegressor` on the released
-v2 checkpoints, 60 training rows and 12 test rows, `n_estimators = 8`:
+### TabICL end to end
 
-| output | max_abs | of its own scale |
-|---|---|---|
-| `predict_proba` | 1.6e-6 | 1.6e-6 |
-| `predict` (mean) | 4.9e-6 | 2.0e-7 |
-| `predict` (median) | 5.5e-6 | 2.2e-7 |
-| `predict` (quantiles) | 7.5e-6 | 2.8e-7 |
+```bash
+.venvs/ref/bin/python inst/parity/tabicl_e2e_reference.py \
+    --clf-ckpt "$TABFOUND_TABICL_CLF_CKPT" --reg-ckpt "$TABFOUND_TABICL_REG_CKPT" \
+    --out inst/parity/reference/tabicl_e2e
+```
 
-That is the float32 forward pass's own noise, reached through eight
-independently preprocessed members — so the preprocessing, the member
-construction, the class-relabelling inversion and the ensemble
-combination are all in agreement, not just the network.
+`tabicl_e2e_reference.py` runs `TabICLClassifier` / `TabICLRegressor`
+exactly as a user calls them (`n_estimators = 8`, `random_state = 42`,
+CPU, no AMP) and stores inputs and outputs in
+`reference/tabicl_e2e/`; `tests/testthat/test-parity-tabicl-e2e.R`
+replays them through `tabular_classifier()` / `tabular_regressor()`. So
+the preprocessing, the member construction, the class-relabelling
+inversion, the ensemble combination and the quantile head are graded
+together, not just the network.
+
+Besides an ordinary table it covers the cases tabicl 2.2.0 changed.
+Largest absolute difference, against 2.2.0 (the regression target has
+sd 2.9):
+
+| case | `predict_proba` | mean | median | quantiles |
+|---|---|---|---|---|
+| `base`: 60 × 6, a few `NA` | 1.5e-06 | 1.7e-06 | 3.0e-06 | 3.2e-06 |
+| `train_empty`: one training column all `NA` | 1.1e-06 | 2.1e-06 | 2.0e-06 | 2.4e-06 |
+| `all_const`: every column constant | 8.5e-07 | 2.5e-06 | 4.7e-06 | 4.7e-06 |
+| `all_missing`: every training column all `NA` | 1.1e-06 | 9.8e-06 | 6.3e-06 | 2.0e-05 |
+| `test_empty`: one *test* column all `NA` | 2.4e-06 | 2.2e-06 | 2.3e-06 | 3.3e-06 |
+
+What 2.2.0 changed, and how the port follows it:
+
+- **An entirely missing training column** is kept and zero-filled
+  (`SimpleImputer(keep_empty_features = True)`) instead of dropped. It is
+  then constant, so the unique-value filter usually drops it anyway;
+  `fit_simple_imputer(keep_empty = TRUE)` reproduces this for TabICL
+  only, since TabFM's wrapper still uses sklearn's default.
+- **An all-constant table** keeps its first column instead of failing
+  (`UniqueFeatureFilter`), and the model falls back to the target's
+  marginal. `fit_unique_feature_filter(keep_one = TRUE)`, again TabICL
+  only. This made a 1 × 1 Latin square reachable for the first time,
+  which the R shuffler did not handle; it now takes the reference's base
+  case, with no draw.
+- **An entirely missing test column.** 2.1.1 detected it per prediction
+  batch and dropped it from every member, which made a row's prediction
+  depend on what it was batched with. 2.2.0 removed that and imputes it
+  like any other missing value. The port never had the batch-wide
+  masking, so it silently differed from 2.1.1 on such a batch and matches
+  2.2.0 by construction; `test_empty` now pins that.
+- **An unset inference device** now resolves to CUDA, XPU or MPS when
+  present, so `tabicl_reference.py` pins the eval path to CPU.
+
+None of the network code changed for inference: the stored stage dumps
+regenerate byte-identical under 2.2.0, and the train/eval gap is still
+exactly 0.
+
+One thing to know when regenerating `ensemble/`: TabICL's generator
+groups members by `list(set(norm_methods))`, whose order follows the
+string hash and changes with `PYTHONHASHSEED` between runs. Averaging
+makes the order irrelevant to any prediction, and the script now dumps
+in `norm_methods` order, which is the order the R side uses.
 
 TabFM's `cat_mask` — the flag that routes a categorical column's cells
 through a separate Fourier basis — is checked against the reference
@@ -654,7 +701,7 @@ checks in tolerance across classification and regression:
   differences between them: the two GELU flavours and the two RoPE
   pairing conventions are each asserted to disagree.
 - The estimator around it is checked end to end, at the numbers in
-  [TabICL v2 vs `tabicl`](#tabicl-v2-vs-tabicl-211--torch-2130) — the only one of the three for which weights were
+  [TabICL v2 vs `tabicl`](#tabicl-v2-vs-tabicl-220--torch-2130) — the only one of the three for which weights were
   available locally to do so.
 
 **TabFM 1.0.0** (1.6 B parameters, 913 tensors) against the `tabfm`

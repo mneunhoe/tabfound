@@ -5,12 +5,14 @@
 \alias{transform_simple_imputer}
 \title{Fit sklearn's \code{SimpleImputer(strategy = "mean")}}
 \usage{
-fit_simple_imputer(X_train)
+fit_simple_imputer(X_train, keep_empty = FALSE)
 
 transform_simple_imputer(X, fit)
 }
 \arguments{
 \item{X_train}{Numeric matrix.}
+
+\item{keep_empty}{Logical; keep entirely-missing columns, filled with 0.}
 
 \item{X}{Numeric matrix.}
 
@@ -20,7 +22,15 @@ transform_simple_imputer(X, fit)
 TabICL's \code{TransformToNumerical} runs one over the numeric columns
 before anything else, which is why its network never sees the \code{NaN} it
 cannot handle. A column that is \emph{entirely} missing has no mean to
-impute, and sklearn's default is to drop it rather than invent one —
-so this returns a \code{keep} mask alongside the means.
+impute. sklearn's default is to drop it rather than invent one, so this
+returns a \code{keep} mask alongside the means.
+}
+\details{
+\code{keep_empty = TRUE} is sklearn's \code{keep_empty_features = True}: the
+empty column is kept and filled with 0. TabICL switched to that in
+2.2.0; TabFM's wrapper still uses the default. A zero column is
+constant, so the unique-value filter usually drops it straight after;
+what changes is that a table whose every column is empty now reaches
+that filter instead of stopping here.
 }
 \keyword{internal}

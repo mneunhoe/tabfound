@@ -32,18 +32,29 @@
 #' TabICL's `TransformToNumerical` runs one over the numeric columns
 #' before anything else, which is why its network never sees the `NaN` it
 #' cannot handle. A column that is *entirely* missing has no mean to
-#' impute, and sklearn's default is to drop it rather than invent one —
-#' so this returns a `keep` mask alongside the means.
+#' impute. sklearn's default is to drop it rather than invent one, so this
+#' returns a `keep` mask alongside the means.
+#'
+#' `keep_empty = TRUE` is sklearn's `keep_empty_features = True`: the
+#' empty column is kept and filled with 0. TabICL switched to that in
+#' 2.2.0; TabFM's wrapper still uses the default. A zero column is
+#' constant, so the unique-value filter usually drops it straight after;
+#' what changes is that a table whose every column is empty now reaches
+#' that filter instead of stopping here.
 #'
 #' @param X_train Numeric matrix.
+#' @param keep_empty Logical; keep entirely-missing columns, filled with 0.
 #' @keywords internal
-fit_simple_imputer <- function(X_train) {
+fit_simple_imputer <- function(X_train, keep_empty = FALSE) {
   X <- as.matrix(X_train); storage.mode(X) <- "double"
   .reject_infinite(X)
   means <- vapply(seq_len(ncol(X)), function(j) {
     v <- X[, j]; v <- v[!is.na(v)]
     if (!length(v)) NA_real_ else mean(v)
   }, numeric(1))
+  if (keep_empty) {
+    means[is.na(means)] <- 0
+  }
   list(means = means, keep = !is.na(means))
 }
 
@@ -110,6 +121,10 @@ transform_simple_imputer <- function(X, fit) {
 # pool first, so the loop below does too.
 # @keywords internal
 .latin_rls <- function(n, rng) {
+  # The recursion's base case, and no draw is made. Reachable since
+  # tabicl 2.2.0, where an all-constant table keeps a single column; the
+  # loops below would otherwise count *up* from 1 to 2.
+  if (n == 1L) return(list(0L))
   pool <- as.list(seq_len(n) - 1L)
   chosen <- vector("list", n - 1L)
   for (level in seq.int(n, 2L)) {
@@ -258,11 +273,10 @@ tabicl_ensemble_fit <- function(X, y, classification,
   X <- as.matrix(X); storage.mode(X) <- "double"
   n_estimators <- as.integer(n_estimators)
 
-  filter_ <- fit_unique_feature_filter(X)
+  # Since tabicl 2.2.0 an all-constant table keeps its first column, and
+  # the model falls back to the target's marginal distribution.
+  filter_ <- fit_unique_feature_filter(X, keep_one = TRUE)
   X <- transform_unique_feature_filter(X, filter_)
-  if (ncol(X) == 0L) {
-    cli::cli_abort("Every predictor is constant; there is nothing to learn from.")
-  }
   n_features <- ncol(X)
   n_classes <- if (classification) length(unique(y)) else 0L
 

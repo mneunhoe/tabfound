@@ -45,6 +45,9 @@ args = parser.parse_args()
 T: dict[str, torch.Tensor] = {}
 S: dict[str, object] = {}
 
+from importlib.metadata import version as _pkg_version  # noqa: E402
+S["versions"] = {pkg: _pkg_version(pkg) for pkg in ("tabicl", "tabfm", "scikit-learn", "numpy")}
+
 
 def put(name, arr):
     T[name] = torch.as_tensor(np.asarray(arr, dtype=np.float64)).contiguous()
@@ -163,6 +166,30 @@ X_uff[:, 5] = np.where(np.arange(n_tr) < 40, 0.0, 1.0)
 put("X_uff", X_uff)
 S["uff_keep"] = UniqueFeatureFilter().fit(X_uff).features_to_keep_.tolist()
 
+# tabicl >= 2.2.0: an all-constant table keeps its first column rather
+# than leaving nothing for the shuffler to permute.
+X_const = np.tile(np.array([0.4, 1.0, 0.5, 118.2]), (n_tr, 1))
+put("X_const", X_const)
+S["uff_keep_const"] = UniqueFeatureFilter().fit(X_const).features_to_keep_.tolist()
+
+# tabicl >= 2.2.0 imputes with `keep_empty_features=True`: an entirely
+# missing column is kept and filled with 0 instead of being dropped.
+from sklearn.impute import SimpleImputer  # noqa: E402
+X_empty = X[:, :3].copy()
+X_empty[:, 1] = np.nan
+X_empty[[2, 7], 0] = np.nan
+X_empty_test = X_test[:, :3].copy()
+X_empty_test[[0, 3], 1] = np.nan
+X_empty_test[1, 0] = np.nan
+put("X_empty", X_empty)
+put("X_empty_test", X_empty_test)
+si_keep = SimpleImputer(keep_empty_features=True).fit(X_empty)
+put("si_keep_train", si_keep.transform(X_empty))
+put("si_keep_test", si_keep.transform(X_empty_test))
+si_drop = SimpleImputer().fit(X_empty)
+put("si_drop_train", si_drop.transform(X_empty))
+put("si_drop_test", si_drop.transform(X_empty_test))
+
 pt = PowerTransformer(method="yeo-johnson", standardize=True).fit(Xs)
 S["pt_lambdas"] = pt.lambdas_.tolist()
 put("pt_train", pt.transform(Xs))
@@ -232,13 +259,19 @@ from tabicl._sklearn.preprocessing import EnsembleGenerator as ICLGen  # noqa: E
 ens_meta = {}
 
 
-def dump_icl(tag, Xf, yf, classification, **kw):
+def dump_icl(tag, Xf, yf, classification, Xt=None, **kw):
     g = ICLGen(classification=classification, **kw)
     g.fit(Xf, yf)
-    data = g.transform(X_test, mode="both")
+    data = g.transform(X_test if Xt is None else Xt, mode="both")
     members = []
     i = 0
-    for m, (Xs_, ys_) in data.items():
+    # The generator groups members by `list(set(methods))`, whose order
+    # follows the string hash and so changes with PYTHONHASHSEED from one
+    # run of this script to the next. Averaging makes the order irrelevant
+    # to any prediction; dump in first-appearance order (the order of
+    # `norm_methods`), which is what the R side uses, so the file is stable.
+    for m in [m for m in g.norm_methods_ if m in data]:
+        Xs_, ys_ = data[m]
         feats = g.feature_shuffles_[m]
         cls = g.class_shuffles_[m] if classification else [None] * len(feats)
         for j in range(Xs_.shape[0]):
@@ -291,6 +324,16 @@ dump_icl("icl_clf_rand", X, y_cls, True, n_estimators=6,
 dump_icl("icl_reg", X, y_reg, False, n_estimators=8,
          norm_methods=["none", "power"], feat_shuffle_method="latin",
          random_state=42)
+# All-constant input: one column survives, so the Latin square is 1 x 1.
+X_const_test = np.tile(np.array([0.4, 1.0, 0.5, 118.2]), (n_te, 1))
+put("X_const_test", X_const_test)
+dump_icl("icl_clf_const", X_const, y_cls, True, Xt=X_const_test,
+         n_estimators=4, norm_methods=["none", "power"],
+         feat_shuffle_method="latin", class_shuffle_method="shift",
+         random_state=0)
+dump_icl("icl_reg_const", X_const, y_reg, False, Xt=X_const_test,
+         n_estimators=4, norm_methods=["none", "power"],
+         feat_shuffle_method="latin", random_state=0)
 
 dump_fm("fm_clf", X, y_cls, "classification", n_estimators=8,
         norm_methods=["none", "power"], cat_features=[0, 3], random_state=42)

@@ -387,8 +387,12 @@ simulation finds TabPFN and TabICL so far apart.
 
 TabICL's and TabFM's imputation is `SimpleImputer(strategy = "mean")`,
 fitted on the training rows: new data is filled with the *training*
-column means, and a column that is entirely missing is dropped rather
-than invented. Mitra's is AutoGluon's own, which is the same idea.
+column means. A column that is entirely missing in the training rows is
+dropped by TabFM; TabICL (following tabicl 2.2.0) fills it with zeros,
+after which it is constant and the unique-value filter drops it. If every
+column is constant or missing, TabICL keeps one and predicts the
+target's marginal distribution, where TabFM refuses. Mitra's imputation
+is AutoGluon's own, which is the same idea.
 
 `Inf` is **not** treated as missing and is rejected with an error naming
 the columns. That is the reference's line too — sklearn takes `NaN`
@@ -521,7 +525,10 @@ once per `predict()`. Not ported: the `TableVectorizer`-style DataFrame
 typing (R knows its own column types, so `tabfound()` does not need to
 guess) and the many-class hierarchical path for problems with more
 classes than the checkpoint supports. The checkpoint is 110 MB and a
-forward pass on 60 rows takes ~0.07 s on CPU.
+forward pass on 60 rows takes ~0.07 s on CPU. Verified against `tabicl` 2.2.0, including its handling of entirely
+missing and all-constant columns (see `inst/parity/README.md`). The
+2.2.0 release's fine-tuning, pre-training, SHAP and forecasting additions
+are out of scope for an inference-only port.
 
 Target standardization is ported for both TabFM and TabICL: their
 regressor networks operate on standardized targets and their wrappers

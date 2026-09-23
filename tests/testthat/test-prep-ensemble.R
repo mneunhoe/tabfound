@@ -101,19 +101,29 @@ test_that("TabICL's ensemble reproduces every member", {
          norms = c("none", "quantile"), feat = "random", cls = "random",
          seed = 7L),
     list(tag = "icl_reg", y = y_reg, classification = FALSE, n = 8L,
-         norms = c("none", "power"), feat = "latin", cls = "shift", seed = 42L)
+         norms = c("none", "power"), feat = "latin", cls = "shift", seed = 42L),
+    # tabicl >= 2.2.0: an all-constant table keeps one column, so the
+    # Latin square is 1 x 1 and the model sees one uninformative feature.
+    list(tag = "icl_clf_const", y = y_cls, classification = TRUE, n = 4L,
+         norms = c("none", "power"), feat = "latin", cls = "shift", seed = 0L,
+         X = "X_const", X_test = "X_const_test"),
+    list(tag = "icl_reg_const", y = y_reg, classification = FALSE, n = 4L,
+         norms = c("none", "power"), feat = "latin", cls = "shift", seed = 0L,
+         X = "X_const", X_test = "X_const_test")
   )
 
   for (sp in specs) {
+    X_fit <- if (is.null(sp$X)) X else ref_mat(r$t[[sp$X]])
+    X_new <- if (is.null(sp$X_test)) X_test else ref_mat(r$t[[sp$X_test]])
     gen <- tabicl_ensemble_fit(
-      X, sp$y, classification = sp$classification, n_estimators = sp$n,
+      X_fit, sp$y, classification = sp$classification, n_estimators = sp$n,
       norm_methods = sp$norms, feat_shuffle_method = sp$feat,
       class_shuffle_method = sp$cls, random_state = sp$seed,
       quantile_subsample = NULL
     )
     expect_identical(gen$filter$keep, ref_lgl(r$s$ensembles[[sp$tag]]$keep),
                      info = sp$tag)
-    members <- tabicl_ensemble_transform(gen, X_test)
+    members <- tabicl_ensemble_transform(gen, X_new)
     expect_members_match(sp$tag, members, r, function(w, g) {
       if (!is.null(w$class_shuffle)) {
         expect_identical(as.integer(g$class_shuffle), ref_int(w$class_shuffle))
@@ -174,11 +184,16 @@ test_that("the two generators are genuinely different constructions", {
 })
 
 
-test_that("the ensemble refuses degenerate input rather than guessing", {
+test_that("all-constant input: TabICL keeps one column, TabFM refuses", {
   X <- matrix(rep(1, 20), ncol = 2L)
   y <- as.integer(rep(0:1, 5))
-  expect_error(tabicl_ensemble_fit(X, y, TRUE, quantile_subsample = NULL),
-               "constant")
+  # tabicl >= 2.2.0 keeps the first column, so the model falls back to the
+  # target's marginal distribution instead of failing.
+  gen <- tabicl_ensemble_fit(X, y, TRUE, quantile_subsample = NULL)
+  expect_identical(gen$filter$keep, c(TRUE, FALSE))
+  members <- tabicl_ensemble_transform(gen, X[1:3, ])
+  expect_true(all(vapply(members, function(m) ncol(m$X) == 1L, logical(1))))
+  # TabFM's wrapper has no such rule, so there is still nothing to learn from.
   expect_error(tabfm_ensemble_fit(X, y, "classification",
                                   quantile_subsample = NULL), "constant")
 })
@@ -311,6 +326,26 @@ test_that("SimpleImputer fills with training means and drops empty columns", {
 })
 
 
+test_that("SimpleImputer matches sklearn with and without keep_empty_features", {
+  r <- ensemble_ref()
+  X <- ref_mat(r$t$X_empty); Xt <- ref_mat(r$t$X_empty_test)
+
+  # TabFM: sklearn's default drops the entirely missing column.
+  fit <- fit_simple_imputer(X)
+  expect_equal(transform_simple_imputer(X, fit), ref_mat(r$t$si_drop_train),
+               tolerance = 1e-14, ignore_attr = TRUE)
+  expect_equal(transform_simple_imputer(Xt, fit), ref_mat(r$t$si_drop_test),
+               tolerance = 1e-14, ignore_attr = TRUE)
+
+  # TabICL >= 2.2.0: kept and filled with 0, at predict time too.
+  fit <- fit_simple_imputer(X, keep_empty = TRUE)
+  expect_equal(transform_simple_imputer(X, fit), ref_mat(r$t$si_keep_train),
+               tolerance = 1e-14, ignore_attr = TRUE)
+  expect_equal(transform_simple_imputer(Xt, fit), ref_mat(r$t$si_keep_test),
+               tolerance = 1e-14, ignore_attr = TRUE)
+})
+
+
 test_that("infinities are rejected rather than imputed", {
   # `Inf` is not a missing value and sklearn does not treat it as one:
   # the reference raises `ValueError: Input X contains infinity` before
@@ -340,4 +375,13 @@ test_that("infinities are rejected rather than imputed", {
   out <- mitra_preprocessor_transform_X(Z, pp)
   expect_true(all(is.finite(out)))
   expect_equal(out[2, 2], 0)
+})
+
+
+test_that("a TabICL config without the RoPE flag gets the reference's default", {
+  # tabicl >= 2.2.0 defaults `row_rope_interleaved` to TRUE (the v1
+  # pairing); released v2 configs set FALSE explicitly.
+  expect_true(.tabicl_rope_interleaved(list()))
+  expect_false(.tabicl_rope_interleaved(list(row_rope_interleaved = FALSE)))
+  expect_true(.tabicl_rope_interleaved(list(row_rope_interleaved = TRUE)))
 })

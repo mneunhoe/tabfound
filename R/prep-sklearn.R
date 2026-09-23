@@ -308,11 +308,16 @@ transform_outlier_remover <- function(X, fit) {
 #'   few rows a column can look constant by accident, and the reference
 #'   would rather keep a useless column than lose a useful one.
 #'
+#' * With `keep_one = TRUE`, a table whose every column would go keeps
+#'   its first one instead, so the output is never empty. TabICL does this
+#'   since 2.2.0; TabFM's copy of the filter does not.
+#'
 #' @param X_train Numeric matrix.
 #' @param threshold Columns with at most this many distinct values go.
+#' @param keep_one Logical; never drop every column.
 #' @return A list with the logical `keep` mask and `n_features_out`.
 #' @keywords internal
-fit_unique_feature_filter <- function(X_train, threshold = 1L) {
+fit_unique_feature_filter <- function(X_train, threshold = 1L, keep_one = FALSE) {
   X <- as.matrix(X_train); storage.mode(X) <- "double"
   p <- ncol(X)
   keep <- if (nrow(X) <= threshold) {
@@ -324,6 +329,7 @@ fit_unique_feature_filter <- function(X_train, threshold = 1L) {
       n_unique > threshold
     }, logical(1))
   }
+  if (keep_one && p > 0L && !any(keep)) keep[[1L]] <- TRUE
   list(keep = keep, n_features_in = p, n_features_out = sum(keep))
 }
 

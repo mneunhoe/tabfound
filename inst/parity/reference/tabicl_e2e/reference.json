@@ -1,0 +1,24 @@
+{
+  "cases": [
+    "base",
+    "train_empty",
+    "all_const",
+    "all_missing",
+    "test_empty"
+  ],
+  "quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ],
+  "estimator_kwargs": {
+    "n_estimators": 8,
+    "random_state": 42,
+    "device": "cpu",
+    "use_amp": false,
+    "use_fa3": false,
+    "kv_cache": false
+  },
+  "tabicl_version": "2.2.0",
+  "torch_version": "2.13.0"
+}
