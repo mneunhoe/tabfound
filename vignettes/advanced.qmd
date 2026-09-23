@@ -1,0 +1,658 @@
+---
+title: "Advanced: the engine, ensembles and known limits"
+author: "Marcel Neunhoeffer"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+vignette: >
+  %\VignetteIndexEntry{Advanced: the engine, ensembles and known limits}
+  %\VignetteEngine{quarto::html}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r}
+#| label: setup
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+This vignette collects what most users of `tabfound()` never need: the
+numeric-matrix engine underneath it, how each model's ensemble is built and
+reproduced, the details of column handling, the model catalogue's variants,
+and what each port does not (yet) do.
+
+## The engine API
+
+`tabfound()` sits on top of `tabular_classifier()` / `tabular_regressor()`,
+which take a numeric matrix (or data frame) and a response vector:
+
+```r
+# TabPFN, from converted local artifacts. `fit()` returns a fitted copy;
+# it does not modify its input.
+clf <- tabular_classifier("path/to/converted/tabpfn-v2.5-clf", device = "cpu")
+clf <- fit(clf, iris[train, 1:4], iris[train, 5])
+predict(clf, iris[test, 1:4])                   # class labels
+predict(clf, iris[test, 1:4], type = "prob")    # or predict_proba(clf, ...)
+
+reg <- fit(tabular_regressor("path/to/converted/tabpfn-v2.5-reg"), X, y)
+predict(reg, X_new)
+predict(reg, X_new, type = "quantiles", quantiles = c(0.1, 0.5, 0.9))
+predict(reg, X_new, type = "sample", n_samples = 100)
+
+# TabFM, straight from the Hub -- same API, no conversion step. The
+# backend is inferred from config.json and the task subfolder is picked
+# for you.
+clf <- fit(tabular_classifier("tabfm-1.0.0"), X, y)
+predict(clf, X_new, type = "prob")
+
+# TabICL. Its regressor predicts a full 999-level quantile grid rather
+# than a point estimate, so summaries are read off the distribution --
+# `mean` averages the whole grid, `median` inverts its CDF, and they are
+# not the same number on a skewed one.
+reg <- fit(tabular_regressor("path/to/converted/tabicl-v2-reg"), X, y)
+predict(reg, X_new, type = "quantiles", quantiles = c(0.05, 0.5, 0.95))
+predict(reg, X_new, type = "median")
+predict(reg, X_new, type = "grid")              # all 999 levels
+
+# All three of these ensemble by default, as their Python wrappers do.
+# The knobs are the wrappers' own, and `random_state` reproduces the
+# reference's members exactly.
+clf <- fit(tabular_classifier("path/to/converted/tabicl-v2-cla",
+                              n_estimators = 16, norm_methods = c("none", "power"),
+                              random_state = 42), X, y)
+
+# Mitra, also straight from the Hub.
+clf <- fit(tabular_classifier("mitra-classifier"), X, y)
+predict(clf, X_new, type = "prob")
+
+# Saving. `saveRDS()` cannot capture torch weights -- use these instead.
+tabfound_save(clf, "clf.tabfound")
+clf <- tabfound_load("clf.tabfound")
+```
+
+Each model family is a *backend*: a description of how to build the network
+from a config, how checkpoint keys map onto R module paths, how to preprocess
+the design matrix, how to build and combine an ensemble of transformed views
+of it, and how to turn the network's output into predictions.
+`list_backends()` reports what is registered.
+
+### Model objects
+
+Fitted models are plain lists with value semantics. `fit()` returns a new
+object, so `m2 <- fit(m1, X, y)` leaves `m1` unfitted, the same contract
+as `lm()` and everything else in R. The network itself is shared rather
+than copied — it is read-only and can be several gigabytes — while the
+fitted context (training rows, class levels, target scaler) is ordinary R
+data.
+
+`saveRDS()` does **not** work: a torch module survives the round trip
+structurally but its tensors come back as dangling pointers, and the
+failure only shows up later, in use. [`tabfound_save()`] /
+[`tabfound_load()`] are the supported path, for both object types: the
+engine-level `tabfound_model` and the `tabfound_fit` that `tabfound()`
+returns, whose hardhat blueprint travels with it so a reloaded fit
+re-applies the same encoding and factor levels to new data. They write
+only the fitted context plus a reference to the model artifacts — a few
+kilobytes — and re-resolve the weights on load, since fitting these
+models stores context rows rather than learning parameters. Using a
+`saveRDS`-ed object raises an error naming the fix rather than failing
+inside torch.
+
+### Fit once, query forever
+
+Conditioning the network on the training rows is the expensive half of a
+prediction, and it does not depend on what you are predicting.
+`kv_cache = TRUE` already does it once per `predict()` instead of once
+per chunk; `tabfound_cache()` does it once and *keeps* the result, on the
+object and through a save:
+
+```r
+clf <- fit(tabular_classifier(dir, kv_cache = TRUE), X_train, y_train)
+clf <- tabfound_cache(clf)          # condition now, once
+tabfound_save(clf, "clf-bundle")    # a directory, not a file
+```
+
+```r
+clf <- tabfound_load("clf-bundle")  # next session, next machine
+predict(clf, X_new, type = "prob")  # starts from the conditioned state
+```
+
+Measured on TabPFN v2.5, 800 context rows × 6 features, 512 query rows:
+0.43 s per uncached call against 0.17 s to build the cache plus 0.13 s
+per call — and the reload costs 0.25 s, so it pays for itself on the
+first call of the second session. On TabICL (1,000 × 6, 2,000 query
+rows) it is 4.9 s against 2.3 s, a 2.1× speedup that persists.
+Predictions are **bit-identical** across the session boundary.
+
+What travels is a bundle directory: `state.rds` beside
+`cache.safetensors`. The RDS holds the skeleton of the cache — its list
+structure, classes and integers, all ordinary R data — and the tensors go
+to safetensors under dotted paths (`kv.3.key`), which is precisely the
+thing `saveRDS()` cannot carry. A model with no cache is still a single
+file, as before.
+
+Two things to know. The cache is **large** — it is the conditioned state
+of every ensemble member, 32 MB for that TabPFN fit and 409 MB for the
+TabICL one — so this trades disk for latency, deliberately. And it is a
+function of the training rows: it is fingerprinted when built and checked
+when used, so a cache that has outlived its context raises an error
+naming both shapes rather than quietly answering from the wrong data.
+
+`has_cache()` says whether an object carries one;
+`tabfound_cache(object, build = FALSE)` drops it.
+
+## Ensembling
+
+None of these models is meant to be run once. Each reference estimator
+builds several *views* of the same table — a different feature order, a
+different class labelling, a different normalisation — runs the network
+on each, and combines the results. The two families go about it
+differently enough that they are documented separately.
+
+### TabFM, TabICL and Mitra: on by default
+
+These three ensemble as soon as you fit them, because their sklearn
+wrappers do. Nothing needs configuring:
+
+```r
+clf <- fit(tabular_classifier("path/to/converted/tabicl-v2-cla"), X, y)
+```
+
+That is 8 members for TabICL, 32 for TabFM and 1 for Mitra — each
+backend's own default. The arguments are the wrappers' own:
+
+```r
+clf <- tabular_classifier(
+  model_dir,
+  n_estimators        = 16,
+  norm_methods        = c("none", "power", "quantile"),
+  feat_shuffle_method = "latin",     # TabICL; TabFM takes "random"
+  softmax_temperature = 0.9,
+  average_logits      = TRUE,
+  random_state        = 42
+)
+```
+
+`random_state` is not a nod to reproducibility — it reproduces the
+reference's members *exactly*. Which permutation member 3 gets is decided
+by `random.Random(random_state)`, so `R/py-random.R` is a port of
+CPython's MT19937: its `init_by_array` seeding, its `getrandbits`, its
+rejection-sampling `_randbelow`. R's own `sample()` is a different
+algorithm on a differently-seeded generator and agrees with none of it.
+An ensemble that is merely "statistically equivalent" is a different set
+of predictions.
+
+What each view actually differs by:
+
+| | TabICL | TabFM |
+|---|---|---|
+| feature order | Latin square (every column visits every position across the set) | independent random permutations |
+| class labels | an arbitrary permutation | a cyclic rotation by a drawn offset |
+| normalisation | `none` and `power` by default; `quantile`, `quantile_rtdl` and `robust` also available | same menu |
+| combination | average logits, then one temperature-scaled softmax | same |
+
+Each normalisation method fits one preprocessing pipeline —
+`CustomStandardScaler` → the normaliser → a two-stage outlier clipper —
+which every member sharing that method reuses. Mitra is the odd one out:
+it has no designed set of views at all, only a random per-column sign
+flip per member, and AutoGluon defaults to a single member.
+
+Two of the reference's presets are deliberately absent. TabFM's
+`ensemble()` preset (feature crosses, SVD features, NNLS ensemble
+weights, probability calibration) needs out-of-fold cross-fitting that
+this package does not have, so `n_feature_crosses` and `n_svd_features`
+raise rather than being silently ignored. Mitra's fine-tuning is
+out of scope for an inference-only package, so predictions match a
+`MitraClassifier` with `fine_tune = FALSE`.
+
+### TabPFN: from a dumped config directory
+
+A single forward pass is the default. To reproduce the reference
+estimator's n-member ensemble, point at a dumped config directory:
+
+```r
+clf <- tabular_classifier(model_dir, ensemble_configs_dir = "path/to/dump")
+```
+
+`tabpfn`, `tabpfn26` and `tabpfn3` all support it. A member is described
+entirely by its config — which primary transform, whether the transformed
+block replaces or is appended to the originals, whether an SVD block and
+polynomial products are added, the column shuffle, the class rotation —
+so one composer serves every member type of every version, and adding a
+version means adding entries to a table rather than a code path.
+
+The implemented primary transforms are `none`,
+`squashing_scaler_default`, `squashing_scaler_max10`, `quantile_uni`,
+`quantile_uni_coarse`, `quantile_uni_fine` and
+`quantile_uni_extrapolate`, which between them cover every recipe the
+eight published v3 checkpoints and both v2 generations ask for. A dump
+naming anything else raises rather than substituting a near neighbour.
+
+Everything the reference draws from its NumPy generator (the shuffle, the
+class rotation, the polynomial factor pairs, any target-transform lambda)
+is read out of the dump rather than recomputed: reproducing PCG64 in R
+is not worth the days it would take.
+
+`generate_ensemble_configs_native()` builds a working ensemble in pure R,
+no Python needed. Pass `variant` to match your weights — it decides which
+member menu is used, and the two generations do not share one:
+
+```r
+d <- tempfile()
+generate_ensemble_configs_native(X, y, n_estimators = 4,
+                                 head = "classifier", variant = "v2.6",
+                                 output_dir = d)
+clf <- tabular_classifier("tabpfn-v2.6-classifier", ensemble_configs_dir = d)
+```
+
+It is not bit-identical to Python at a given seed, and does not try to
+be; for verified parity, dump the configs from the reference with
+`generate_ensemble_configs()`.
+
+One catch when combining it with `tabfound()`: the configs record a code
+permutation per encoded categorical column, sized from the matrix you pass
+here — so that matrix and its `categorical_features` have to be the ones
+the model will actually see. `tabfound()` molds the frame through hardhat
+first, which reorders columns, so generate from the molded matrix rather
+than the raw frame. A mismatch is caught rather than silently mis-encoded:
+the pipeline refuses when the config and the data disagree about which
+columns are categorical.
+
+`softmax_temperature` defaults to `0.9` across every backend, matching
+the reference estimators. Pass `softmax_temperature = 1` for the
+untempered distribution.
+
+## Column handling in detail
+
+### Text and date columns
+
+A free-text column and a timestamp are the two kinds of column a tabular
+model is worst at receiving raw. Coded as a categorical, a review field is
+an arbitrary integer per distinct sentence, and an unseen sentence at
+predict time is a missing value. As a single number, a timestamp keeps its
+order and loses its calendar -- December is nowhere near January.
+
+So `tabfound()` expands them first, the way TabPFN v3.5's Python estimator
+does:
+
+```r
+fit <- tabfound(price ~ ., data = listings, model = "tabpfn-v3.5")
+fit$expansion
+#> Text and date expansion
+#> * dates: listed_on
+#> * text (30 components each): description
+```
+
+- **Text.** A character column with more than `min_cardinality_for_text`
+  (30) distinct values that do not all parse as numbers becomes
+  `text_n_components` (30) features: tf-idf over character 3- and 4-grams
+  within word boundaries, reduced by a truncated SVD and block-normalised.
+  An unseen string is placed by the n-grams it shares with the training
+  column; a missing one becomes a row of zeros.
+- **Dates.** A `Date` or `POSIXct` becomes year, minute, second, seconds
+  since the epoch and day of year, plus sine/cosine pairs for month, day,
+  hour and weekday -- read in the column's own timezone. A column that is
+  always at midnight gets no time-of-day features.
+- **Durations.** A `difftime` becomes its length in seconds, always. (It
+  used to be its magnitude in whatever unit it carried, so the same
+  duration was 1.5 or 90.)
+
+`transform_text` and `transform_dates` default to `"auto"`, which follows
+the checkpoint's own recipe: on for TabPFN v3.5, off for every other
+backend -- where they are available but opt-in, with `TRUE`. Off, a text
+column is a categorical and a date a single number, exactly as before.
+Declared `categorical_features` are moved to wherever their columns sit
+after expansion.
+
+
+Three columns of free text on a wide table can exceed an ensemble member's
+feature budget -- each is 30 features -- and the R side aborts there
+rather than subsampling. `text_n_components` lowers the cost.
+
+### The formula interface
+
+`tabfound()` is the layer an R user wants: a formula or an `x`/`y` pair,
+a data frame with whatever column types it happens to have, and a
+`predict()` method that returns a tibble.
+
+It delegates the hard part — remembering what the training data looked
+like and re-applying that to new data — to
+[hardhat](https://hardhat.tidymodels.org/), which also validates new
+data and fails precisely: a missing column names the column, a novel
+factor level names the level.
+
+The Python wrappers solve the same problem with a `TransformToNumerical`
+step that sniffs pandas dtypes to guess which columns are categorical. R
+does not need to guess. `is.factor()` and `inherits(x, "Date")` are
+exact, so the encoder dispatches on real types:
+
+| R type | encoded as |
+|---|---|
+| numeric, integer | unchanged |
+| factor, ordered | 0-based ordinal codes (not one-hot — none of the three references one-hot encode features) |
+| character | coerced to factor, then as above |
+| logical | coerced to factor, then 0/1 |
+| Date, POSIXct, difftime | its numeric representation |
+
+Encoding a factor to codes is only half the job: the model still has to be
+*told* those columns are categorical, or it will treat the codes as a
+quantity with an order and a scale. `tabfound()` passes the factor columns'
+positions down automatically. This matters more than it looks — the
+reference's own inference only catches columns with fewer than four
+distinct values, so a five-level factor is invisible to it, and R knows
+the answer exactly where pandas has to guess:
+
+```r
+# Declared for you, from the frame's factor columns.
+fit <- tabfound(churn ~ ., data = d, model = "tabpfn-v2.6-classifier")
+
+# Or by hand, on the matrix interface, as 1-based column positions.
+clf <- tabular_classifier("tabpfn-v2.6-classifier", categorical_features = c(1, 3))
+```
+
+What that changes: for members whose config asks for it, declared columns
+skip the primary transform (a quantile transform on category codes is
+meaningless), get ordinal-encoded with their codes randomly permuted per
+member, and move to the front of the matrix. Backends with no categorical
+handling of their own warn rather than silently ignoring the declaration.
+
+Logicals are coerced deliberately rather than incidentally: the formula
+path runs a `model.matrix` expansion that would turn a bare logical into
+two dummy columns while leaving a factor alone, so coercing first is
+what keeps the formula and `x`/`y` interfaces producing the same result.
+
+**Missing values** are handled per backend, because the backends
+genuinely differ — and in every case the handling is the reference
+implementation's own. TabPFN encodes missingness as an explicit
+indicator channel and TabFM maps it to a sentinel. TabICL's *network*
+has none of that and propagates `NaN` straight to its output, and
+Mitra's silently deletes any column containing one; both of their
+predictors impute first, exactly as their Python wrappers do, so neither
+failure mode is reachable through the API. All four therefore take `NA`
+directly and `na_action = "auto"` passes it through to them.
+
+Which route a backend takes is recorded, and is worth knowing rather
+than glossing: `list_backends()$missing` reads `"encoded"` for TabPFN,
+`"imputed"` for TabICL and Mitra, `"encoded+imputed"` for TabFM. The two
+are not the same guarantee. A network that encodes missingness
+*conditions on* it — the fact that a value was absent is available to
+the model, and to anything you ask the model about it. A wrapper that
+mean-fills has replaced that fact with a column mean before the network
+is reached. For prediction the distinction rarely matters; for
+imputation and synthesis, where the missingness pattern is the object of
+study, it is most of the question, and it is one reason the MI
+simulation finds TabPFN and TabICL so far apart.
+
+TabICL's and TabFM's imputation is `SimpleImputer(strategy = "mean")`,
+fitted on the training rows: new data is filled with the *training*
+column means, and a column that is entirely missing is dropped rather
+than invented. Mitra's is AutoGluon's own, which is the same idea.
+
+`Inf` is **not** treated as missing and is rejected with an error naming
+the columns. That is the reference's line too — sklearn takes `NaN`
+where it advertises it and refuses infinities — and it is the right
+line: an infinity cannot be imputed, and left alone it poisons a column
+mean and every scaler downstream of it without producing a single `NaN`
+to notice. Replace them with `NA` to have them imputed, or with a finite
+bound if that is what they encode. Mitra is the exception and maps them
+to zero, because its own preprocessor does.
+
+`na_action` still takes `"auto"` (the default), `"pass"`, `"impute"` or
+`"fail"`, and `"impute"` remains available if you would rather this
+package's plain column-mean fill ran instead — but it is *not* a port of
+any reference implementation and is not covered by the parity harness,
+so the backend's own is the better default. Forcing `"pass"` on a
+backend that declares it cannot cope still warns rather than silently
+returning `NaN`.
+
+`recipes` is not wired up yet, and neither is a parsnip engine.
+
+## Model catalogue details
+
+A family name plus the task picks the head, so `"tabpfn"` is the
+classifier under `tabular_classifier()` and the regressor under
+`tabular_regressor()`. **`"tabpfn"` stays pinned to v2.5** — adding v2.6
+does not repoint existing code onto different weights. Ask for a version
+by name:
+
+```r
+clf <- tabular_classifier("tabpfn-v2.6-classifier")
+fit <- tabfound(Species ~ ., data = iris, model = "tabpfn-v3")
+fit <- tabfound(Species ~ ., data = iris, model = "tabpfn-v3.5")
+```
+
+**TabPFN v3.5 is one checkpoint for both tasks.** From this generation on
+the head is chosen per forward pass rather than baked into the weights,
+so there is no `-classifier` / `-regressor` pair to pick between: the
+same `"tabpfn-v3.5"` resolves under `tabular_classifier()` and
+`tabular_regressor()` alike, and `list_models()` shows its task as
+`both`. One download, 876 MB, serves everything.
+
+```r
+# The same artifacts, both ways round.
+clf <- fit(tabular_classifier("tabpfn-v3.5"), iris[1:4], iris$Species)
+reg <- fit(tabular_regressor("tabpfn-v3.5"), iris[2:4], iris$Sepal.Length)
+```
+
+Two v3.5 variants are catalogued by exact id only, so `"tabpfn-v3.5"`
+keeps meaning the default: `"tabpfn-v3.5-fast"` (334 MB, 8 ICL layers
+instead of 24, an alpha checkpoint the publisher reports as up to 6x
+faster) and `"tabpfn-v3.5-multiclass"` (experimental).
+
+TabPFN v2.6, v3 and v3.5 weights are released under
+`tabpfn-2.6-license-v1.0`, `tabpfn-3-license-v1.0` and
+`tabpfn-3-5-license-v1.0`. All three permit research, evaluation and
+internal benchmarking but **not commercial or production use**; v3.5's
+says so in those words and points at a separate Commercial Enterprise
+License.
+`list_models()` prints the licence, and the download prompt repeats it.
+
+v3 publishes six specialised checkpoints alongside the two defaults, and
+all eight are catalogued. They are **the same architecture** — identical
+`config`, identical state-dict keys and shapes, checked checkpoint by
+checkpoint — so they load through the same backend with no special
+handling:
+
+```r
+clf <- tabular_classifier("tabpfn-v3-classifier-binary")
+reg <- tabular_regressor("tabpfn-v3-regressor-timeseries")
+```
+
+| id | what the publisher tuned it for |
+|---|---|
+| `tabpfn-v3-classifier-binary` | binary targets, <200k rows |
+| `tabpfn-v3-classifier-multiclass` | multiclass targets, <200k rows |
+| `tabpfn-v3-classifier-ood` | test inputs outside the training distribution |
+| `tabpfn-v3-regressor-mediumdata` | <100k rows, alternative preprocessing |
+| `tabpfn-v3-regressor-ood` | test inputs outside the training distribution |
+| `tabpfn-v3-regressor-timeseries` | synthetic time series (used by TabPFN-TS-3) |
+
+Two of them are worth knowing about before you spend the bandwidth. The
+**`_ood` checkpoints carry byte-identical weights to the corresponding
+defaults** — SHA-256 over the full state dict matches. What makes them
+OOD-robust is the preprocessing recipe bundled in the checkpoint's
+`inference_config` (`squashing_scaler_max10` in place of
+`squashing_scaler_default`, and `none` or `quantile_uni_extrapolate` in
+place of `quantile_uni` — all three implemented), not the network. Since
+this package reads that recipe from an ensemble dump rather than from the
+checkpoint, a single-pass prediction from `tabpfn-v3-classifier-ood` is
+*the same number* as one from `tabpfn-v3-classifier`. The entries exist so
+the publisher's names resolve; they are not four distinct models.
+
+The remaining four do carry distinct weights, and all eight agree with
+the Python reference (see `inst/parity/README.md`).
+
+Family names stay on the defaults: `"tabpfn-v3"` plus a task gives you
+`tabpfn-v3-classifier` or `tabpfn-v3-regressor`, never a variant.
+
+## Known limitations, per model
+
+### TabFM
+
+The network and the sklearn wrapper's default preset are
+both ported and verified: the preprocessing pipeline, the 32-member
+ensemble (feature permutations, class shifts, per-member normalisation)
+and the `cat_mask` that routes a declared categorical column's cells
+through a separate Fourier basis. Not ported: the heavier
+`TabFMClassifier.ensemble()` preset — feature crosses, SVD features,
+NNLS ensemble weights and probability calibration, which together need
+out-of-fold cross-fitting — and `TransformToNumerical`'s datetime
+handling. Asking for `n_feature_crosses` or `n_svd_features` errors
+rather than silently ignoring them. Its regression head emits a point
+estimate, so there is no `$predict_quantiles()`. `kv_cache = TRUE`
+conditions on the training rows once per `predict()` instead of once per
+chunk per member, which on this network is most of the wall clock.
+
+Practical notes: the checkpoint is ~6.5 GB per task and loads in about
+6 s; a forward pass on 60 rows x 4 features takes ~0.5 s on CPU, and the
+default ensemble runs 32 of them. Weights are non-commercial licensed.
+
+### TabICL
+
+Network and wrapper both ported and verified, end to end
+against `TabICLClassifier` / `TabICLRegressor`: mean imputation, the
+preprocessing pipeline, the 8-member ensemble with Latin-square feature
+permutations and shifted class labels, logit averaging, and the quantile
+distribution the regressor reads its mean, median and quantiles from,
+plus a K/V cache (`kv_cache = TRUE`) that conditions on the labelled rows
+once per `predict()`. Not ported: the `TableVectorizer`-style DataFrame
+typing (R knows its own column types, so `tabfound()` does not need to
+guess) and the many-class hierarchical path for problems with more
+classes than the checkpoint supports. The checkpoint is 110 MB and a
+forward pass on 60 rows takes ~0.07 s on CPU.
+
+Target standardization is ported for both TabFM and TabICL: their
+regressor networks operate on standardized targets and their wrappers
+fit a `StandardScaler` on `y`, so `$fit()` does the same and predictions
+are inverse-transformed back to the original scale. Skipping this does
+not error, it just returns predictions on the wrong scale — on iris it
+was the difference between an RMSE of 1.82 and 0.35.
+
+### Mitra
+
+Network and preprocessor both ported and verified. Not
+ported: fine-tuning, which AutoGluon does by default
+(`fine_tune_steps = 50`) and which this package, being inference-only,
+cannot do — so predictions match a `MitraClassifier` with
+`fine_tune=False`, not the out-of-the-box one. Its raw network still has
+the sharpest edge in the package — a single `NA` in a column makes that
+column's quantiles all-`NaN`, which buckets every value to zero, which
+zeroes the column's variance, which the zero-variance guard flattens, so
+one missing value silently deletes the entire feature with no `NaN` in
+the output and no error — but nothing reachable through the API hits it,
+because the predictor mean-imputes first exactly as AutoGluon's
+preprocessor does. One more thing is knowingly *not* faithful: the
+per-column random sign flips are drawn from a seedable R generator here,
+where the reference takes them from NumPy's global generator and never
+seeds it, so its own flips differ between two of its own runs.
+
+### TabPFN
+
+- `outlier_removal_std` is not implemented. It is a no-op
+  on the current fixtures (the classifier default is 12σ, the regressor
+  passes `NULL`), but data with extreme outliers will diverge.
+- `predict(type = "sample")` is ensemble-aware: it draws from the
+  members' averaged bucket probabilities — the same pseudo-logits the
+  reference hands its head for `mean()` and `icdf()` — so a draw agrees
+  with the quantiles reported beside it. Without ensemble configs it is
+  one forward pass, as before.
+- A data frame handed to `fit()` on the matrix interface is encoded the
+  same way `tabfound()` encodes one (factors to ordinal codes, dates to
+  numbers), and anything that cannot be encoded is refused rather than
+  coerced. What that path does *not* do is declare which columns are
+  categorical — it warns and names them; `tabfound()` declares them from
+  the frame. See [The formula interface](#the-formula-interface).
+- One-hot categorical encoding is not implemented. Its width depends on
+  the data, which a member's shuffle permutation cannot be sized ahead
+  of; no released checkpoint asks for it.
+- Text and date columns are expanded only when asked for
+  (`transform_text = TRUE`, `transform_dates = TRUE`) on v2.5–v3; see
+  [Text and date columns](#text-and-date-columns).
+- The fused SDPA kernel is reached through one wrapper (`sdpa()`) rather
+  than eleven `torch:::` call sites. It still prefers torch's unexported
+  `torch_scaled_dot_product_attention`, because that is what makes the
+  float32 rounding match the reference — but the lookup is soft, and a
+  pure public-API fallback takes over when it is absent, agreeing to
+  ~1e-6. `options(tabfound.sdpa = "r")` forces the fallback, which is
+  how the agreement is tested.
+
+### TabPFN v2.6
+
+- A member whose predictor count exceeds its per-estimator budget (680
+  and 500 for v2.6's two member types) errors rather than subsampling
+  features the way the reference would.
+- The KV cache freezes two preprocessing masks on the training rows that
+  an ordinary pass fits over train and test together, so on some data it
+  is a different prediction rather than a cheaper one. It is opt-in for
+  that reason; see `inst/memory/README.md`.
+- One dataset per call: the reference's batch dimension is not exercised
+  by any caller here, and a batch greater than one is rejected rather
+  than run through the untested `select_features()` padding path.
+- Predictors are capped at 6000 columns (2000 feature groups of 3).
+  Beyond that the reference falls back to a seeded random draw for the
+  column embeddings, which is device-dependent and cannot be reproduced;
+  that case errors rather than guessing.
+
+### TabPFN v3
+
+- The row and column chunking of `_stages_0_to_2` **is** reproduced, as
+  `row_chunk_size` / `col_chunk_size`, defaulting to the checkpoint's own
+  2048 and 4 exactly as the reference does. Three things about it are
+  worth knowing. It is not bit-identical — it changes the batch shapes
+  the attention kernel sees, and on the package's 2,664-row fixture moves
+  the logits by 1.4e-5 of their own scale, less than the reference's own
+  chunked pass moves them. The reference's OOM fallback, which halves the
+  chunk size and retries, is *not* ported and cannot be: a libtorch
+  allocation failure kills the R process outright, so there is nothing to
+  catch and nothing to retry from — `suggest_chunk_sizes()` chooses the
+  size beforehand instead. And it does not touch the in-context stage,
+  which stays quadratic in the context row count: chunking makes a large
+  context a wall-clock decision rather than a dead session, and the
+  reachable million-row regime is a million rows *to predict* against a
+  bounded context, via `kv_cache = TRUE`.
+- One dataset per call, as for v2.6: the reference's batch dimension is
+  not exercised by any caller here and a batch greater than one is
+  rejected.
+- No ensemble config generator of its own. `ensemble_configs_dir` and the
+  shared member pipeline work as they do for v2, but v3's own
+  `PREPROCESS_TRANSFORMS` defaults (squashing scaler + quantile, SVD
+  quarter-components, 200/500 features per estimator) have to come from a
+  Python dump rather than being generated natively.
+- The specialised checkpoints' `FEATURE_SUBSAMPLING_METHOD` settings
+  (`"random"`, `"balanced"`) are not implemented; a member whose
+  predictor count exceeds its budget errors, as it does for v2.6.
+- `torch.compile`, int8 KV-cache quantisation and the MLX/FlashAttention-3
+  backends have no counterpart. They are throughput paths, not different
+  arithmetic.
+
+### TabPFN v3.5
+
+- **One checkpoint, both tasks.** The head is a forward-pass argument,
+  not a property of the weights, so the artifacts have no `head` field
+  and the catalogue lists their task as `both`. Everything downstream —
+  `tabfound()`, the ensembling, the bar distribution — is unchanged.
+- The KV cache carries the ECDF bucket context as well as the scaler
+  statistics, which v3's did not have to. Without it a cached prediction
+  would rank a test cell against the test rows rather than the training
+  ones, which is a different model rather than a cheaper one.
+- **Text and datetime preprocessing is ported**, and on by default for
+  v3.5 because its checkpoint's recipe turns it on. A character column
+  with more than 30 distinct values that are not all numbers becomes 30
+  features, by latent semantic analysis over its character 3- and
+  4-grams (skrub's `StringEncoder`); a `Date` or `POSIXct` becomes year,
+  minute, second, seconds since the epoch, day of year, and circular
+  month, day, hour and weekday. See [Text and date columns](#text-and-date-columns).
+- No ensemble config generator of its own, as for v3: `.native_presets()`
+  still covers v2.5 and v2.6 only, so v3.5 ensembles come from a Python
+  dump. Its recipe is much the simpler one — a single `"none"` transform
+  with `ordinal_shuffled` categoricals and 768 features per estimator —
+  so a native preset would be easy to add later.
+- `FEATURE_SUBSAMPLING_METHOD = "balanced"`, which the published
+  `inference_config` sets, is not implemented; a member whose predictor
+  count exceeds its budget errors, as for v2.6 and v3.
+- One dataset per call, and the same `torch.compile` / int8-quantisation
+  / alternate-kernel omissions as v3.
+- The memory preflight is calibrated only up to 32,768 context rows on
+  this backend and under-predicts beyond it; see `inst/memory/README.md`.

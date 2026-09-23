@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-09-22">
+<meta name="dcterms.date" content="2026-09-23">
 
 <title>How big a table can each model handle?</title>
 <style>
@@ -97,6 +97,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#memory-is-often-not-what-stops-you" id="toc-memory-is-often-not-what-stops-you" class="nav-link" data-scroll-target="#memory-is-often-not-what-stops-you">Memory is often not what stops you</a></li>
   <li><a href="#choosing" id="toc-choosing" class="nav-link" data-scroll-target="#choosing">Choosing</a></li>
   <li><a href="#checking-your-own-case" id="toc-checking-your-own-case" class="nav-link" data-scroll-target="#checking-your-own-case">Checking your own case</a></li>
+  <li><a href="#threads-and-parallel-workers" id="toc-threads-and-parallel-workers" class="nav-link" data-scroll-target="#threads-and-parallel-workers">Threads and parallel workers</a></li>
   <li><a href="#where-the-numbers-come-from" id="toc-where-the-numbers-come-from" class="nav-link" data-scroll-target="#where-the-numbers-come-from">Where the numbers come from</a></li>
   </ul>
 </nav>
@@ -122,7 +123,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">September 22, 2026</p>
+      <p class="date">September 23, 2026</p>
     </div>
   </div>
   
@@ -169,7 +170,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">c</span>(<span class="at">available_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_avail_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>),</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">installed_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_total_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>))</span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; available_gb installed_gb </span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         32.5         51.5</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         10.7         51.5</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </section>
 <section id="the-headline-numbers" class="level2">
@@ -716,6 +717,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>                    <span class="at">n_features =</span> <span class="dv">50</span>, <span class="at">available =</span> <span class="fl">24e9</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>You do not have to remember to ask. <code>fit()</code> and <code>predict()</code> run the same check themselves and warn before allocating anything, which matters because running out inside libtorch kills the R process outright — no error, no traceback, nothing to catch. <code>options(tabfound.memory_guard = "error")</code> turns the warning into a refusal; <code>"off"</code> silences it. See <code>?estimate_peak_memory</code>.</p>
+</section>
+<section id="threads-and-parallel-workers" class="level2">
+<h2 class="anchored" data-anchor-id="threads-and-parallel-workers">Threads and parallel workers</h2>
+<p>libtorch runs one intra-op thread per core, which is right for one model in one process and wrong inside a worker pool: <code>k</code> R workers each spawning <code>n_cores</code> threads oversubscribe the machine <code>k</code>-fold, and the run gets <em>slower</em> the more workers you add. <code>tabfound_threads(n)</code> sets the count for the calling process — the rule of thumb is <code>detectCores() %/% k</code>, called inside each worker.</p>
+<p>Set it before the first forward pass. libtorch’s native backend refuses both thread counts once its parallel region has started and says so on stderr from C++, not through an R condition, so a late call looks as though it worked; <code>tabfound_threads()</code> with no argument reads the value back.</p>
+<p>The advice underneath the knob is not to fork at all. Chained-equations chains and ensemble members are already sequential calls into a multi-threaded library, so the parallelism is better left to torch than taken from it — and forking a process that has already initialised libtorch leaves the child with a thread pool it cannot use, so a pool must be built before the first torch call, or with <code>future::plan(multisession)</code> rather than <code>multicore</code>.</p>
 </section>
 <section id="where-the-numbers-come-from" class="level2">
 <h2 class="anchored" data-anchor-id="where-the-numbers-come-from">Where the numbers come from</h2>

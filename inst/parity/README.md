@@ -621,3 +621,165 @@ the same function and the comparison would pin nothing.
    branch to `run-parity.R`.
 4. Thread a `trace_dir` through the backend's predictor so the R side
    writes the matching tree.
+
+## Summary by backend
+
+A per-backend digest of the results above, as it previously appeared in the
+package README.
+
+**Mitra** (76 M parameters) against AutoGluon's `Tab2D`, 20/20 checks in
+tolerance across classification and regression:
+
+- All 392 / 393 checkpoint tensors map onto the R module tree by
+  **identity**.
+- The quantile-rank embedding and the packed model input are
+  **bit-identical** (`max_abs == 0`) on every fixture.
+- `predict_proba` agrees to 9e-7, regression `predict` to 1.4e-5.
+- Its preprocessor — mean imputation, the constant-column drop, the
+  min-max target scaling and its inverse — is bit-identical to
+  AutoGluon's.
+- Ships `model.safetensors` + `config.json` on the Hub under Apache-2.0,
+  so no conversion step and no license caveat.
+
+**TabICL v2** (28 M parameters) against the `tabicl` package, 16/16
+checks in tolerance across classification and regression:
+
+- Every stage agrees to ~1e-6 of its own scale; `predict_proba` to 2e-6
+  and the regressor's full 999-level quantile grid to 5e-6.
+- TabICL's forward pass has two implementations — a plain three-stage
+  path and an eval path with chunking and K/V caching. The harness
+  records the gap between them, currently **exactly 0**, so the path this
+  port implements is the path users get.
+- 62 layer-level assertions cover both families, including the
+  differences between them: the two GELU flavours and the two RoPE
+  pairing conventions are each asserted to disagree.
+- The estimator around it is checked end to end, at the numbers in
+  [TabICL v2 vs `tabicl`](#tabicl-v2-vs-tabicl-211--torch-2130) — the only one of the three for which weights were
+  available locally to do so.
+
+**TabFM 1.0.0** (1.6 B parameters, 913 tensors) against the `tabfm`
+package, float32, 21/21 checks in tolerance across classification and
+regression:
+
+- All 913 checkpoint tensors map onto the R module tree by **identity** —
+  no key rewriting needed.
+- The cell embedder is **bit-identical** (`max_abs == 0`): Fourier
+  expansion, cyclic feature grouping and target embedding all exact.
+- Every later stage agrees to ~1e-6 of its own scale; `predict_proba` to
+  3e-6 on 48/12 rows and 7e-6 on iris, and the regression head to 2e-6.
+- Layer-level assertions (RMSNorm, RoPE, per-head-norm attention,
+  sandwich-norm blocks, induced set attention, tanh-gelu MLP) pass
+  against the reference classes **without needing the checkpoint**.
+- So does the `cat_mask` check — the flag that routes a declared
+  categorical column's cells through a separate Fourier basis. On random
+  weights the two implementations agree to 2e-7 with a mask, both give
+  exactly the plain forward pass when it is all-`FALSE`, and both move
+  the logits by 3.7e-3 when it is not. That last number is why the check
+  exists: the mask is not bookkeeping, and a wrapper that builds one
+  while the network ignores it looks correct in every stage-level check.
+
+Headline for the TabPFN backend, against `tabpfn` 8.2.0:
+
+- Per-member model inputs are **bit-identical** (`max_abs == 0`) on all
+  four fixtures — including one with missing values, a constant column,
+  and infinities.
+- `predict_proba` agrees to ~2e-6; regression `predict` to ~2e-5 and
+  quantiles to ~6e-6.
+- The one caveat is TabPFN's row-fingerprint feature, which is a SHA-256
+  of the row's float64 bytes and therefore flips wholesale on a 1-ULP
+  upstream difference. That is quantified rather than hidden — see the
+  parity README.
+
+For the TabPFN **v2.6** backend, against the same package:
+
+- v2.6 moved the preprocessing inside the network, so the *single-pass*
+  comparison is network-to-network on identical bytes rather than staged
+  around a pipeline. Logits agree to ≤1.8e-5 of their own scale across
+  six fixtures, including one with a constant column and 25 missing
+  values. Decoding — softmax for the classifier, the bar distribution for
+  the regressor — is **bit-identical** (`max_abs == 0`) when both sides
+  are handed the same logits.
+- The *ensemble* is graded like v2.5's, through the full estimator on
+  both sides. Per-member model inputs are **bit-identical** on all four
+  fixtures — including the regressor's polynomial-feature expansion, and
+  including the fixture with missing values and a constant column.
+- `predict_proba` agrees to ~8e-6; regression `predict` to ~3e-5 and
+  quantiles to ~4e-5.
+- The KV cache and the chunked forward are each graded twice: against the
+  reference's own run of the same mechanism, and against R's own plain
+  forward. Chunking is **bit-identical to the unchunked pass on every
+  fixture**. The cache is bit-identical on the four fixtures where the
+  reference's own cache is, and shifts the prediction on the same two it
+  shifts for the reference, by the same order of magnitude.
+- Two fixtures carry genuine categorical columns — 3, 6 and 12 levels
+  alongside numerics — and are run twice: declared, so the ordinal
+  encoder reaches them, and undeclared, so only the low-cardinality one
+  is inferred. Both sides agree exactly on *which* columns are
+  categorical, and the member inputs stay bit-identical through the
+  encoding and the reordering it causes.
+
+For the TabPFN **v3** backend, against the same package:
+
+- v3 keeps v2.6's arrangement where the NaN/Inf handling and the standard
+  scaler live inside the network, so this is again a network-to-network
+  comparison on identical bytes. Across six fixtures — including one with
+  a constant column and 25 missing values, and one with 12 rows —
+  **all 42 checks pass**: logits agree to ≤2.9e-6 of their own scale, and
+  decoding is **bit-identical** (`max_abs == 0`) when both sides are
+  handed the same logits.
+- End-to-end `predict_proba` from a single forward pass agrees to ~1.6e-6.
+- The KV cache and the chunked forward are each graded against the
+  reference's own run of the same mechanism *and* against R's own plain
+  forward, both to ≤2.9e-6 of scale. Neither is bitwise, and neither can
+  be: both change the batch shapes the attention kernel sees. But unlike
+  v2.6's, v3's cache is the *same computation* as the uncached pass —
+  nothing in the architecture is fitted over train and test together —
+  so the self-check is an unconditional assertion rather than a
+  conditional one.
+- **All eight published v3 checkpoints** were run through the same
+  comparison, not just the two defaults: the four classifiers agree to
+  ≤1.2e-6 and the four regressors to ≤2.3e-5, on the same input. The
+  stored parity tree covers the defaults only, since the other six share
+  their architecture exactly and would grade the same code twice.
+
+
+### TabPFN v3.5
+
+The architecture is ported in full and verified end to end: 63/63
+parity checks against `tabpfn` 9.0.0 across seven fixtures and both
+heads, covering the plain forward, `save_peak_memory_factor`, the
+row/column stage chunking and the KV cache. That includes the two
+things that are new in this generation — the learned Fourier cell
+embedder, and the bucketed **in-context ECDF** it reads, which gives
+
+### Text and date features
+
+The date features are bit-exact against the reference. The
+text features match scikit-learn's algorithm to 1e-13, including its
+randomized SVD: that draws a Gaussian test matrix from
+`numpy.random.RandomState(0)`, and on short text -- few rows, many
+distinct n-grams -- the trailing components are decided by that draw
+rather than by the data, so the NumPy generator is reproduced exactly. What
+remains against skrub's actual output, 2e-5 to 2e-4, is its float32
+arithmetic, which R cannot run and scikit-learn's own float64 path differs
+from by the same amount.
+
+### Known non-reproducible pieces
+
+Two gaps are stated rather than papered over. The Yeo-Johnson lambda
+agrees to 2e-8, not bitwise: sklearn hands the search to
+`scipy.optimize.fminbound`, which is ported step for step, but the
+likelihood goes through a `logsumexp` whose summation order R cannot
+share, and Brent's accept/reject test is a strict comparison — so the
+two searches occasionally take different final steps and stop within
+`xatol` (1.48e-8) of each other. And Mitra's random sign flips cannot be
+reproduced at all, because the reference draws them from NumPy's
+*global* generator and never seeds it; they differ between two of its
+own runs.
+
+The shared preprocessing steps are additionally pinned against sklearn
+and TabPFN's own step classes in `tests/testthat/test-prep-transforms.R`,
+and the wrapper layer in `test-prep-sklearn.R`, `test-prep-ensemble.R`
+and `test-py-random.R`. None of those need model weights, so they run
+anywhere the package does — which is the point: they cover the code most
+likely to drift, on the machines least likely to have a checkpoint.

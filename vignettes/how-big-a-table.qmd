@@ -379,6 +379,29 @@ error, no traceback, nothing to catch. `options(tabfound.memory_guard =
 "error")` turns the warning into a refusal; `"off"` silences it. See
 `?estimate_peak_memory`.
 
+## Threads and parallel workers
+
+libtorch runs one intra-op thread per core, which is right for one model
+in one process and wrong inside a worker pool: `k` R workers each
+spawning `n_cores` threads oversubscribe the machine `k`-fold, and the
+run gets *slower* the more workers you add. `tabfound_threads(n)` sets
+the count for the calling process — the rule of thumb is
+`detectCores() %/% k`, called inside each worker.
+
+Set it before the first forward pass. libtorch's native backend refuses
+both thread counts once its parallel region has started and says so on
+stderr from C++, not through an R condition, so a late call looks as
+though it worked; `tabfound_threads()` with no argument reads the value
+back.
+
+The advice underneath the knob is not to fork at all. Chained-equations
+chains and ensemble members are already sequential calls into a
+multi-threaded library, so the parallelism is better left to torch than
+taken from it — and forking a process that has already initialised
+libtorch leaves the child with a thread pool it cannot use, so a pool
+must be built before the first torch call, or with
+`future::plan(multisession)` rather than `multicore`.
+
 ## Where the numbers come from
 
 A scaling model whose constants were **measured**: 72 fit/predict runs

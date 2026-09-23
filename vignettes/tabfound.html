@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-09-22">
+<meta name="dcterms.date" content="2026-09-23">
 
 <title>Tabular foundation models with tabfound</title>
 <style>
@@ -139,7 +139,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">September 22, 2026</p>
+      <p class="date">September 23, 2026</p>
     </div>
   </div>
   
@@ -303,6 +303,9 @@ Warning
 Download it now? (yes/No/cancel)</code></pre>
 <p>Nothing is fetched without an answer. In a non-interactive session the load fails with the <code>download_model()</code> call to run rather than quietly pulling gigabytes, and <code>options(tabfound.download = "always")</code> opts into unattended downloads for scripts that want them.</p>
 <p>Weights live in <code>tabfound_home()</code> — <code>tools::R_user_dir("tabfound", "cache")</code> by default, redirectable with <code>options(tabfound.home = )</code> or <code>TABFOUND_HOME</code>. Not inside the installed package: writing there breaks read-only and shared libraries, and CRAN forbids it.</p>
+<p>A finished download records its file sizes in <code>SOURCE.json</code>, so an interrupted one is detected and retried rather than passing the “is it there?” check forever on a truncated file.</p>
+<p><strong>Gated repos and offline use.</strong> <code>hfhub</code> reads a token from <code>HUGGING_FACE_HUB_TOKEN</code> / <code>HUGGINGFACE_HUB_TOKEN</code> and nowhere else, which means access granted the normal Python way — <code>HF_TOKEN</code>, or <code>huggingface-cli login</code>, which writes <code>~/.cache/huggingface/token</code> — is invisible from R, and the resulting 401 surfaces as <em>“Connection error… cannot find the requested files in the disk cache”</em>. tabfound reads all four sources and forwards the token for the duration of the call, and when a fetch fails that way it says the repo is probably gated, whether a token was found, and points at the local-conversion route.</p>
+<p>Every Hub-referenced load consults the cache before the network, so a cached model costs no round trip (and no timeout when the network is gone). <code>options(tabfound.offline = TRUE)</code> or <code>HF_HUB_OFFLINE</code> makes that the only mode: a cache miss is an error naming the cache directory rather than a hang.</p>
 </section>
 <section id="what-conversion-needs" class="level3">
 <h3 class="anchored" data-anchor-id="what-conversion-needs">What conversion needs</h3>
