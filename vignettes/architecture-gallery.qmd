@@ -269,3 +269,27 @@ register_backend(
 `describe` returns a title, a subtitle, a named `facts` vector and a
 list of `arch_stage()`s. Everything else — layout, the three formats,
 both themes, the parameter accounting — is shared.
+
+### Where things live
+
+```
+R/core-*.R            device, artifact resolution, download + convert, state-dict loader, registry
+R/core-memory.R       memory preflight: availability probe, peak estimator, the fit/predict guard
+R/api.R               tabular_classifier() / tabular_regressor() + S3 methods
+R/nn-*.R              shared layers: attention variants, norms, RoPE, blocks, MLPs
+R/prep-transforms.R   TabPFN's own column transforms (squashing, quantile, SVD, fingerprint)
+R/prep-sklearn.R      the stock sklearn transformers the other three wrappers chain
+R/prep-ensemble.R     the ensemble generators + Mitra's preprocessor
+R/py-random.R         CPython's random.Random, which decides every ensemble member
+R/dist-*.R            output heads (TabPFN's bar distribution, TabICL's quantile distribution)
+R/mi*.R               multiple imputation + the mice / Amelia bridges
+R/syn*.R              sequential synthesis + the synthpop bridges
+R/backend-*-layers.R  family-specific blocks where conventions diverge
+R/backend-*.R         one model family each (`backend-tabpfn3.R` is TabPFN v3)
+inst/memory/          peak-memory calibration harness, measurements + fitted coefficients
+inst/parity/          the parity harness
+inst/python/          one-time checkpoint conversion
+```
+
+Adding a backend means one `register_backend()` call plus its layers —
+no changes to the core. See `?register_backend`.

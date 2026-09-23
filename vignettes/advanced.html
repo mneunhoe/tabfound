@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Marcel Neunhoeffer">
+<meta name="dcterms.date" content="2026-09-23">
+
+<title>Advanced: the engine, ensembles and known limits</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="advanced_files/libs/clipboard/clipboard.min.js"></script>
+<script src="advanced_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="advanced_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="advanced_files/libs/quarto-html/popper.min.js"></script>
+<script src="advanced_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="advanced_files/libs/quarto-html/anchor.min.js"></script>
+<link href="advanced_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="advanced_files/libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="advanced_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="advanced_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="advanced_files/libs/bootstrap/bootstrap-917079515d91bccb85b543faf8aa8bb6.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+  <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#the-engine-api" id="toc-the-engine-api" class="nav-link active" data-scroll-target="#the-engine-api">The engine API</a>
+  <ul class="collapse">
+  <li><a href="#model-objects" id="toc-model-objects" class="nav-link" data-scroll-target="#model-objects">Model objects</a></li>
+  <li><a href="#fit-once-query-forever" id="toc-fit-once-query-forever" class="nav-link" data-scroll-target="#fit-once-query-forever">Fit once, query forever</a></li>
+  </ul></li>
+  <li><a href="#ensembling" id="toc-ensembling" class="nav-link" data-scroll-target="#ensembling">Ensembling</a>
+  <ul class="collapse">
+  <li><a href="#tabfm-tabicl-and-mitra-on-by-default" id="toc-tabfm-tabicl-and-mitra-on-by-default" class="nav-link" data-scroll-target="#tabfm-tabicl-and-mitra-on-by-default">TabFM, TabICL and Mitra: on by default</a></li>
+  <li><a href="#tabpfn-from-a-dumped-config-directory" id="toc-tabpfn-from-a-dumped-config-directory" class="nav-link" data-scroll-target="#tabpfn-from-a-dumped-config-directory">TabPFN: from a dumped config directory</a></li>
+  </ul></li>
+  <li><a href="#column-handling-in-detail" id="toc-column-handling-in-detail" class="nav-link" data-scroll-target="#column-handling-in-detail">Column handling in detail</a>
+  <ul class="collapse">
+  <li><a href="#text-and-date-columns" id="toc-text-and-date-columns" class="nav-link" data-scroll-target="#text-and-date-columns">Text and date columns</a></li>
+  <li><a href="#the-formula-interface" id="toc-the-formula-interface" class="nav-link" data-scroll-target="#the-formula-interface">The formula interface</a></li>
+  </ul></li>
+  <li><a href="#model-catalogue-details" id="toc-model-catalogue-details" class="nav-link" data-scroll-target="#model-catalogue-details">Model catalogue details</a></li>
+  <li><a href="#known-limitations-per-model" id="toc-known-limitations-per-model" class="nav-link" data-scroll-target="#known-limitations-per-model">Known limitations, per model</a>
+  <ul class="collapse">
+  <li><a href="#tabfm" id="toc-tabfm" class="nav-link" data-scroll-target="#tabfm">TabFM</a></li>
+  <li><a href="#tabicl" id="toc-tabicl" class="nav-link" data-scroll-target="#tabicl">TabICL</a></li>
+  <li><a href="#mitra" id="toc-mitra" class="nav-link" data-scroll-target="#mitra">Mitra</a></li>
+  <li><a href="#tabpfn" id="toc-tabpfn" class="nav-link" data-scroll-target="#tabpfn">TabPFN</a></li>
+  <li><a href="#tabpfn-v2.6" id="toc-tabpfn-v2.6" class="nav-link" data-scroll-target="#tabpfn-v2.6">TabPFN v2.6</a></li>
+  <li><a href="#tabpfn-v3" id="toc-tabpfn-v3" class="nav-link" data-scroll-target="#tabpfn-v3">TabPFN v3</a></li>
+  <li><a href="#tabpfn-v3.5" id="toc-tabpfn-v3.5" class="nav-link" data-scroll-target="#tabpfn-v3.5">TabPFN v3.5</a></li>
+  </ul></li>
+  </ul>
+</nav>
+</div>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Advanced: the engine, ensembles and known limits</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Marcel Neunhoeffer </p>
+          </div>
+  </div>
+    
+    <div>
+    <div class="quarto-title-meta-heading">Published</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date">September 23, 2026</p>
+    </div>
+  </div>
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>This vignette collects what most users of <code>tabfound()</code> never need: the numeric-matrix engine underneath it, how each model’s ensemble is built and reproduced, the details of column handling, the model catalogue’s variants, and what each port does not (yet) do.</p>
+<section id="the-engine-api" class="level2">
+<h2 class="anchored" data-anchor-id="the-engine-api">The engine API</h2>
+<p><code>tabfound()</code> sits on top of <code>tabular_classifier()</code> / <code>tabular_regressor()</code>, which take a numeric matrix (or data frame) and a response vector:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># TabPFN, from converted local artifacts. `fit()` returns a fitted copy;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># it does not modify its input.</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"path/to/converted/tabpfn-v2.5-clf"</span>, <span class="at">device =</span> <span class="st">"cpu"</span>)</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(clf, iris[train, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], iris[train, <span class="dv">5</span>])</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>])                   <span class="co"># class labels</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, iris[test, <span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], <span class="at">type =</span> <span class="st">"prob"</span>)    <span class="co"># or predict_proba(clf, ...)</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_regressor</span>(<span class="st">"path/to/converted/tabpfn-v2.5-reg"</span>), X, y)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(reg, X_new)</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(reg, X_new, <span class="at">type =</span> <span class="st">"quantiles"</span>, <span class="at">quantiles =</span> <span class="fu">c</span>(<span class="fl">0.1</span>, <span class="fl">0.5</span>, <span class="fl">0.9</span>))</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(reg, X_new, <span class="at">type =</span> <span class="st">"sample"</span>, <span class="at">n_samples =</span> <span class="dv">100</span>)</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="co"># TabFM, straight from the Hub -- same API, no conversion step. The</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="co"># backend is inferred from config.json and the task subfolder is picked</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="co"># for you.</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabfm-1.0.0"</span>), X, y)</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, X_new, <span class="at">type =</span> <span class="st">"prob"</span>)</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a><span class="co"># TabICL. Its regressor predicts a full 999-level quantile grid rather</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="co"># than a point estimate, so summaries are read off the distribution --</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="co"># `mean` averages the whole grid, `median` inverts its CDF, and they are</span></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a><span class="co"># not the same number on a skewed one.</span></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_regressor</span>(<span class="st">"path/to/converted/tabicl-v2-reg"</span>), X, y)</span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(reg, X_new, <span class="at">type =</span> <span class="st">"quantiles"</span>, <span class="at">quantiles =</span> <span class="fu">c</span>(<span class="fl">0.05</span>, <span class="fl">0.5</span>, <span class="fl">0.95</span>))</span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(reg, X_new, <span class="at">type =</span> <span class="st">"median"</span>)</span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(reg, X_new, <span class="at">type =</span> <span class="st">"grid"</span>)              <span class="co"># all 999 levels</span></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a><span class="co"># All three of these ensemble by default, as their Python wrappers do.</span></span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a><span class="co"># The knobs are the wrappers' own, and `random_state` reproduces the</span></span>
+<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a><span class="co"># reference's members exactly.</span></span>
+<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"path/to/converted/tabicl-v2-cla"</span>,</span>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>                              <span class="at">n_estimators =</span> <span class="dv">16</span>, <span class="at">norm_methods =</span> <span class="fu">c</span>(<span class="st">"none"</span>, <span class="st">"power"</span>),</span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>                              <span class="at">random_state =</span> <span class="dv">42</span>), X, y)</span>
+<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a><span class="co"># Mitra, also straight from the Hub.</span></span>
+<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"mitra-classifier"</span>), X, y)</span>
+<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, X_new, <span class="at">type =</span> <span class="st">"prob"</span>)</span>
+<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a><span class="co"># Saving. `saveRDS()` cannot capture torch weights -- use these instead.</span></span>
+<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_save</span>(clf, <span class="st">"clf.tabfound"</span>)</span>
+<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabfound_load</span>(<span class="st">"clf.tabfound"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Each model family is a <em>backend</em>: a description of how to build the network from a config, how checkpoint keys map onto R module paths, how to preprocess the design matrix, how to build and combine an ensemble of transformed views of it, and how to turn the network’s output into predictions. <code>list_backends()</code> reports what is registered.</p>
+<section id="model-objects" class="level3">
+<h3 class="anchored" data-anchor-id="model-objects">Model objects</h3>
+<p>Fitted models are plain lists with value semantics. <code>fit()</code> returns a new object, so <code>m2 &lt;- fit(m1, X, y)</code> leaves <code>m1</code> unfitted, the same contract as <code>lm()</code> and everything else in R. The network itself is shared rather than copied — it is read-only and can be several gigabytes — while the fitted context (training rows, class levels, target scaler) is ordinary R data.</p>
+<p><code>saveRDS()</code> does <strong>not</strong> work: a torch module survives the round trip structurally but its tensors come back as dangling pointers, and the failure only shows up later, in use. [<code>tabfound_save()</code>] / [<code>tabfound_load()</code>] are the supported path, for both object types: the engine-level <code>tabfound_model</code> and the <code>tabfound_fit</code> that <code>tabfound()</code> returns, whose hardhat blueprint travels with it so a reloaded fit re-applies the same encoding and factor levels to new data. They write only the fitted context plus a reference to the model artifacts — a few kilobytes — and re-resolve the weights on load, since fitting these models stores context rows rather than learning parameters. Using a <code>saveRDS</code>-ed object raises an error naming the fix rather than failing inside torch.</p>
+</section>
+<section id="fit-once-query-forever" class="level3">
+<h3 class="anchored" data-anchor-id="fit-once-query-forever">Fit once, query forever</h3>
+<p>Conditioning the network on the training rows is the expensive half of a prediction, and it does not depend on what you are predicting. <code>kv_cache = TRUE</code> already does it once per <code>predict()</code> instead of once per chunk; <code>tabfound_cache()</code> does it once and <em>keeps</em> the result, on the object and through a save:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(dir, <span class="at">kv_cache =</span> <span class="cn">TRUE</span>), X_train, y_train)</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabfound_cache</span>(clf)          <span class="co"># condition now, once</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_save</span>(clf, <span class="st">"clf-bundle"</span>)    <span class="co"># a directory, not a file</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabfound_load</span>(<span class="st">"clf-bundle"</span>)  <span class="co"># next session, next machine</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, X_new, <span class="at">type =</span> <span class="st">"prob"</span>)  <span class="co"># starts from the conditioned state</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Measured on TabPFN v2.5, 800 context rows × 6 features, 512 query rows: 0.43 s per uncached call against 0.17 s to build the cache plus 0.13 s per call — and the reload costs 0.25 s, so it pays for itself on the first call of the second session. On TabICL (1,000 × 6, 2,000 query rows) it is 4.9 s against 2.3 s, a 2.1× speedup that persists. Predictions are <strong>bit-identical</strong> across the session boundary.</p>
+<p>What travels is a bundle directory: <code>state.rds</code> beside <code>cache.safetensors</code>. The RDS holds the skeleton of the cache — its list structure, classes and integers, all ordinary R data — and the tensors go to safetensors under dotted paths (<code>kv.3.key</code>), which is precisely the thing <code>saveRDS()</code> cannot carry. A model with no cache is still a single file, as before.</p>
+<p>Two things to know. The cache is <strong>large</strong> — it is the conditioned state of every ensemble member, 32 MB for that TabPFN fit and 409 MB for the TabICL one — so this trades disk for latency, deliberately. And it is a function of the training rows: it is fingerprinted when built and checked when used, so a cache that has outlived its context raises an error naming both shapes rather than quietly answering from the wrong data.</p>
+<p><code>has_cache()</code> says whether an object carries one; <code>tabfound_cache(object, build = FALSE)</code> drops it.</p>
+</section>
+</section>
+<section id="ensembling" class="level2">
+<h2 class="anchored" data-anchor-id="ensembling">Ensembling</h2>
+<p>None of these models is meant to be run once. Each reference estimator builds several <em>views</em> of the same table — a different feature order, a different class labelling, a different normalisation — runs the network on each, and combines the results. The two families go about it differently enough that they are documented separately.</p>
+<section id="tabfm-tabicl-and-mitra-on-by-default" class="level3">
+<h3 class="anchored" data-anchor-id="tabfm-tabicl-and-mitra-on-by-default">TabFM, TabICL and Mitra: on by default</h3>
+<p>These three ensemble as soon as you fit them, because their sklearn wrappers do. Nothing needs configuring:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"path/to/converted/tabicl-v2-cla"</span>), X, y)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>That is 8 members for TabICL, 32 for TabFM and 1 for Mitra — each backend’s own default. The arguments are the wrappers’ own:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  model_dir,</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">n_estimators        =</span> <span class="dv">16</span>,</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">norm_methods        =</span> <span class="fu">c</span>(<span class="st">"none"</span>, <span class="st">"power"</span>, <span class="st">"quantile"</span>),</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">feat_shuffle_method =</span> <span class="st">"latin"</span>,     <span class="co"># TabICL; TabFM takes "random"</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">softmax_temperature =</span> <span class="fl">0.9</span>,</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">average_logits      =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">random_state        =</span> <span class="dv">42</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>random_state</code> is not a nod to reproducibility — it reproduces the reference’s members <em>exactly</em>. Which permutation member 3 gets is decided by <code>random.Random(random_state)</code>, so <code>R/py-random.R</code> is a port of CPython’s MT19937: its <code>init_by_array</code> seeding, its <code>getrandbits</code>, its rejection-sampling <code>_randbelow</code>. R’s own <code>sample()</code> is a different algorithm on a differently-seeded generator and agrees with none of it. An ensemble that is merely “statistically equivalent” is a different set of predictions.</p>
+<p>What each view actually differs by:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th>TabICL</th>
+<th>TabFM</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>feature order</td>
+<td>Latin square (every column visits every position across the set)</td>
+<td>independent random permutations</td>
+</tr>
+<tr class="even">
+<td>class labels</td>
+<td>an arbitrary permutation</td>
+<td>a cyclic rotation by a drawn offset</td>
+</tr>
+<tr class="odd">
+<td>normalisation</td>
+<td><code>none</code> and <code>power</code> by default; <code>quantile</code>, <code>quantile_rtdl</code> and <code>robust</code> also available</td>
+<td>same menu</td>
+</tr>
+<tr class="even">
+<td>combination</td>
+<td>average logits, then one temperature-scaled softmax</td>
+<td>same</td>
+</tr>
+</tbody>
+</table>
+<p>Each normalisation method fits one preprocessing pipeline — <code>CustomStandardScaler</code> → the normaliser → a two-stage outlier clipper — which every member sharing that method reuses. Mitra is the odd one out: it has no designed set of views at all, only a random per-column sign flip per member, and AutoGluon defaults to a single member.</p>
+<p>Two of the reference’s presets are deliberately absent. TabFM’s <code>ensemble()</code> preset (feature crosses, SVD features, NNLS ensemble weights, probability calibration) needs out-of-fold cross-fitting that this package does not have, so <code>n_feature_crosses</code> and <code>n_svd_features</code> raise rather than being silently ignored. Mitra’s fine-tuning is out of scope for an inference-only package, so predictions match a <code>MitraClassifier</code> with <code>fine_tune = FALSE</code>.</p>
+</section>
+<section id="tabpfn-from-a-dumped-config-directory" class="level3">
+<h3 class="anchored" data-anchor-id="tabpfn-from-a-dumped-config-directory">TabPFN: from a dumped config directory</h3>
+<p>A single forward pass is the default. To reproduce the reference estimator’s n-member ensemble, point at a dumped config directory:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(model_dir, <span class="at">ensemble_configs_dir =</span> <span class="st">"path/to/dump"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>tabpfn</code>, <code>tabpfn26</code> and <code>tabpfn3</code> all support it. A member is described entirely by its config — which primary transform, whether the transformed block replaces or is appended to the originals, whether an SVD block and polynomial products are added, the column shuffle, the class rotation — so one composer serves every member type of every version, and adding a version means adding entries to a table rather than a code path.</p>
+<p>The implemented primary transforms are <code>none</code>, <code>squashing_scaler_default</code>, <code>squashing_scaler_max10</code>, <code>quantile_uni</code>, <code>quantile_uni_coarse</code>, <code>quantile_uni_fine</code> and <code>quantile_uni_extrapolate</code>, which between them cover every recipe the eight published v3 checkpoints and both v2 generations ask for. A dump naming anything else raises rather than substituting a near neighbour.</p>
+<p>Everything the reference draws from its NumPy generator (the shuffle, the class rotation, the polynomial factor pairs, any target-transform lambda) is read out of the dump rather than recomputed: reproducing PCG64 in R is not worth the days it would take.</p>
+<p><code>generate_ensemble_configs_native()</code> builds a working ensemble in pure R, no Python needed. Pass <code>variant</code> to match your weights — it decides which member menu is used, and the two generations do not share one:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> <span class="fu">tempfile</span>()</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="fu">generate_ensemble_configs_native</span>(X, y, <span class="at">n_estimators =</span> <span class="dv">4</span>,</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">head =</span> <span class="st">"classifier"</span>, <span class="at">variant =</span> <span class="st">"v2.6"</span>,</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">output_dir =</span> d)</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>, <span class="at">ensemble_configs_dir =</span> d)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>It is not bit-identical to Python at a given seed, and does not try to be; for verified parity, dump the configs from the reference with <code>generate_ensemble_configs()</code>.</p>
+<p>One catch when combining it with <code>tabfound()</code>: the configs record a code permutation per encoded categorical column, sized from the matrix you pass here — so that matrix and its <code>categorical_features</code> have to be the ones the model will actually see. <code>tabfound()</code> molds the frame through hardhat first, which reorders columns, so generate from the molded matrix rather than the raw frame. A mismatch is caught rather than silently mis-encoded: the pipeline refuses when the config and the data disagree about which columns are categorical.</p>
+<p><code>softmax_temperature</code> defaults to <code>0.9</code> across every backend, matching the reference estimators. Pass <code>softmax_temperature = 1</code> for the untempered distribution.</p>
+</section>
+</section>
+<section id="column-handling-in-detail" class="level2">
+<h2 class="anchored" data-anchor-id="column-handling-in-detail">Column handling in detail</h2>
+<section id="text-and-date-columns" class="level3">
+<h3 class="anchored" data-anchor-id="text-and-date-columns">Text and date columns</h3>
+<p>A free-text column and a timestamp are the two kinds of column a tabular model is worst at receiving raw. Coded as a categorical, a review field is an arbitrary integer per distinct sentence, and an unseen sentence at predict time is a missing value. As a single number, a timestamp keeps its order and loses its calendar – December is nowhere near January.</p>
+<p>So <code>tabfound()</code> expands them first, the way TabPFN v3.5’s Python estimator does:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(price <span class="sc">~</span> ., <span class="at">data =</span> listings, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>fit<span class="sc">$</span>expansion</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Text and date expansion</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; * dates: listed_on</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; * text (30 components each): description</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<ul>
+<li><strong>Text.</strong> A character column with more than <code>min_cardinality_for_text</code>
+<ol start="30" type="1">
+<li>distinct values that do not all parse as numbers becomes <code>text_n_components</code> (30) features: tf-idf over character 3- and 4-grams within word boundaries, reduced by a truncated SVD and block-normalised. An unseen string is placed by the n-grams it shares with the training column; a missing one becomes a row of zeros.</li>
+</ol></li>
+<li><strong>Dates.</strong> A <code>Date</code> or <code>POSIXct</code> becomes year, minute, second, seconds since the epoch and day of year, plus sine/cosine pairs for month, day, hour and weekday – read in the column’s own timezone. A column that is always at midnight gets no time-of-day features.</li>
+<li><strong>Durations.</strong> A <code>difftime</code> becomes its length in seconds, always. (It used to be its magnitude in whatever unit it carried, so the same duration was 1.5 or 90.)</li>
+</ul>
+<p><code>transform_text</code> and <code>transform_dates</code> default to <code>"auto"</code>, which follows the checkpoint’s own recipe: on for TabPFN v3.5, off for every other backend – where they are available but opt-in, with <code>TRUE</code>. Off, a text column is a categorical and a date a single number, exactly as before. Declared <code>categorical_features</code> are moved to wherever their columns sit after expansion.</p>
+<p>Three columns of free text on a wide table can exceed an ensemble member’s feature budget – each is 30 features – and the R side aborts there rather than subsampling. <code>text_n_components</code> lowers the cost.</p>
+</section>
+<section id="the-formula-interface" class="level3">
+<h3 class="anchored" data-anchor-id="the-formula-interface">The formula interface</h3>
+<p><code>tabfound()</code> is the layer an R user wants: a formula or an <code>x</code>/<code>y</code> pair, a data frame with whatever column types it happens to have, and a <code>predict()</code> method that returns a tibble.</p>
+<p>It delegates the hard part — remembering what the training data looked like and re-applying that to new data — to <a href="https://hardhat.tidymodels.org/">hardhat</a>, which also validates new data and fails precisely: a missing column names the column, a novel factor level names the level.</p>
+<p>The Python wrappers solve the same problem with a <code>TransformToNumerical</code> step that sniffs pandas dtypes to guess which columns are categorical. R does not need to guess. <code>is.factor()</code> and <code>inherits(x, "Date")</code> are exact, so the encoder dispatches on real types:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>R type</th>
+<th>encoded as</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>numeric, integer</td>
+<td>unchanged</td>
+</tr>
+<tr class="even">
+<td>factor, ordered</td>
+<td>0-based ordinal codes (not one-hot — none of the three references one-hot encode features)</td>
+</tr>
+<tr class="odd">
+<td>character</td>
+<td>coerced to factor, then as above</td>
+</tr>
+<tr class="even">
+<td>logical</td>
+<td>coerced to factor, then 0/1</td>
+</tr>
+<tr class="odd">
+<td>Date, POSIXct, difftime</td>
+<td>its numeric representation</td>
+</tr>
+</tbody>
+</table>
+<p>Encoding a factor to codes is only half the job: the model still has to be <em>told</em> those columns are categorical, or it will treat the codes as a quantity with an order and a scale. <code>tabfound()</code> passes the factor columns’ positions down automatically. This matters more than it looks — the reference’s own inference only catches columns with fewer than four distinct values, so a five-level factor is invisible to it, and R knows the answer exactly where pandas has to guess:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Declared for you, from the frame's factor columns.</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(churn <span class="sc">~</span> ., <span class="at">data =</span> d, <span class="at">model =</span> <span class="st">"tabpfn-v2.6-classifier"</span>)</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Or by hand, on the matrix interface, as 1-based column positions.</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>, <span class="at">categorical_features =</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">3</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>What that changes: for members whose config asks for it, declared columns skip the primary transform (a quantile transform on category codes is meaningless), get ordinal-encoded with their codes randomly permuted per member, and move to the front of the matrix. Backends with no categorical handling of their own warn rather than silently ignoring the declaration.</p>
+<p>Logicals are coerced deliberately rather than incidentally: the formula path runs a <code>model.matrix</code> expansion that would turn a bare logical into two dummy columns while leaving a factor alone, so coercing first is what keeps the formula and <code>x</code>/<code>y</code> interfaces producing the same result.</p>
+<p><strong>Missing values</strong> are handled per backend, because the backends genuinely differ — and in every case the handling is the reference implementation’s own. TabPFN encodes missingness as an explicit indicator channel and TabFM maps it to a sentinel. TabICL’s <em>network</em> has none of that and propagates <code>NaN</code> straight to its output, and Mitra’s silently deletes any column containing one; both of their predictors impute first, exactly as their Python wrappers do, so neither failure mode is reachable through the API. All four therefore take <code>NA</code> directly and <code>na_action = "auto"</code> passes it through to them.</p>
+<p>Which route a backend takes is recorded, and is worth knowing rather than glossing: <code>list_backends()$missing</code> reads <code>"encoded"</code> for TabPFN, <code>"imputed"</code> for TabICL and Mitra, <code>"encoded+imputed"</code> for TabFM. The two are not the same guarantee. A network that encodes missingness <em>conditions on</em> it — the fact that a value was absent is available to the model, and to anything you ask the model about it. A wrapper that mean-fills has replaced that fact with a column mean before the network is reached. For prediction the distinction rarely matters; for imputation and synthesis, where the missingness pattern is the object of study, it is most of the question, and it is one reason the MI simulation finds TabPFN and TabICL so far apart.</p>
+<p>TabICL’s and TabFM’s imputation is <code>SimpleImputer(strategy = "mean")</code>, fitted on the training rows: new data is filled with the <em>training</em> column means, and a column that is entirely missing is dropped rather than invented. Mitra’s is AutoGluon’s own, which is the same idea.</p>
+<p><code>Inf</code> is <strong>not</strong> treated as missing and is rejected with an error naming the columns. That is the reference’s line too — sklearn takes <code>NaN</code> where it advertises it and refuses infinities — and it is the right line: an infinity cannot be imputed, and left alone it poisons a column mean and every scaler downstream of it without producing a single <code>NaN</code> to notice. Replace them with <code>NA</code> to have them imputed, or with a finite bound if that is what they encode. Mitra is the exception and maps them to zero, because its own preprocessor does.</p>
+<p><code>na_action</code> still takes <code>"auto"</code> (the default), <code>"pass"</code>, <code>"impute"</code> or <code>"fail"</code>, and <code>"impute"</code> remains available if you would rather this package’s plain column-mean fill ran instead — but it is <em>not</em> a port of any reference implementation and is not covered by the parity harness, so the backend’s own is the better default. Forcing <code>"pass"</code> on a backend that declares it cannot cope still warns rather than silently returning <code>NaN</code>.</p>
+<p><code>recipes</code> is not wired up yet, and neither is a parsnip engine.</p>
+</section>
+</section>
+<section id="model-catalogue-details" class="level2">
+<h2 class="anchored" data-anchor-id="model-catalogue-details">Model catalogue details</h2>
+<p>A family name plus the task picks the head, so <code>"tabpfn"</code> is the classifier under <code>tabular_classifier()</code> and the regressor under <code>tabular_regressor()</code>. <strong><code>"tabpfn"</code> stays pinned to v2.5</strong> — adding v2.6 does not repoint existing code onto different weights. Ask for a version by name:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>)</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris, <span class="at">model =</span> <span class="st">"tabpfn-v3"</span>)</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><strong>TabPFN v3.5 is one checkpoint for both tasks.</strong> From this generation on the head is chosen per forward pass rather than baked into the weights, so there is no <code>-classifier</code> / <code>-regressor</code> pair to pick between: the same <code>"tabpfn-v3.5"</code> resolves under <code>tabular_classifier()</code> and <code>tabular_regressor()</code> alike, and <code>list_models()</code> shows its task as <code>both</code>. One download, 876 MB, serves everything.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The same artifacts, both ways round.</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Species)</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">2</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Sepal.Length)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Two v3.5 variants are catalogued by exact id only, so <code>"tabpfn-v3.5"</code> keeps meaning the default: <code>"tabpfn-v3.5-fast"</code> (334 MB, 8 ICL layers instead of 24, an alpha checkpoint the publisher reports as up to 6x faster) and <code>"tabpfn-v3.5-multiclass"</code> (experimental).</p>
+<p>TabPFN v2.6, v3 and v3.5 weights are released under <code>tabpfn-2.6-license-v1.0</code>, <code>tabpfn-3-license-v1.0</code> and <code>tabpfn-3-5-license-v1.0</code>. All three permit research, evaluation and internal benchmarking but <strong>not commercial or production use</strong>; v3.5’s says so in those words and points at a separate Commercial Enterprise License. <code>list_models()</code> prints the licence, and the download prompt repeats it.</p>
+<p>v3 publishes six specialised checkpoints alongside the two defaults, and all eight are catalogued. They are <strong>the same architecture</strong> — identical <code>config</code>, identical state-dict keys and shapes, checked checkpoint by checkpoint — so they load through the same backend with no special handling:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3-classifier-binary"</span>)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3-regressor-timeseries"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>id</th>
+<th>what the publisher tuned it for</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>tabpfn-v3-classifier-binary</code></td>
+<td>binary targets, &lt;200k rows</td>
+</tr>
+<tr class="even">
+<td><code>tabpfn-v3-classifier-multiclass</code></td>
+<td>multiclass targets, &lt;200k rows</td>
+</tr>
+<tr class="odd">
+<td><code>tabpfn-v3-classifier-ood</code></td>
+<td>test inputs outside the training distribution</td>
+</tr>
+<tr class="even">
+<td><code>tabpfn-v3-regressor-mediumdata</code></td>
+<td>&lt;100k rows, alternative preprocessing</td>
+</tr>
+<tr class="odd">
+<td><code>tabpfn-v3-regressor-ood</code></td>
+<td>test inputs outside the training distribution</td>
+</tr>
+<tr class="even">
+<td><code>tabpfn-v3-regressor-timeseries</code></td>
+<td>synthetic time series (used by TabPFN-TS-3)</td>
+</tr>
+</tbody>
+</table>
+<p>Two of them are worth knowing about before you spend the bandwidth. The <strong><code>_ood</code> checkpoints carry byte-identical weights to the corresponding defaults</strong> — SHA-256 over the full state dict matches. What makes them OOD-robust is the preprocessing recipe bundled in the checkpoint’s <code>inference_config</code> (<code>squashing_scaler_max10</code> in place of <code>squashing_scaler_default</code>, and <code>none</code> or <code>quantile_uni_extrapolate</code> in place of <code>quantile_uni</code> — all three implemented), not the network. Since this package reads that recipe from an ensemble dump rather than from the checkpoint, a single-pass prediction from <code>tabpfn-v3-classifier-ood</code> is <em>the same number</em> as one from <code>tabpfn-v3-classifier</code>. The entries exist so the publisher’s names resolve; they are not four distinct models.</p>
+<p>The remaining four do carry distinct weights, and all eight agree with the Python reference (see <code>inst/parity/README.md</code>).</p>
+<p>Family names stay on the defaults: <code>"tabpfn-v3"</code> plus a task gives you <code>tabpfn-v3-classifier</code> or <code>tabpfn-v3-regressor</code>, never a variant.</p>
+</section>
+<section id="known-limitations-per-model" class="level2">
+<h2 class="anchored" data-anchor-id="known-limitations-per-model">Known limitations, per model</h2>
+<section id="tabfm" class="level3">
+<h3 class="anchored" data-anchor-id="tabfm">TabFM</h3>
+<p>The network and the sklearn wrapper’s default preset are both ported and verified: the preprocessing pipeline, the 32-member ensemble (feature permutations, class shifts, per-member normalisation) and the <code>cat_mask</code> that routes a declared categorical column’s cells through a separate Fourier basis. Not ported: the heavier <code>TabFMClassifier.ensemble()</code> preset — feature crosses, SVD features, NNLS ensemble weights and probability calibration, which together need out-of-fold cross-fitting — and <code>TransformToNumerical</code>’s datetime handling. Asking for <code>n_feature_crosses</code> or <code>n_svd_features</code> errors rather than silently ignoring them. Its regression head emits a point estimate, so there is no <code>$predict_quantiles()</code>. <code>kv_cache = TRUE</code> conditions on the training rows once per <code>predict()</code> instead of once per chunk per member, which on this network is most of the wall clock.</p>
+<p>Practical notes: the checkpoint is ~6.5 GB per task and loads in about 6 s; a forward pass on 60 rows x 4 features takes ~0.5 s on CPU, and the default ensemble runs 32 of them. Weights are non-commercial licensed.</p>
+</section>
+<section id="tabicl" class="level3">
+<h3 class="anchored" data-anchor-id="tabicl">TabICL</h3>
+<p>Network and wrapper both ported and verified, end to end against <code>TabICLClassifier</code> / <code>TabICLRegressor</code>: mean imputation, the preprocessing pipeline, the 8-member ensemble with Latin-square feature permutations and shifted class labels, logit averaging, and the quantile distribution the regressor reads its mean, median and quantiles from, plus a K/V cache (<code>kv_cache = TRUE</code>) that conditions on the labelled rows once per <code>predict()</code>. Not ported: the <code>TableVectorizer</code>-style DataFrame typing (R knows its own column types, so <code>tabfound()</code> does not need to guess) and the many-class hierarchical path for problems with more classes than the checkpoint supports. The checkpoint is 110 MB and a forward pass on 60 rows takes ~0.07 s on CPU.</p>
+<p>Target standardization is ported for both TabFM and TabICL: their regressor networks operate on standardized targets and their wrappers fit a <code>StandardScaler</code> on <code>y</code>, so <code>$fit()</code> does the same and predictions are inverse-transformed back to the original scale. Skipping this does not error, it just returns predictions on the wrong scale — on iris it was the difference between an RMSE of 1.82 and 0.35.</p>
+</section>
+<section id="mitra" class="level3">
+<h3 class="anchored" data-anchor-id="mitra">Mitra</h3>
+<p>Network and preprocessor both ported and verified. Not ported: fine-tuning, which AutoGluon does by default (<code>fine_tune_steps = 50</code>) and which this package, being inference-only, cannot do — so predictions match a <code>MitraClassifier</code> with <code>fine_tune=False</code>, not the out-of-the-box one. Its raw network still has the sharpest edge in the package — a single <code>NA</code> in a column makes that column’s quantiles all-<code>NaN</code>, which buckets every value to zero, which zeroes the column’s variance, which the zero-variance guard flattens, so one missing value silently deletes the entire feature with no <code>NaN</code> in the output and no error — but nothing reachable through the API hits it, because the predictor mean-imputes first exactly as AutoGluon’s preprocessor does. One more thing is knowingly <em>not</em> faithful: the per-column random sign flips are drawn from a seedable R generator here, where the reference takes them from NumPy’s global generator and never seeds it, so its own flips differ between two of its own runs.</p>
+</section>
+<section id="tabpfn" class="level3">
+<h3 class="anchored" data-anchor-id="tabpfn">TabPFN</h3>
+<ul>
+<li><code>outlier_removal_std</code> is not implemented. It is a no-op on the current fixtures (the classifier default is 12σ, the regressor passes <code>NULL</code>), but data with extreme outliers will diverge.</li>
+<li><code>predict(type = "sample")</code> is ensemble-aware: it draws from the members’ averaged bucket probabilities — the same pseudo-logits the reference hands its head for <code>mean()</code> and <code>icdf()</code> — so a draw agrees with the quantiles reported beside it. Without ensemble configs it is one forward pass, as before.</li>
+<li>A data frame handed to <code>fit()</code> on the matrix interface is encoded the same way <code>tabfound()</code> encodes one (factors to ordinal codes, dates to numbers), and anything that cannot be encoded is refused rather than coerced. What that path does <em>not</em> do is declare which columns are categorical — it warns and names them; <code>tabfound()</code> declares them from the frame. See <a href="#the-formula-interface">The formula interface</a>.</li>
+<li>One-hot categorical encoding is not implemented. Its width depends on the data, which a member’s shuffle permutation cannot be sized ahead of; no released checkpoint asks for it.</li>
+<li>Text and date columns are expanded only when asked for (<code>transform_text = TRUE</code>, <code>transform_dates = TRUE</code>) on v2.5–v3; see <a href="#text-and-date-columns">Text and date columns</a>.</li>
+<li>The fused SDPA kernel is reached through one wrapper (<code>sdpa()</code>) rather than eleven <code>torch:::</code> call sites. It still prefers torch’s unexported <code>torch_scaled_dot_product_attention</code>, because that is what makes the float32 rounding match the reference — but the lookup is soft, and a pure public-API fallback takes over when it is absent, agreeing to ~1e-6. <code>options(tabfound.sdpa = "r")</code> forces the fallback, which is how the agreement is tested.</li>
+</ul>
+</section>
+<section id="tabpfn-v2.6" class="level3">
+<h3 class="anchored" data-anchor-id="tabpfn-v2.6">TabPFN v2.6</h3>
+<ul>
+<li>A member whose predictor count exceeds its per-estimator budget (680 and 500 for v2.6’s two member types) errors rather than subsampling features the way the reference would.</li>
+<li>The KV cache freezes two preprocessing masks on the training rows that an ordinary pass fits over train and test together, so on some data it is a different prediction rather than a cheaper one. It is opt-in for that reason; see <code>inst/memory/README.md</code>.</li>
+<li>One dataset per call: the reference’s batch dimension is not exercised by any caller here, and a batch greater than one is rejected rather than run through the untested <code>select_features()</code> padding path.</li>
+<li>Predictors are capped at 6000 columns (2000 feature groups of 3). Beyond that the reference falls back to a seeded random draw for the column embeddings, which is device-dependent and cannot be reproduced; that case errors rather than guessing.</li>
+</ul>
+</section>
+<section id="tabpfn-v3" class="level3">
+<h3 class="anchored" data-anchor-id="tabpfn-v3">TabPFN v3</h3>
+<ul>
+<li>The row and column chunking of <code>_stages_0_to_2</code> <strong>is</strong> reproduced, as <code>row_chunk_size</code> / <code>col_chunk_size</code>, defaulting to the checkpoint’s own 2048 and 4 exactly as the reference does. Three things about it are worth knowing. It is not bit-identical — it changes the batch shapes the attention kernel sees, and on the package’s 2,664-row fixture moves the logits by 1.4e-5 of their own scale, less than the reference’s own chunked pass moves them. The reference’s OOM fallback, which halves the chunk size and retries, is <em>not</em> ported and cannot be: a libtorch allocation failure kills the R process outright, so there is nothing to catch and nothing to retry from — <code>suggest_chunk_sizes()</code> chooses the size beforehand instead. And it does not touch the in-context stage, which stays quadratic in the context row count: chunking makes a large context a wall-clock decision rather than a dead session, and the reachable million-row regime is a million rows <em>to predict</em> against a bounded context, via <code>kv_cache = TRUE</code>.</li>
+<li>One dataset per call, as for v2.6: the reference’s batch dimension is not exercised by any caller here and a batch greater than one is rejected.</li>
+<li>No ensemble config generator of its own. <code>ensemble_configs_dir</code> and the shared member pipeline work as they do for v2, but v3’s own <code>PREPROCESS_TRANSFORMS</code> defaults (squashing scaler + quantile, SVD quarter-components, 200/500 features per estimator) have to come from a Python dump rather than being generated natively.</li>
+<li>The specialised checkpoints’ <code>FEATURE_SUBSAMPLING_METHOD</code> settings (<code>"random"</code>, <code>"balanced"</code>) are not implemented; a member whose predictor count exceeds its budget errors, as it does for v2.6.</li>
+<li><code>torch.compile</code>, int8 KV-cache quantisation and the MLX/FlashAttention-3 backends have no counterpart. They are throughput paths, not different arithmetic.</li>
+</ul>
+</section>
+<section id="tabpfn-v3.5" class="level3">
+<h3 class="anchored" data-anchor-id="tabpfn-v3.5">TabPFN v3.5</h3>
+<ul>
+<li><strong>One checkpoint, both tasks.</strong> The head is a forward-pass argument, not a property of the weights, so the artifacts have no <code>head</code> field and the catalogue lists their task as <code>both</code>. Everything downstream — <code>tabfound()</code>, the ensembling, the bar distribution — is unchanged.</li>
+<li>The KV cache carries the ECDF bucket context as well as the scaler statistics, which v3’s did not have to. Without it a cached prediction would rank a test cell against the test rows rather than the training ones, which is a different model rather than a cheaper one.</li>
+<li><strong>Text and datetime preprocessing is ported</strong>, and on by default for v3.5 because its checkpoint’s recipe turns it on. A character column with more than 30 distinct values that are not all numbers becomes 30 features, by latent semantic analysis over its character 3- and 4-grams (skrub’s <code>StringEncoder</code>); a <code>Date</code> or <code>POSIXct</code> becomes year, minute, second, seconds since the epoch, day of year, and circular month, day, hour and weekday. See <a href="#text-and-date-columns">Text and date columns</a>.</li>
+<li>No ensemble config generator of its own, as for v3: <code>.native_presets()</code> still covers v2.5 and v2.6 only, so v3.5 ensembles come from a Python dump. Its recipe is much the simpler one — a single <code>"none"</code> transform with <code>ordinal_shuffled</code> categoricals and 768 features per estimator — so a native preset would be easy to add later.</li>
+<li><code>FEATURE_SUBSAMPLING_METHOD = "balanced"</code>, which the published <code>inference_config</code> sets, is not implemented; a member whose predictor count exceeds its budget errors, as for v2.6 and v3.</li>
+<li>One dataset per call, and the same <code>torch.compile</code> / int8-quantisation / alternate-kernel omissions as v3.</li>
+<li>The memory preflight is calibrated only up to 32,768 context rows on this backend and under-predicts beyond it; see <code>inst/memory/README.md</code>.</li>
+</ul>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

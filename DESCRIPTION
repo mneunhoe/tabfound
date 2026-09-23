@@ -6,15 +6,14 @@ Authors@R:
            email = "marcel@marcel-neunhoeffer.com",
            role  = c("aut", "cre"))
 Description: Inference-only R implementations of open-weight tabular
-    foundation models on top of the 'torch' package, with no Python
-    runtime dependency at predict time. A backend registry lets a single
-    user-facing API ('tabular_classifier()' / 'tabular_regressor()')
-    serve architecturally different models. Ships a TabPFN v2 backend
-    (Prior-Labs) verified bit-exact against the reference Python
-    implementation, and shared building blocks (attention variants,
-    RMSNorm, RoPE, set-transformer blocks, quantile/power/SVD
-    preprocessing, ensembling) for adding further backends such as
-    Google's TabFM and TabICL.
+    foundation models (TabPFN v2.5 to v3.5, TabICL, TabFM, Mitra) on top of
+    the 'torch' package, with no Python runtime at fit or predict time. A
+    formula interface handles factors, dates, text and missing values, and
+    returns tidy predictions, including predictive quantiles. The models'
+    predictive distributions also drive multiple imputation (interoperating
+    with 'mice' and 'Amelia') and sequential synthetic data generation
+    (interoperating with 'synthpop'). Each model's network, preprocessing
+    and ensembling are verified against its reference Python implementation.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

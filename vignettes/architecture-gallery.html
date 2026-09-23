@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-09-22">
+<meta name="dcterms.date" content="2026-09-23">
 
 <title>Architecture gallery</title>
 <style>
@@ -109,7 +109,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#tabpfn-v3.5" id="toc-tabpfn-v3.5" class="nav-link" data-scroll-target="#tabpfn-v3.5">TabPFN v3.5</a></li>
   <li><a href="#themes" id="toc-themes" class="nav-link" data-scroll-target="#themes">Themes</a></li>
   <li><a href="#the-description-behind-the-picture" id="toc-the-description-behind-the-picture" class="nav-link" data-scroll-target="#the-description-behind-the-picture">The description behind the picture</a></li>
-  <li><a href="#adding-a-backend" id="toc-adding-a-backend" class="nav-link" data-scroll-target="#adding-a-backend">Adding a backend</a></li>
+  <li><a href="#adding-a-backend" id="toc-adding-a-backend" class="nav-link" data-scroll-target="#adding-a-backend">Adding a backend</a>
+  <ul class="collapse">
+  <li><a href="#where-things-live" id="toc-where-things-live" class="nav-link" data-scroll-target="#where-things-live">Where things live</a></li>
+  </ul></li>
   </ul>
 </nav>
 </div>
@@ -134,7 +137,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">September 22, 2026</p>
+      <p class="date">September 23, 2026</p>
     </div>
   </div>
   
@@ -376,6 +379,26 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p><code>describe</code> returns a title, a subtitle, a named <code>facts</code> vector and a list of <code>arch_stage()</code>s. Everything else — layout, the three formats, both themes, the parameter accounting — is shared.</p>
+<section id="where-things-live" class="level3">
+<h3 class="anchored" data-anchor-id="where-things-live">Where things live</h3>
+<pre><code>R/core-*.R            device, artifact resolution, download + convert, state-dict loader, registry
+R/core-memory.R       memory preflight: availability probe, peak estimator, the fit/predict guard
+R/api.R               tabular_classifier() / tabular_regressor() + S3 methods
+R/nn-*.R              shared layers: attention variants, norms, RoPE, blocks, MLPs
+R/prep-transforms.R   TabPFN's own column transforms (squashing, quantile, SVD, fingerprint)
+R/prep-sklearn.R      the stock sklearn transformers the other three wrappers chain
+R/prep-ensemble.R     the ensemble generators + Mitra's preprocessor
+R/py-random.R         CPython's random.Random, which decides every ensemble member
+R/dist-*.R            output heads (TabPFN's bar distribution, TabICL's quantile distribution)
+R/mi*.R               multiple imputation + the mice / Amelia bridges
+R/syn*.R              sequential synthesis + the synthpop bridges
+R/backend-*-layers.R  family-specific blocks where conventions diverge
+R/backend-*.R         one model family each (`backend-tabpfn3.R` is TabPFN v3)
+inst/memory/          peak-memory calibration harness, measurements + fitted coefficients
+inst/parity/          the parity harness
+inst/python/          one-time checkpoint conversion</code></pre>
+<p>Adding a backend means one <code>register_backend()</code> call plus its layers — no changes to the core. See <code>?register_backend</code>.</p>
+</section>
 </section>
 
 </main>

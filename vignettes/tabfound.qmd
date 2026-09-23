@@ -220,6 +220,26 @@ Weights live in `tabfound_home()` —
 package: writing there breaks read-only and shared libraries, and CRAN
 forbids it.
 
+A finished download records its file sizes in `SOURCE.json`, so an
+interrupted one is detected and retried rather than passing the
+"is it there?" check forever on a truncated file.
+
+**Gated repos and offline use.** `hfhub` reads a token from
+`HUGGING_FACE_HUB_TOKEN` / `HUGGINGFACE_HUB_TOKEN` and nowhere else,
+which means access granted the normal Python way — `HF_TOKEN`, or
+`huggingface-cli login`, which writes `~/.cache/huggingface/token` — is
+invisible from R, and the resulting 401 surfaces as *"Connection error…
+cannot find the requested files in the disk cache"*. tabfound reads all
+four sources and forwards the token for the duration of the call, and
+when a fetch fails that way it says the repo is probably gated, whether a
+token was found, and points at the local-conversion route.
+
+Every Hub-referenced load consults the cache before the network, so a
+cached model costs no round trip (and no timeout when the network is
+gone). `options(tabfound.offline = TRUE)` or `HF_HUB_OFFLINE` makes that
+the only mode: a cache miss is an error naming the cache directory rather
+than a hang.
+
 ### What conversion needs
 
 TabFM and Mitra ship `model.safetensors` + `config.json` directly, so
