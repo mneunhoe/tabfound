@@ -10,6 +10,19 @@ afterwards. A libtorch allocation failure at fold size kills the R
 process outright — no condition, no traceback, no output — so there is
 nothing for a handler to catch. Preflight is the whole defence.
 
+"Available" means available *to this process*. On a bare machine that is
+the host's free memory (`ps`, `MemAvailable`, `vm_stat`). Inside a Docker
+or Kubernetes container it is the cgroup's `limit - usage`, because
+crossing the limit gets the process killed just as a host OOM does, while
+the host may report tens of gigabytes free. `.system_memory()` reads this
+process's cgroup (v2, falling back to v1), walks up to the mount root,
+and caps both total and available memory by the tightest limit it finds.
+It resolves the mount through `/proc/self/mountinfo`, so a pod's own
+cgroup counts rather than just `/sys/fs/cgroup/memory.max`, and follows
+the same rules as tabicl 2.2.0's `_cgroup_memory.py`. When the cgroup is
+the binding constraint, the preflight's `source` reads `cgroup v2` (or
+`v1`).
+
 ## The model
 
 ```

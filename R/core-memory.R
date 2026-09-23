@@ -65,6 +65,16 @@
     return(list(total = total, available = hit$bytes, source = hit$source))
   }
   av <- .system_memory_available()
+  # Inside a container the host's free RAM is not what the process may
+  # use: the cgroup limit is, and exceeding it gets the process killed
+  # with no condition, exactly as a host OOM does. Cap both numbers by it.
+  cg <- if (identical(Sys.info()[["sysname"]], "Linux")) .cgroup_memory(physical = total)
+  if (!is.null(cg)) {
+    total <- min(total, cg$limit, na.rm = TRUE)
+    if (!is.finite(av$bytes) || cg$headroom < av$bytes) {
+      av <- list(bytes = cg$headroom, source = paste0("cgroup ", cg$version))
+    }
+  }
   assign("avail", list(bytes = av$bytes, source = av$source, at = now),
          envir = .mem_cache)
   list(total = total, available = av$bytes, source = av$source)
@@ -161,6 +171,169 @@
     if (avail == 0) avail <- NA_real_
   }
   c(total = field("MemTotal"), available = avail)
+}
+
+# ---------------------------------------------------------------------------
+# cgroup memory limits
+# ---------------------------------------------------------------------------
+#
+# `MemAvailable` and `ps` report the *host's* free memory. In a Docker or
+# Kubernetes container the real ceiling is the cgroup's `limit - usage`,
+# and that cgroup is often not the one mounted at `/sys/fs/cgroup`
+# (Kubernetes pods, `--cgroupns=host`). So: find this process's cgroup in
+# `/proc/self/cgroup`, find where its controller is mounted from
+# `/proc/self/mountinfo`, walk from the process's cgroup up to the mount
+# root, and take the smallest `limit - usage` among levels that have a
+# real limit. cgroup v2 first; if it finds no cap (hybrid hosts keep the
+# memory controller on v1), v1 next.
+#
+# The same approach as tabicl 2.2.0's `_cgroup_memory.py`, whose semantics
+# this follows: "max", a non-positive limit and a limit at or above
+# physical memory all mean "no cap at this level", and a limit whose usage
+# cannot be read counts as no headroom. Nothing here errors -- a probe that
+# cannot read the files returns NULL and the host numbers stand.
+
+#' This process's cgroup memory limit and headroom
+#'
+#' @param physical Host physical memory in bytes; limits at or above it are
+#'   not caps.
+#' @param proc_cgroup,mountinfo Paths to this process's `cgroup` and
+#'   `mountinfo` proc files.
+#' @param v2_root,v1_root Explicit controller roots, which skip the
+#'   `mountinfo` lookup (for tests).
+#' @return `NULL` when no cap applies, else
+#'   `list(limit, headroom, version)`, bytes.
+#' @keywords internal
+.cgroup_memory <- function(physical = NA_real_,
+                           proc_cgroup = "/proc/self/cgroup",
+                           mountinfo = "/proc/self/mountinfo",
+                           v2_root = NULL, v1_root = NULL) {
+  tryCatch({
+    cg_lines <- .read_lines_quietly(proc_cgroup)
+    mi_lines <- .read_lines_quietly(mountinfo)
+    if (!length(cg_lines)) return(NULL)
+    for (v in c("v2", "v1")) {
+      rel <- .cgroup_relpath(cg_lines, v2 = identical(v, "v2"))
+      if (is.null(rel)) next
+      mounts <- if (identical(v, "v2")) {
+        if (!is.null(v2_root)) list(list(point = v2_root, root = "/"))
+        else .cgroup_mounts(mi_lines, "cgroup2", NULL, "/sys/fs/cgroup")
+      } else {
+        if (!is.null(v1_root)) list(list(point = v1_root, root = "/"))
+        else .cgroup_mounts(mi_lines, "cgroup", "memory", "/sys/fs/cgroup/memory")
+      }
+      files <- if (identical(v, "v2")) c("memory.max", "memory.current")
+               else c("memory.limit_in_bytes", "memory.usage_in_bytes")
+      for (m in mounts) {
+        start <- .cgroup_under_mount(m$point, m$root, rel)
+        if (is.null(start)) next
+        got <- .cgroup_walk(start, m$point, files[1], files[2], physical)
+        if (!is.null(got)) return(c(got, list(version = v)))
+      }
+    }
+    NULL
+  }, error = function(e) NULL, warning = function(w) NULL)
+}
+
+# @keywords internal
+.read_lines_quietly <- function(path) {
+  if (!file.exists(path)) return(character())
+  tryCatch(readLines(path, warn = FALSE), error = function(e) character())
+}
+
+# A cgroup value in bytes: NA when absent or unreadable, Inf for "max".
+# @keywords internal
+.cgroup_read_bytes <- function(path) {
+  line <- .read_lines_quietly(path)
+  if (!length(line)) return(NA_real_)
+  tok <- strsplit(trimws(line[[1L]]), "\\s+")[[1L]][1L]
+  if (is.na(tok)) return(NA_real_)
+  if (identical(tok, "max")) return(Inf)
+  suppressWarnings(as.numeric(tok))
+}
+
+# The process's cgroup path: the `0::` line on v2, the line naming the
+# `memory` controller on v1.
+# @keywords internal
+.cgroup_relpath <- function(lines, v2) {
+  for (line in lines) {
+    if (v2) {
+      if (startsWith(line, "0::")) return(substring(line, 4L))
+    } else {
+      f <- regmatches(line, regexpr(":", line), invert = TRUE)[[1L]]
+      if (length(f) == 2L) {
+        rest <- regmatches(f[2L], regexpr(":", f[2L]), invert = TRUE)[[1L]]
+        if (length(rest) == 2L && "memory" %in% strsplit(rest[1L], ",")[[1L]]) {
+          return(rest[2L])
+        }
+      }
+    }
+  }
+  NULL
+}
+
+# Mount points of a cgroup filesystem, hierarchy-root mounts first, from
+# `mountinfo`; `default` when there is none. Paths there escape spaces
+# and the like as octal.
+# @keywords internal
+.cgroup_mounts <- function(lines, fstype, controller, default) {
+  unesc <- function(x) {
+    x <- gsub("\\\\040", " ", x); x <- gsub("\\\\011", "\t", x)
+    x <- gsub("\\\\012", "\n", x); gsub("\\\\134", "\\\\", x)
+  }
+  found <- list()
+  for (line in lines) {
+    parts <- strsplit(line, " ", fixed = TRUE)[[1L]]
+    h <- match("-", parts)
+    if (is.na(h) || length(parts) < 5L || h + 1L > length(parts) ||
+        parts[h + 1L] != fstype) next
+    if (!is.null(controller)) {
+      opts <- if (h + 3L <= length(parts)) parts[h + 3L] else ""
+      if (!controller %in% strsplit(opts, ",")[[1L]]) next
+    }
+    found[[length(found) + 1L]] <- list(point = unesc(parts[5L]),
+                                        root = unesc(parts[4L]))
+  }
+  if (!length(found)) return(list(list(point = default, root = "/")))
+  found[order(vapply(found, function(m) m$root != "/", logical(1)))]
+}
+
+# Directory for cgroup `rel` on a mount of hierarchy path `root` at
+# `point`, or NULL when `rel` lies outside it. A bind-mount of
+# `/system.slice` maps `/system.slice/foo` to `<point>/foo`.
+# @keywords internal
+.cgroup_under_mount <- function(point, root, rel) {
+  split <- function(x) { p <- strsplit(x, "/", fixed = TRUE)[[1L]]; p[nzchar(p) & p != "."] }
+  rel_p <- split(rel); root_p <- split(root)
+  # A namespaced process sees `/..` paths; the mount is the best there is.
+  if (any(c(rel_p, root_p) == "..")) return(point)
+  if (length(root_p) && !identical(rel_p[seq_along(root_p)], root_p)) return(NULL)
+  suffix <- rel_p[setdiff(seq_along(rel_p), seq_along(root_p))]
+  if (length(suffix)) do.call(file.path, as.list(c(point, suffix))) else point
+}
+
+# Smallest `limit - usage` from `start` up to `stop`, over levels with a
+# real limit. Bounded, so a malformed tree cannot loop.
+# @keywords internal
+.cgroup_walk <- function(start, stop, limit_file, usage_file, physical) {
+  stop <- normalizePath(stop, mustWork = FALSE)
+  path <- normalizePath(start, mustWork = FALSE)
+  best <- NULL
+  for (i in seq_len(64L)) {
+    if (!startsWith(path, stop)) break
+    limit <- .cgroup_read_bytes(file.path(path, limit_file))
+    if (is.finite(limit) && limit > 0 &&
+        !(is.finite(physical) && limit >= physical)) {
+      usage <- .cgroup_read_bytes(file.path(path, usage_file))
+      head <- if (is.finite(usage)) max(0, limit - usage) else 0
+      best <- if (is.null(best)) list(limit = limit, headroom = head)
+              else list(limit = min(best$limit, limit),
+                        headroom = min(best$headroom, head))
+    }
+    if (identical(path, stop) || identical(dirname(path), path)) break
+    path <- dirname(path)
+  }
+  best
 }
 
 # `wmic` prints `Name=value`, in kB.
