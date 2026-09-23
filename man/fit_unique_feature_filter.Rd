@@ -5,7 +5,7 @@
 \alias{transform_unique_feature_filter}
 \title{Which columns survive the unique-value filter}
 \usage{
-fit_unique_feature_filter(X_train, threshold = 1L)
+fit_unique_feature_filter(X_train, threshold = 1L, keep_one = FALSE)
 
 transform_unique_feature_filter(X, fit)
 }
@@ -13,6 +13,8 @@ transform_unique_feature_filter(X, fit)
 \item{X_train}{Numeric matrix.}
 
 \item{threshold}{Columns with at most this many distinct values go.}
+
+\item{keep_one}{Logical; never drop every column.}
 
 \item{X}{Numeric matrix.}
 
@@ -33,6 +35,9 @@ survives. Counting \code{NA} as one category here matches that.
 \item With \code{n_samples <= threshold} nothing is dropped at all. With that
 few rows a column can look constant by accident, and the reference
 would rather keep a useless column than lose a useful one.
+\item With \code{keep_one = TRUE}, a table whose every column would go keeps
+its first one instead, so the output is never empty. TabICL does this
+since 2.2.0; TabFM's copy of the filter does not.
 }
 }
 \keyword{internal}

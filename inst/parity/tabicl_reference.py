@@ -115,6 +115,7 @@ meta = {
     "fixture": args.fixture,
     "task": TASK,
     "torch_version": torch.__version__,
+    "tabicl_version": __import__("importlib.metadata").metadata.version("tabicl"),
     "n_train": n_train,
     "n_test": n_test,
     "config": {k: v for k, v in cfg.items()},
@@ -140,7 +141,13 @@ else:
 captured.clear()
 model.eval()
 with torch.no_grad():
-    eval_out = model(x.clone(), y, return_logits=True)
+    # tabicl >= 2.2.0 resolves an unset inference device to CUDA, XPU or
+    # MPS when present; the weights here live on CPU, so pin it.
+    from tabicl import InferenceConfig
+    cpu = {"device": "cpu", "use_amp": False, "use_fa3": False}
+    icfg = InferenceConfig()
+    icfg.update_from_dict({"COL_CONFIG": cpu, "ROW_CONFIG": cpu, "ICL_CONFIG": cpu})
+    eval_out = model(x.clone(), y, return_logits=True, inference_config=icfg)
 train_test = train_out if train_out.shape[1] == n_test else train_out[:, n_train:]
 ev = eval_out
 if ev.shape[-1] != train_test.shape[-1]:

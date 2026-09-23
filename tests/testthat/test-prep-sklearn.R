@@ -75,6 +75,21 @@ test_that("UniqueFeatureFilter drops only genuinely single-valued columns", {
 })
 
 
+test_that("UniqueFeatureFilter keeps one column of an all-constant table on request", {
+  # tabicl >= 2.2.0 keeps the first column rather than returning nothing;
+  # TabFM's copy of the filter does not, so this is opt-in.
+  r <- ensemble_ref()
+  X <- ref_mat(r$t$X_const)
+  expect_identical(fit_unique_feature_filter(X, keep_one = TRUE)$keep,
+                   ref_lgl(r$s$uff_keep_const))
+  expect_false(any(fit_unique_feature_filter(X)$keep))
+  # Only the all-dropped case is touched.
+  Z <- cbind(rep(1, 6), c(0, 0, 0, 1, 1, 1), 1:6)
+  expect_identical(fit_unique_feature_filter(Z, keep_one = TRUE)$keep,
+                   c(FALSE, TRUE, TRUE))
+})
+
+
 test_that("Yeo-Johnson's log-likelihood matches scipy on all three branches", {
   r <- ensemble_ref()
   grid <- ref_num(r$s$yj_grid)

@@ -309,7 +309,7 @@ tabicl_row_interaction <- torch::nn_module(
       bias_free_ln = isTRUE(config$bias_free_ln),
       activation = config$activation %||% "gelu",
       rope_base = as.numeric(config$row_rope_base %||% 100000),
-      rope_interleaved = isTRUE(config$row_rope_interleaved)
+      rope_interleaved = .tabicl_rope_interleaved(config)
     )
     self$out_ln <- affine_layer_norm(e, eps = 1e-5, bias = !isTRUE(config$bias_free_ln))
   },
@@ -742,6 +742,18 @@ tabicl_task_of <- function(config) {
   out[1, , ]
 }
 
+# Which RoPE pairing the row interactor uses. The two are not equivalent:
+# v1 checkpoints pair adjacent dimensions (interleaved), v2 pairs the two
+# halves. Released configs store the flag, and the reference builds the
+# network with `TabICL(**config)`, so a config that omits it gets the
+# constructor's default -- which tabicl 2.2.0 flipped to `True` (v1).
+# Follow the reference rather than guessing FALSE.
+# @keywords internal
+.tabicl_rope_interleaved <- function(config) {
+  flag <- config$row_rope_interleaved
+  if (is.null(flag)) TRUE else isTRUE(flag)
+}
+
 # Shared fit for both TabICL predictors: impute, then build the ensemble.
 #
 # The imputation is not optional dressing. TabICL's network has no
@@ -752,10 +764,11 @@ tabicl_task_of <- function(config) {
 # @keywords internal
 .tabicl_prepare <- function(X, y, classification, opts) {
   X <- as.matrix(X); storage.mode(X) <- "double"
-  imputer <- fit_simple_imputer(X)
-  if (!any(imputer$keep)) {
-    cli::cli_abort("Every predictor is entirely missing.")
-  }
+  # `keep_empty = TRUE` follows tabicl 2.2.0's
+  # `SimpleImputer(keep_empty_features = True)`: an entirely missing
+  # column becomes zeros rather than disappearing, so even an all-missing
+  # table reaches the ensemble, whose filter keeps one column of it.
+  imputer <- fit_simple_imputer(X, keep_empty = TRUE)
   X <- transform_simple_imputer(X, imputer)
   gen <- tabicl_ensemble_fit(
     X, y, classification = classification,

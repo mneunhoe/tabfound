@@ -2,6 +2,7 @@
   "fixture": "clf_tiny",
   "task": "classification",
   "torch_version": "2.13.0",
+  "tabicl_version": "2.2.0",
   "n_train": 48,
   "n_test": 12,
   "config": {
