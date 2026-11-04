@@ -236,6 +236,73 @@
       repo = "autogluon/mitra-regressor", convert = NULL,
       size_mb = NA_real_, license = "Apache-2.0",
       description = "Mitra regressor"
+    ),
+    # NVIDIA Kumo Tabular: one architecture in three sizes, one bare
+    # `torch.save` state dict per size and task, no config inside -- the
+    # converter derives the hyperparameters from the tensor shapes. The
+    # family name `"kumo-tabular"` means large, which is what the
+    # reference (`sdm.models.KumoTabular`) defaults to; small and medium
+    # have family names of their own, so `"kumo-tabular-small"` works
+    # with either task.
+    #
+    # `revision` pins the tag the reference loads. `main` has moved on
+    # since (README and config edits only), and pinning keeps the bytes
+    # behind `source_sha256` the ones the parity fixtures were cut from.
+    "kumo-tabular-small-classifier" = list(
+      backend = "kumo", task = "classification", family = "kumo-tabular-small",
+      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
+      file = "small/classifier.pt",
+      convert = "kumo", head = "classifier", model_size = "small",
+      size_mb = 109.9,
+      license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
+      description = "NVIDIA Kumo Tabular small classifier"
+    ),
+    "kumo-tabular-small-regressor" = list(
+      backend = "kumo", task = "regression", family = "kumo-tabular-small",
+      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
+      file = "small/regressor.pt",
+      convert = "kumo", head = "regressor", model_size = "small",
+      size_mb = 113.9,
+      license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
+      description = "NVIDIA Kumo Tabular small regressor"
+    ),
+    "kumo-tabular-medium-classifier" = list(
+      backend = "kumo", task = "classification", family = "kumo-tabular-medium",
+      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
+      file = "medium/classifier.pt",
+      convert = "kumo", head = "classifier", model_size = "medium",
+      size_mb = 246.0,
+      license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
+      description = "NVIDIA Kumo Tabular medium classifier"
+    ),
+    "kumo-tabular-medium-regressor" = list(
+      backend = "kumo", task = "regression", family = "kumo-tabular-medium",
+      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
+      file = "medium/regressor.pt",
+      convert = "kumo", head = "regressor", model_size = "medium",
+      size_mb = 250.0,
+      license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
+      description = "NVIDIA Kumo Tabular medium regressor"
+    ),
+    "kumo-tabular-large-classifier" = list(
+      backend = "kumo", task = "classification",
+      family = c("kumo-tabular", "kumo-tabular-large"),
+      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
+      file = "large/classifier.pt",
+      convert = "kumo", head = "classifier", model_size = "large",
+      size_mb = 854.7,
+      license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
+      description = "NVIDIA Kumo Tabular large classifier"
+    ),
+    "kumo-tabular-large-regressor" = list(
+      backend = "kumo", task = "regression",
+      family = c("kumo-tabular", "kumo-tabular-large"),
+      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
+      file = "large/regressor.pt",
+      convert = "kumo", head = "regressor", model_size = "large",
+      size_mb = 862.8,
+      license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
+      description = "NVIDIA Kumo Tabular large regressor"
     )
   )
 }
@@ -431,6 +498,14 @@ list_models <- function() {
       "--dst-weights", file.path(dest, "model.safetensors"),
       "--dst-config",  file.path(dest, "config.json"),
       "--head", entry$head)
+  } else if (identical(entry$convert, "kumo")) {
+    # The Kumo file names (`small/classifier.pt`) carry no config, so the
+    # converter derives one from the shapes; passing the expected head
+    # and size makes a mislabelled file fail instead of converting.
+    c(script, "--src", src, "--dst", dest,
+      "--head", entry$head, "--size", entry$model_size,
+      "--source-repo", entry$repo,
+      if (!is.null(entry$revision)) c("--source-revision", entry$revision))
   } else {
     c(script, "--src", src, "--dst", dest)
   }
@@ -534,12 +609,15 @@ list_models <- function() {
 #'
 #' @param repo Hub repo id.
 #' @param file Path within the repo.
+#' @param revision Branch, tag or commit; catalogue entries that pin one
+#'   pass it here.
 #' @return A local path.
 #' @keywords internal
-.hub_download <- function(repo, file) {
+.hub_download <- function(repo, file, revision = "main") {
   require_suggested("hfhub")
   cached <- tryCatch(
-    hfhub::hub_download(repo, file, local_files_only = TRUE),
+    hfhub::hub_download(repo, file, revision = revision,
+                        local_files_only = TRUE),
     error = function(e) NULL
   )
   if (!is.null(cached) && file.exists(cached)) return(cached)
@@ -555,7 +633,7 @@ list_models <- function() {
     ))
   }
   .with_hf_token(tryCatch(
-    hfhub::hub_download(repo, file),
+    hfhub::hub_download(repo, file, revision = revision),
     error = function(e) .hub_download_abort(e, repo, file)
   ))
 }
@@ -627,14 +705,18 @@ list_models <- function() {
 #' `torch` and `safetensors` — the checkpoints are nested Python pickles
 #' that R's torch bindings cannot read. TabPFN v3.5 is published as
 #' safetensors, so its conversion only lifts the config out of the file's
-#' header and needs `safetensors` alone. Point
+#' header and needs `safetensors` alone. NVIDIA Kumo Tabular ships bare
+#' PyTorch state dicts with no config; its converter derives the
+#' hyperparameters from the tensor shapes. Point
 #' `options(tabfound.python = )` or `TABFOUND_PYTHON` at a suitable
 #' interpreter if the default search does not find one.
 #'
 #' @param model A catalogue id from [list_models()], or a family name
 #'   (`"tabpfn"`, `"tabpfn-v2.5"`, `"tabpfn-v2.6"`, `"tabpfn-v3"`,
-#'   `"tabpfn-v3.5"`, `"tabicl"`, `"tabfm-1.0.0"`, `"mitra"`) together
-#'   with `task`. `"tabpfn"` stays pinned to v2.5; ask for a later
+#'   `"tabpfn-v3.5"`, `"tabicl"`, `"tabfm-1.0.0"`, `"mitra"`,
+#'   `"kumo-tabular"`, `"kumo-tabular-small"`, `"kumo-tabular-medium"`)
+#'   together with `task`. `"kumo-tabular"` is the large model, the
+#'   reference default. `"tabpfn"` stays pinned to v2.5; ask for a later
 #'   generation by name. A family name resolves to that family's default
 #'   checkpoint; the specialised variants are catalogued too, but by exact
 #'   id only — the v3 ones as `tabpfn-v3-classifier-binary`,
@@ -692,7 +774,8 @@ download_model <- function(model, task = NULL, force = FALSE, python = NULL,
       .place_file(got, file.path(dest, rel(f)))
     }
   } else {
-    src <- .hub_download(entry$repo, entry$file)
+    src <- .hub_download(entry$repo, entry$file,
+                         revision = entry$revision %||% "main")
     py  <- .find_python(python)
     .convert_ckpt(entry, src, dest, py, quiet = quiet)
   }
@@ -704,6 +787,7 @@ download_model <- function(model, task = NULL, force = FALSE, python = NULL,
     jsonlite::toJSON(list(
       id = id, repo = entry$repo, file = entry$file %||% NA_character_,
       subfolder = entry$subfolder %||% NA_character_,
+      revision = entry$revision %||% "main",
       converted = !is.null(entry$convert),
       tabfound_version = as.character(utils::packageVersion("tabfound")),
       downloaded_at = format(Sys.time(), tz = "UTC", usetz = TRUE),

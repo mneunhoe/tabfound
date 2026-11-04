@@ -9,8 +9,10 @@ download_model(model, task = NULL, force = FALSE, python = NULL, quiet = FALSE)
 \arguments{
 \item{model}{A catalogue id from \code{\link[=list_models]{list_models()}}, or a family name
 (\code{"tabpfn"}, \code{"tabpfn-v2.5"}, \code{"tabpfn-v2.6"}, \code{"tabpfn-v3"},
-\code{"tabpfn-v3.5"}, \code{"tabicl"}, \code{"tabfm-1.0.0"}, \code{"mitra"}) together
-with \code{task}. \code{"tabpfn"} stays pinned to v2.5; ask for a later
+\code{"tabpfn-v3.5"}, \code{"tabicl"}, \code{"tabfm-1.0.0"}, \code{"mitra"},
+\code{"kumo-tabular"}, \code{"kumo-tabular-small"}, \code{"kumo-tabular-medium"})
+together with \code{task}. \code{"kumo-tabular"} is the large model, the
+reference default. \code{"tabpfn"} stays pinned to v2.5; ask for a later
 generation by name. A family name resolves to that family's default
 checkpoint; the specialised variants are catalogued too, but by exact
 id only — the v3 ones as \code{tabpfn-v3-classifier-binary},
@@ -48,7 +50,9 @@ TabPFN up to v3 and TabICL do, and that step needs a Python with
 \code{torch} and \code{safetensors} — the checkpoints are nested Python pickles
 that R's torch bindings cannot read. TabPFN v3.5 is published as
 safetensors, so its conversion only lifts the config out of the file's
-header and needs \code{safetensors} alone. Point
+header and needs \code{safetensors} alone. NVIDIA Kumo Tabular ships bare
+PyTorch state dicts with no config; its converter derives the
+hyperparameters from the tensor shapes. Point
 \code{options(tabfound.python = )} or \code{TABFOUND_PYTHON} at a suitable
 interpreter if the default search does not find one.
 }
