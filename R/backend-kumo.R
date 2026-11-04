@@ -229,6 +229,182 @@ kumo_model <- torch::nn_module(
 
 
 # ---------------------------------------------------------------------------
+# Predictors
+# ---------------------------------------------------------------------------
+
+# One member's network output for the query rows: the context rows and the
+# chunk are transformed together (every transform is row-wise once
+# fitted), the target is the member's view of it, and the whole thing is
+# one forward pass, as `sdm`'s `KumoTabular.forward()` makes it.
+# @keywords internal
+.kumo_member_out <- function(net, dev, rec, X_train, y_train, X_query, m) {
+  mem <- kumo_recipe_member(rec, rbind(X_train, X_query), m)
+  yt <- kumo_recipe_target(rec, y_train, m)
+  out <- torch::with_no_grad(
+    net(mem$x$to(device = dev)$unsqueeze(1L), yt$to(device = dev)$unsqueeze(1L),
+        mem$categorical_mask)
+  )
+  out[1, , ]$cpu()
+}
+
+# 1-based declared column indices -> one logical per column.
+# @keywords internal
+.kumo_categorical <- function(categorical_features, p) {
+  idx <- as.integer(categorical_features %||% integer())
+  if (any(idx < 1L | idx > p)) {
+    cli::cli_abort("{.arg categorical_features} names columns outside the {p} predictors.")
+  }
+  seq_len(p) %in% idx
+}
+
+#' Build the Kumo Tabular classifier predictor
+#'
+#' Reproduces `sdm.models.KumoTabular(task = "classification")` called
+#' with `num_estimators = n_estimators` and a generator seeded at `seed`:
+#' the default recipe builds `n_estimators` members (see
+#' [kumo_recipe_fit()]), each runs through the network, and the member
+#' logits are averaged in class order and passed through a softmax.
+#'
+#' The library's own default is one member; the model card and NVIDIA's
+#' benchmark wrappers use 8, which is the default here.
+#'
+#' Classes that do not occur in the training rows cannot be predicted --
+#' the recipe drops them, as the reference's does -- and come back with
+#' probability zero. More than 10 classes needs the reference's
+#' error-correcting output codes, which are not ported yet.
+#'
+#' Columns are categorical only when declared: `sdm`'s type inference
+#' keeps numeric columns numerical. [tabfound()] declares a frame's
+#' factor columns for you.
+#'
+#' @param ctx Loaded-model context from [load_backend_model()].
+#' @param n_estimators Ensemble members.
+#' @param seed Seed for the recipe's generator. Draws are libtorch's own
+#'   stream, so on the same platform they are the reference's.
+#' @param predict_chunk_size Max query rows per forward pass. Query rows
+#'   attend only to context rows, so chunking changes nothing but float32
+#'   rounding.
+#' @param categorical_features 1-based indices of categorical columns.
+#' @keywords internal
+kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
+                            predict_chunk_size = 1024L,
+                            categorical_features = NULL) {
+  net <- ctx$net; dev <- ctx$device
+  max_classes <- as.integer(ctx$config$num_classes)
+
+  fit_fn <- function(X, y) {
+    if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
+    if (is.factor(y)) {
+      levels_ <- levels(y); y_int <- as.integer(y) - 1L
+    } else {
+      levels_ <- sort(unique(y)); y_int <- match(y, levels_) - 1L
+    }
+    if (anyNA(y_int)) cli::cli_abort("{.arg y} has missing values.")
+    observed <- length(unique(y_int))
+    if (observed > max_classes) {
+      cli::cli_abort(c(
+        "Kumo Tabular predicts at most {max_classes} classes per pass; \\
+         the training rows have {observed}.",
+        i = "Above that the reference switches to error-correcting output \\
+             codes, which tabfound does not implement yet."
+      ))
+    }
+    categorical <- .kumo_categorical(categorical_features, ncol(X))
+    rec <- kumo_recipe_fit(X, y_int, TRUE, categorical = categorical,
+                           n_members = n_estimators, seed = seed)
+    list(X_train = X, y_train_int = y_int, class_levels = levels_,
+         n_train = nrow(X), categorical = categorical, recipe = rec)
+  }
+
+  .chunk <- function(state, X_query) {
+    rec <- state$recipe
+    K <- length(rec$target$classes)
+    outs <- lapply(seq_len(rec$n_members), function(m) {
+      if (m > 1L) collect_between_chunks()
+      o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train_int,
+                            X_query, m)
+      kumo_recipe_unshift(rec, o[, 1:K, drop = FALSE], m)
+    })
+    p <- as.matrix(kumo_recipe_reduce(outs, TRUE))
+    full <- matrix(0, nrow(X_query), length(state$class_levels))
+    full[, rec$target$classes + 1L] <- p
+    full
+  }
+
+  predict_fn <- function(state, newdata, type = "class", ...) {
+    probs <- chunk_apply(as.matrix(newdata), predict_chunk_size,
+                         function(chunk) .chunk(state, chunk))
+    colnames(probs) <- as.character(state$class_levels)
+    if (type == "prob") return(probs)
+    state$class_levels[max.col(probs, ties.method = "first")]
+  }
+
+  list(fit = fit_fn, predict = predict_fn)
+}
+
+#' Build the Kumo Tabular regressor predictor
+#'
+#' Reproduces `sdm.models.KumoTabular(task = "regression")`: each member
+#' predicts 999 quantiles (levels 0.001 to 0.999) of its standardized,
+#' randomly signed target; the sign and the scaling are undone, each
+#' member's grid is sorted, and the members are combined by a trimmed mean
+#' that drops `floor(0.2 * n_estimators)` from each tail, level by level.
+#' `type = "mean"` is the mean of that grid -- the point estimate NVIDIA's
+#' AutoGluon wrapper reports; `"median"` and `"quantiles"` interpolate it.
+#'
+#' @inheritParams kumo_classifier
+#' @keywords internal
+kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
+                           predict_chunk_size = 1024L,
+                           categorical_features = NULL) {
+  net <- ctx$net; dev <- ctx$device
+  n_q <- as.integer(ctx$config$num_quantiles)
+  levels_ <- seq_len(n_q) / (n_q + 1)
+
+  fit_fn <- function(X, y) {
+    if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
+    y <- as.numeric(y)
+    if (anyNA(y)) cli::cli_abort("{.arg y} has missing values.")
+    categorical <- .kumo_categorical(categorical_features, ncol(X))
+    rec <- kumo_recipe_fit(X, y, FALSE, categorical = categorical,
+                           n_members = n_estimators, seed = seed)
+    list(X_train = X, y_train = y, n_train = nrow(X),
+         y_mean = rec$target$mean, y_std = rec$target$scale,
+         categorical = categorical, recipe = rec)
+  }
+
+  .grid <- function(state, X_query) {
+    rec <- state$recipe
+    outs <- lapply(seq_len(rec$n_members), function(m) {
+      if (m > 1L) collect_between_chunks()
+      o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train,
+                            X_query, m)
+      kumo_recipe_inverse(rec, o, m)
+    })
+    as.matrix(kumo_recipe_reduce(outs, FALSE))
+  }
+
+  predict_fn <- function(state, newdata, type = "mean",
+                         quantiles = c(0.1, 0.5, 0.9), ...) {
+    if (identical(type, "grid")) type <- "raw_quantiles"
+    res <- chunk_apply(as.matrix(newdata), predict_chunk_size, function(chunk) {
+      g <- .grid(state, chunk)
+      quantile_dist_stat(g, levels_, type, quantiles)
+    })
+    if (type %in% c("mean", "median")) return(as.numeric(res))
+    if (type == "raw_quantiles") return(res)
+    colnames(res) <- paste0("q", format(quantiles, trim = TRUE,
+                                        drop0trailing = TRUE))
+    res
+  }
+
+  list(fit = fit_fn, predict = predict_fn,
+       types = c("mean", "median", "quantiles", "grid"),
+       quantile_levels = levels_)
+}
+
+
+# ---------------------------------------------------------------------------
 # Architecture description
 # ---------------------------------------------------------------------------
 
@@ -429,6 +605,8 @@ register_kumo_backend <- function() {
     build         = kumo_build,
     detect        = kumo_detect,
     task_of       = kumo_task_of,
+    classifier    = kumo_classifier,
+    regressor     = kumo_regressor,
     describe      = kumo_describe,
     peak_terms    = kumo_peak_terms,
     # The network conditions on missingness itself: context-mean

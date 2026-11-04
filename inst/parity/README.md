@@ -23,6 +23,8 @@ ensemble_reference.py    pins the wrapper layer: preprocessing + ensembling
 ensemble/                its output -- also ships with the package
 layers_reference.py      pins the shared transformer layers (no weights needed)
 kumo_layers_reference.py pins the Kumo blocks and two tiny Kumo networks (no weights)
+kumo_ensemble_reference.py pins the Kumo recipe's members and output reduction (no weights)
+kumo_e2e_reference.py    runs `sdm.models.KumoTabular` end to end (small checkpoints)
 layers/                  its output -- also ships with the package
 compare.R                staged comparison + tolerances
 run-parity.R             driver
@@ -545,6 +547,36 @@ R torch's float32 would measure the dtype, not the port.
   outputs of order 6, against 5.5 if the GQA is dropped.
 - Set up the venv with
   `uv venv --python 3.12 .venvs/sdm && uv pip install --python .venvs/sdm/bin/python "structured-data-models==0.2.1" pandas safetensors huggingface_hub`.
+
+### Kumo Tabular recipe and end to end vs `structured-data-models` 0.2.1
+
+- **Recipe** (`kumo_ensemble_reference.py` -> `ensemble/kumo_ensemble.*`,
+  `test-prep-kumo.R`, no weights): `sdm`'s own `RecipeExecution` with 8
+  members and a generator seeded at 42, on four fixtures and four
+  synthetic tables (a 70-level categorical with unseen and missing query
+  values, 520 columns, 9,000 context rows for the rank-Gaussian knot
+  spacing, and +-Inf / constant / all-missing / `[5, NaN, 5]` columns).
+  Every member's column order, categorical mask, class order and target
+  match; 97-99% of feature values are bit-identical and the rest one
+  float32 ulp (float64 summation order). The draws themselves are exact:
+  R torch's generator, driven through the
+  `cpp_torch_namespace_*_generator_Generator` bindings, reproduces
+  CPython torch's `randperm` / `bernoulli_` stream on arm64. The float32
+  regression target can sit one ulp off, because R's libtorch sums
+  float32 in a different order. The output reduction (class realignment,
+  per-member target inverse, sorting, 20% trimmed mean) is checked on
+  synthetic member outputs.
+- **End to end** (`kumo_e2e_reference.py` -> `reference/kumo_e2e/`,
+  `test-parity-kumo-e2e.R`): the public `KumoTabular()` on CPU float32
+  against `tabular_classifier()` / `tabular_regressor()` with `seed = 42`.
+  Probabilities agree to 2.3e-6, quantile grids to 1.3e-5 of `sd(y)`,
+  on `clf_binary_missing`, `clf_categorical`, `reg_skewed`,
+  `reg_categorical`, an all-constant table (the network sees zero
+  columns), a column missing in every training row, an empty query and a
+  class absent from the training rows (tabfound returns it at zero; the
+  reference has no column for it). The reference's own `fit()` +
+  `predict()` path differs from its one-shot forward by at most 2.4e-6,
+  recorded in `reference.json`.
 
 ### Mitra vs `autogluon` Tab2D
 

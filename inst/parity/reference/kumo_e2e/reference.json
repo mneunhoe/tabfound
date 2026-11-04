@@ -1,0 +1,114 @@
+{
+ "members": 8,
+ "seed": 42,
+ "size": "small",
+ "torch_version": "2.15.0",
+ "sdm_version": "0.2.1",
+ "cases": {
+  "clf_binary_missing": {
+   "task": "classification",
+   "categorical": [],
+   "classes": [
+    0,
+    1
+   ],
+   "fit_predict_gap": 4.172325134277344e-07,
+   "shape": [
+    40,
+    2
+   ]
+  },
+  "clf_categorical": {
+   "task": "classification",
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "classes": [
+    0,
+    1
+   ],
+   "fit_predict_gap": 2.384185791015625e-06,
+   "shape": [
+    80,
+    2
+   ]
+  },
+  "reg_skewed": {
+   "task": "regression",
+   "categorical": [],
+   "classes": null,
+   "fit_predict_gap": 0.0,
+   "shape": [
+    60,
+    999
+   ]
+  },
+  "reg_categorical": {
+   "task": "regression",
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "classes": null,
+   "fit_predict_gap": 2.1457672119140625e-06,
+   "shape": [
+    80,
+    999
+   ]
+  },
+  "all_const": {
+   "task": "classification",
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2
+   ],
+   "fit_predict_gap": 1.1920928955078125e-07,
+   "shape": [
+    5,
+    3
+   ]
+  },
+  "train_col_missing": {
+   "task": "regression",
+   "categorical": [],
+   "classes": null,
+   "fit_predict_gap": 0.0,
+   "shape": [
+    15,
+    999
+   ]
+  },
+  "test_empty": {
+   "task": "classification",
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2
+   ],
+   "fit_predict_gap": 0.0,
+   "shape": [
+    0,
+    3
+   ]
+  },
+  "absent_class": {
+   "task": "classification",
+   "categorical": [],
+   "classes": [
+    0,
+    2
+   ],
+   "fit_predict_gap": 0.0,
+   "shape": [
+    15,
+    2
+   ]
+  }
+ }
+}
