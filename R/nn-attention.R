@@ -37,13 +37,18 @@
 #' @param dropout_p Kept for signature parity; always 0 here (inference).
 #' @param is_causal Passed through.
 #' @param scale Optional override for `1/sqrt(D)`.
+#' @param enable_gqa Grouped-query attention: `key`/`value` carry fewer
+#'   heads than `query`, and query head `h` reads key/value head
+#'   `h %/% (Hq / Hkv)`. Passed to the fused kernel, which is what the
+#'   reference calls -- expanding the heads first gives the same answer
+#'   but not the same rounding.
 #' @section Options:
 #' `tabfound.sdpa` is `"auto"` (default: the fused kernel when torch has
 #' it), `"torch"` (require it, error if absent) or `"r"` (always the
 #' fallback -- what the agreement test runs).
 #' @keywords internal
 sdpa <- function(query, key, value, attn_mask = NULL, dropout_p = 0,
-                 is_causal = FALSE, scale = NULL) {
+                 is_causal = FALSE, scale = NULL, enable_gqa = FALSE) {
   mode <- getOption("tabfound.sdpa", "auto")
   fn <- if (identical(mode, "r")) NULL else .torch_sdpa()
   if (is.null(fn)) {
@@ -55,12 +60,18 @@ sdpa <- function(query, key, value, attn_mask = NULL, dropout_p = 0,
              fallback."
       ))
     }
+    if (isTRUE(enable_gqa)) {
+      rep <- query$size(-3L) %/% key$size(-3L)
+      key <- key$repeat_interleave(rep, dim = -3L)
+      value <- value$repeat_interleave(rep, dim = -3L)
+    }
     return(.sdpa_fallback(query, key, value, attn_mask, is_causal, scale))
   }
   args <- list(query = query, key = key, value = value,
                attn_mask = attn_mask, dropout_p = dropout_p,
                is_causal = is_causal)
   if (!is.null(scale)) args$scale <- scale
+  if (isTRUE(enable_gqa)) args$enable_gqa <- TRUE
   do.call(fn, args)
 }
 

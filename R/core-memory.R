@@ -1299,6 +1299,10 @@ print.tabfound_memory_estimate <- function(x, ...) {
     cli::cli_text("{.emph Constants are anchored to observed runs, not yet \\
                    fitted to a measurement grid.}")
   }
+  if (identical(x$calibration, "borrowed")) {
+    cli::cli_text("{.emph Constants are borrowed from a backend of the same \\
+                   shape; this one has not been measured yet.}")
+  }
   invisible(x)
 }
 

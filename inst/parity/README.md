@@ -16,11 +16,13 @@ tabfm_reference.py       runs the PyPI `tabfm` network, dumps per-stage outputs
 tabicl_reference.py      runs the PyPI `tabicl` network, dumps per-stage outputs
 tabicl_e2e_reference.py  runs `TabICLClassifier` / `TabICLRegressor` end to end
 mitra_reference.py       runs AutoGluon's `Tab2D`, dumps per-stage outputs
+kumo_reference.py        runs `sdm`'s bare Kumo Tabular network, dumps per-stage outputs
 transforms_reference.py  pins the individual column transforms (no weights needed)
 transforms/              its output -- small, and ships with the package
 ensemble_reference.py    pins the wrapper layer: preprocessing + ensembling
 ensemble/                its output -- also ships with the package
 layers_reference.py      pins the shared transformer layers (no weights needed)
+kumo_layers_reference.py pins the Kumo blocks and two tiny Kumo networks (no weights)
 layers/                  its output -- also ships with the package
 compare.R                staged comparison + tolerances
 run-parity.R             driver
@@ -63,6 +65,9 @@ checkout:
 | `TABFOUND_TABICL_CLF_CKPT` / `_REG_CKPT` | raw `.ckpt`, only for `--regenerate` |
 | `TABFOUND_MITRA_CLF_DIR` / `_REG_DIR` | Mitra Hub snapshots |
 | `TABFOUND_MITRA_SHIM` | directory holding the `mitrapkg` shim, only for `--regenerate` |
+| `TABFOUND_KUMO_CLF_DIR` / `_REG_DIR` | converted Kumo Tabular **small** artifacts |
+| `TABFOUND_KUMO_CLF_CKPT` / `_REG_CKPT` | raw `small/{classifier,regressor}.pt`, only for `--regenerate` |
+| `TABFOUND_REF_PYTHON_KUMO` | python with `structured-data-models` (default `.venvs/sdm/bin/python`) |
 | `TABFOUND_REF_PYTHON` | python with the reference packages (default `.venvs/ref/bin/python`) |
 
 Set up the reference environment with:
@@ -516,6 +521,30 @@ R torch's float32 would measure the dtype, not the port.
 - `clf_binary_missing` is deliberately not run against TabICL: its
   network has no missing-value handling of its own, so unimputed NaN
   propagates to NaN logits. That behaviour is pinned by a test instead.
+
+### Kumo Tabular (small) vs `structured-data-models` 0.2.1 / torch 2.15.0
+
+```
+24/24 checks within tolerance
+```
+
+- All 328 tensors of each small checkpoint map onto the R module tree by
+  **identity**; the RoPE table the reference shares across row blocks is
+  stored once per block by the converter.
+- The reference is the bare `_KumoTabular` network under `no_grad`
+  (its in-place inference path), on fixture tensors with NaN kept and the
+  manifest's categorical columns flagged. `clf_binary_missing` runs on
+  the raw network: Kumo imputes and encodes missingness itself.
+- Every stage agrees to ~7e-6 of its scale or better; `net:probs` to
+  2.2e-6, the 999-quantile grid to 3.8e-6. Not bit-exact: the R and
+  Python libtorch builds differ, and the gap starts at the cell
+  embedding's `sin`/`cos` (~1e-6).
+- Medium's grouped-query attention and `row_project` have no stored
+  checkpoint dumps; `kumo_layers_reference.py` grades them on a tiny
+  random network of the same shape (`test-backend-kumo.R`), 2.4e-6 on
+  outputs of order 6, against 5.5 if the GQA is dropped.
+- Set up the venv with
+  `uv venv --python 3.12 .venvs/sdm && uv pip install --python .venvs/sdm/bin/python "structured-data-models==0.2.1" pandas safetensors huggingface_hub`.
 
 ### Mitra vs `autogluon` Tab2D
 

@@ -6,5 +6,6 @@
   register_tabfm_backend()
   register_tabicl_backend()
   register_mitra_backend()
+  register_kumo_backend()
   invisible()
 }

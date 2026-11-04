@@ -298,7 +298,7 @@ test_that("tabfound_save round-trips the fitted state, saveRDS does not", {
 })
 
 
-test_that("all four backends detect only their own config", {
+test_that("every backend detects only its own config", {
   cfgs <- list(
     tabpfn = list(arch = "per_feature_transformer", head = "classifier"),
     tabfm  = list(embed_dim = 256L, icl_num_blocks = 24L, col_num_inds = 256L,
@@ -307,7 +307,10 @@ test_that("all four backends detect only their own config", {
                   icl_num_blocks = 12L, col_num_inds = 128L,
                   row_num_cls = 4L, max_classes = 10L),
     mitra  = list(dim = 512L, dim_output = 10L, n_layers = 12L,
-                  n_heads = 4L, task = "CLASSIFICATION")
+                  n_heads = 4L, task = "CLASSIFICATION"),
+    kumo   = list(arch = "kumo_tabular", head = "classifier",
+                  cell_channels = 128L, icl_channels = 512L,
+                  num_frequencies = 32L, num_classes = 10L)
   )
   # Every config must be claimed by exactly one backend. Mitra's is the
   # thinnest of the four -- five fields, no architecture marker -- so it
