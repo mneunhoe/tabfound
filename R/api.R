@@ -409,7 +409,9 @@ fit.tabfound_model <- function(object, X, y, ...) {
   # peak arrives at `predict()` -- so the check looks one call ahead, at
   # one chunk of query rows against this context.
   .memory_guard(object, n_context = NROW(X), n_query = .predict_chunk_of(object),
-                n_features = NCOL(X), stage = "fit")
+                n_features = NCOL(X), stage = "fit",
+                n_classes = if (identical(object$task, "classification"))
+                  length(unique(y[!is.na(y)])))
   # Assigning into a list copies it, so the caller's object is untouched.
   # The network is shared, not copied -- it is read-only and large.
   state <- object$spec$fit(X, y)
@@ -518,8 +520,18 @@ predict.tabfound_regressor <- function(object, newdata,
   n_train <- object$state$n_train %||% NROW(object$state$X_train)
   .memory_guard(object, n_context = n_train %||% 0,
                 n_query = NROW(newdata), n_features = NCOL(newdata),
-                stage = "predict")
+                stage = "predict", n_classes = .n_classes_fitted(object))
   newdata
+}
+
+# Classes the fitted context holds, for the memory guard: the observed
+# ones where the backend kept the codes, else every level.
+# @keywords internal
+.n_classes_fitted <- function(object) {
+  if (!identical(object$task, "classification")) return(NULL)
+  st <- object$state
+  if (!is.null(st$y_train_int)) return(length(unique(st$y_train_int)))
+  if (!is.null(st$class_levels)) length(st$class_levels) else NULL
 }
 
 # Lay new rows out as `fit()` laid out the training rows. Only a data frame

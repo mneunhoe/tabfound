@@ -4,12 +4,15 @@
 \alias{.hub_download}
 \title{Fetch one file from the Hub, cache-first}
 \usage{
-.hub_download(repo, file)
+.hub_download(repo, file, revision = "main")
 }
 \arguments{
 \item{repo}{Hub repo id.}
 
 \item{file}{Path within the repo.}
+
+\item{revision}{Branch, tag or commit; catalogue entries that pin one
+pass it here.}
 }
 \value{
 A local path.

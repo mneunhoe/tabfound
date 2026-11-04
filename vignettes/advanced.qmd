@@ -67,6 +67,13 @@ clf <- fit(tabular_classifier("path/to/converted/tabicl-v2-cla",
 clf <- fit(tabular_classifier("mitra-classifier"), X, y)
 predict(clf, X_new, type = "prob")
 
+# Kumo Tabular, in one of three sizes. Converted once on download, like
+# TabICL; declare categorical columns by index (tabfound() does it for
+# factors).
+reg <- fit(tabular_regressor("kumo-tabular-small-regressor",
+                             categorical_features = 2), X, y)
+predict(reg, X_new, type = "grid")              # 999 levels, like TabICL
+
 # Saving. `saveRDS()` cannot capture torch weights -- use these instead.
 tabfound_save(clf, "clf.tabfound")
 clf <- tabfound_load("clf.tabfound")
@@ -206,6 +213,34 @@ this package does not have, so `n_feature_crosses` and `n_svd_features`
 raise rather than being silently ignored. Mitra's fine-tuning is
 out of scope for an inference-only package, so predictions match a
 `MitraClassifier` with `fine_tune = FALSE`.
+
+### Kumo Tabular: eight members by default
+
+Kumo's library, `sdm`, defaults to one member; NVIDIA's model card and
+benchmark wrappers use eight, and so does this package. `n_estimators`
+and `seed` are the knobs:
+
+```r
+clf <- tabular_classifier("kumo-tabular-small-classifier",
+                          n_estimators = 8, seed = 42)
+```
+
+The members come from `sdm`'s default recipe, and the random draws come
+from libtorch's own generator, driven in the reference's order, so on
+the same platform `seed = 42` gives exactly the members
+`KumoTabular(...)(..., generator = torch.Generator().manual_seed(42))`
+does. What each member differs by:
+
+| | Kumo Tabular |
+|---|---|
+| feature order | Latin-square column shuffles, then the first 500 columns |
+| numerical columns | one of four preprocessing variants in rotation, and a random sign per column |
+| class labels | a cyclic shift, from shuffled pools of all shifts |
+| regression target | standardized, with a random sign |
+| combination | classification: mean of the logits, then a softmax; regression: a 20% trimmed mean of the members' sorted 999-quantile grids, level by level |
+
+Past 10 classes each member also draws its own error-correcting codebook
+(see the known limitations below).
 
 ### TabPFN: from a dumped config directory
 
@@ -370,11 +405,15 @@ indicator channel and TabFM maps it to a sentinel. TabICL's *network*
 has none of that and propagates `NaN` straight to its output, and
 Mitra's silently deletes any column containing one; both of their
 predictors impute first, exactly as their Python wrappers do, so neither
-failure mode is reachable through the API. All four therefore take `NA`
-directly and `na_action = "auto"` passes it through to them.
+failure mode is reachable through the API. Kumo Tabular handles it inside
+the network: each missing cell gets the training rows' column mean, and
+a learned embedding of which cells were missing is added on top. All of
+them therefore take `NA` directly and `na_action = "auto"` passes it
+through.
 
 Which route a backend takes is recorded, and is worth knowing rather
-than glossing: `list_backends()$missing` reads `"encoded"` for TabPFN,
+than glossing: `list_backends()$missing` reads `"encoded"` for TabPFN
+and Kumo Tabular,
 `"imputed"` for TabICL and Mitra, `"encoded+imputed"` for TabFM. The two
 are not the same guarantee. A network that encodes missingness
 *conditions on* it — the fact that a value was absent is available to
@@ -491,6 +530,21 @@ the Python reference (see `inst/parity/README.md`).
 Family names stay on the defaults: `"tabpfn-v3"` plus a task gives you
 `tabpfn-v3-classifier` or `tabpfn-v3-regressor`, never a variant.
 
+**Kumo Tabular comes in three sizes of one architecture**, each with a
+classifier and a regressor, all from `nvidia/Kumo-Tabular` pinned at
+`v1.0.1` and all under OpenMDW-1.1:
+
+| family name | parameters | per task | notes |
+|---|---:|---:|---|
+| `"kumo-tabular-small"` | 27 M | 110 MB | fastest |
+| `"kumo-tabular-medium"` | 61 M | 246 MB | wider cells, 24 ICL layers, grouped-query attention |
+| `"kumo-tabular-large"`, `"kumo-tabular"` | 214 M | 855 MB | the library's default; slow on CPU |
+
+The bare family name is the large model, as `size = "large"` is the
+default of `sdm`'s `KumoTabular()`; name a size to get another. The weights are bare PyTorch
+state dicts, so `download_model()` converts them once with Python, and
+the converter derives each size's config from the tensor shapes.
+
 ## Known limitations, per model
 
 ### TabFM
@@ -554,6 +608,46 @@ preprocessor does. One more thing is knowingly *not* faithful: the
 per-column random sign flips are drawn from a seedable R generator here,
 where the reference takes them from NumPy's global generator and never
 seeds it, so its own flips differ between two of its own runs.
+
+### Kumo Tabular
+
+The network, the default recipe, the output stage, the K/V cache, row
+and column chunking and the error-correcting output codes are all ported
+and graded against `structured-data-models` 0.2.1 (see
+`inst/parity/README.md`). Things worth knowing:
+
+- **Numerical and categorical columns only.** That is what `sdm`'s
+  single-table model takes; `transform_dates` / `transform_text` turn
+  dates and text into numbers first, as for the other backends. Columns
+  are categorical only when declared: `sdm` does not infer
+  low-cardinality numbers as categories, and neither does this port.
+- **10 classes per pass.** Above that each member runs error-correcting
+  output codes, as the reference does: a random codebook splits the task
+  into `T` ten-way sub-tasks (8 for 15 or 20 classes, 28 for 250) that
+  run as one batch, so memory and time grow by `T`.
+- **Classes absent from the training rows** cannot be predicted; the
+  reference drops them, and this package returns them with probability
+  zero so every factor level has a column. The reference also leaves its
+  probability columns in member 0's rotated class order; here they are in
+  level order.
+- **The regression point estimate** (`type = "mean"`) is the mean of the
+  999-quantile grid, which is what NVIDIA's AutoGluon wrapper reports;
+  `"median"` and `"quantiles"` read the same grid.
+- **Not bit-identical across paths.** The K/V cache, `row_chunk_size`,
+  `col_chunk_size` and `save_peak_memory_factor` change batch shapes, and
+  float32 rounds differently at different shapes: up to about 2e-6 on
+  probabilities, the same size as the gap between the reference's own
+  `fit()` / `predict()` and its one-shot forward.
+- **The random draws are libtorch's.** They match the reference on Apple
+  arm64. On an Intel machine whose libtorch uses MKL's Bernoulli stream
+  the random signs could differ from the reference's (not from run to
+  run).
+- **Medium and large are graded weight-free** (key lists, and a tiny
+  random network with their GQA and projection paths), and their memory
+  estimates reuse small's measured constants. Only small has been run
+  end to end against the reference.
+- Kumo Relational, NVIDIA's multi-table model, is a different
+  architecture and input; it is not part of this backend.
 
 ### TabPFN
 

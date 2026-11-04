@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-09-23">
+<meta name="dcterms.date" content="2026-11-04">
 
 <title>How big a table can each model handle?</title>
 <style>
@@ -123,7 +123,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">September 23, 2026</p>
+      <p class="date">November 4, 2026</p>
     </div>
   </div>
   
@@ -170,7 +170,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">c</span>(<span class="at">available_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_avail_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>),</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">installed_gb =</span> <span class="fu">round</span>(est<span class="sc">$</span>system_total_bytes <span class="sc">/</span> <span class="fl">1e9</span>, <span class="dv">1</span>))</span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; available_gb installed_gb </span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         10.7         51.5</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt;         36.1         51.5</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </section>
 <section id="the-headline-numbers" class="level2">
@@ -239,6 +239,27 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: right;">204</td>
 <td style="text-align: right;">807</td>
 <td style="text-align: right;">2013</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Kumo small</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">457</td>
+<td style="text-align: right;">1784</td>
+<td style="text-align: right;">4437</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Kumo medium</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">113</td>
+<td style="text-align: right;">777</td>
+<td style="text-align: right;">2104</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Kumo large</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">708</td>
+<td style="text-align: right;">2035</td>
 </tr>
 </tbody>
 </table>
@@ -311,6 +332,27 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: right;">1938</td>
 <td style="text-align: right;">4351</td>
 </tr>
+<tr class="even">
+<td style="text-align: left;">Kumo small</td>
+<td style="text-align: right;">291</td>
+<td style="text-align: right;">1618</td>
+<td style="text-align: right;">4271</td>
+<td style="text-align: right;">9577</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Kumo medium</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">694</td>
+<td style="text-align: right;">2021</td>
+<td style="text-align: right;">4675</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Kumo large</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">625</td>
+<td style="text-align: right;">1952</td>
+<td style="text-align: right;">4606</td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -323,6 +365,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><strong>TabPFN v3 goes furthest once there is room to work in</strong> — around twenty times TabICL’s context and fifty times Mitra’s, at 50 columns. Not because its state is smaller: v3 carries one vector per <em>column</em> per row where v2.6 carries one per group of three, and Mitra one per feature per row on both axes at once. It reaches further because it is one of the two backends that never hold that state for the whole table — <code>row_chunk_size</code> runs the first three stages a chunk of rows at a time, which turns the term that decides the ceiling from something that grows with the table into a constant. See “what the knobs buy”.</li>
 <li><strong>TabPFN v3.5 has the same mechanism and about half the reach.</strong> Same three stages, same row and column chunking, but a 1024-wide in-context stack against v3’s 512 and 876 MB of weights against 213 MB, so the fixed cost is higher and every row costs more. At 8 GB it does not fit at all; the ordering between it and v3 is about width, not about whether the chunking works.</li>
 <li><strong>TabFM is in a different regime.</strong> 6.5 GB of weights are resident before anything happens, and its 32-member default multiplies what comes after.</li>
+<li><strong>Kumo Tabular small sits beside TabICL</strong> — the same three stages at the same width, an 8-member default like TabICL’s, but one token per column where TabICL groups three. Medium and large widen the row stage to 256 and reach about half as far. Those two rows are the estimator’s reading of their shapes with small’s measured constants; only small has been measured.</li>
 </ul>
 </section>
 <section id="columns-cost-as-much-as-rows" class="level2">
@@ -594,6 +637,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="memory-is-often-not-what-stops-you">Memory is often not what stops you</h2>
 <p>Wall clock, measured on the same grid on an Apple-Silicon CPU, at <strong>one ensemble member</strong> and 90 features. Seconds, by training context size; a dash means the run died or reached the machine’s ceiling before finishing:</p>
 <div class="cell">
+<pre><code>#&gt; Warning in reshapeWide(data, idvar = idvar, timevar = timevar, varying =
+#&gt; varying, : multiple rows match for n_context=800: first taken
+#&gt; Warning in reshapeWide(data, idvar = idvar, timevar = timevar, varying =
+#&gt; varying, : multiple rows match for n_context=1600: first taken
+#&gt; Warning in reshapeWide(data, idvar = idvar, timevar = timevar, varying =
+#&gt; varying, : multiple rows match for n_context=3200: first taken
+#&gt; Warning in reshapeWide(data, idvar = idvar, timevar = timevar, varying =
+#&gt; varying, : multiple rows match for n_context=6400: first taken</code></pre>
 <div class="cell-output-display">
 <div class="kable-table">
 <table class="caption-top table table-sm table-striped small">
@@ -608,27 +659,34 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </thead>
 <tbody>
 <tr class="odd">
+<td style="text-align: left;">kumo</td>
+<td style="text-align: left;">1.2</td>
+<td style="text-align: left;">1.7</td>
+<td style="text-align: left;">3</td>
+<td style="text-align: left;">9.6</td>
+</tr>
+<tr class="even">
 <td style="text-align: left;">mitra</td>
 <td style="text-align: left;">11.4</td>
 <td style="text-align: left;">30</td>
 <td style="text-align: left;">95.3</td>
 <td style="text-align: left;">–</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td style="text-align: left;">tabfm</td>
 <td style="text-align: left;">7.5</td>
 <td style="text-align: left;">16.5</td>
 <td style="text-align: left;">53.1</td>
 <td style="text-align: left;">–</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td style="text-align: left;">tabpfn</td>
 <td style="text-align: left;">1.7</td>
 <td style="text-align: left;">2.9</td>
 <td style="text-align: left;">7.4</td>
 <td style="text-align: left;">22.5</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td style="text-align: left;">tabpfn26</td>
 <td style="text-align: left;">1.7</td>
 <td style="text-align: left;">3.1</td>
@@ -640,7 +698,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 </div>
-<p>Multiply those by the default member count for the real figure: TabICL’s 8 and TabFM’s 32. TabFM at 3,200 context rows is 71 seconds for one member, so around 38 minutes for its default ensemble — long before memory becomes the binding constraint. Mitra’s 145 seconds at the same size is the steepest curve in the package.</p>
+<p>Multiply those by the default member count for the real figure: TabICL’s and Kumo’s 8, and TabFM’s 32. TabFM at 3,200 context rows is 71 seconds for one member, so around 38 minutes for its default ensemble — long before memory becomes the binding constraint. Mitra’s 145 seconds at the same size is the steepest curve in the package.</p>
 <p>TabPFN and TabICL are seconds; Mitra and TabFM are minutes to hours. If you are choosing a backend for a resampling loop, that ratio matters more than the memory table does.</p>
 </section>
 <section id="choosing" class="level2">
@@ -661,8 +719,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tbody>
 <tr class="odd">
 <td>under ~2,000 rows, any width</td>
-<td>anything</td>
-<td>all seven are comfortable</td>
+<td>almost anything</td>
+<td>all are comfortable but Kumo medium and large, which need about 64 GB free for 2,000 rows at 50 columns</td>
 </tr>
 <tr class="even">
 <td>a few thousand rows, ≤ 100 columns</td>
@@ -694,6 +752,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td>Mitra or TabFM are fine here</td>
 <td>this is the size they were published for</td>
 </tr>
+<tr class="even">
+<td>Kumo Tabular, short of memory</td>
+<td><code>row_chunk_size</code> and <code>save_peak_memory_factor</code> together, or fewer members</td>
+<td>its row tensor stays whole under chunking, so each knob buys less than on v3; at 50 columns and 32 GB the two together about double the comfortable context, as does <code>n_estimators = 1</code></td>
+</tr>
 </tbody>
 </table>
 <p>And regardless of size, if the run is going to be tight: subsample the context. These models do not learn parameters, so halving the context halves the cost and loses only what those rows contributed as examples — usually far less than the memory it buys.</p>
@@ -702,19 +765,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="checking-your-own-case">Checking your own case</h2>
 <p>The tables are generic. Your table is not:</p>
 <div class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Will this specific run fit, on this machine, right now?</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="fu">estimate_peak_memory</span>(<span class="st">"tabpfn-v3-classifier"</span>,</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>                     <span class="at">n_context =</span> <span class="dv">6426</span>, <span class="at">n_query =</span> <span class="dv">714</span>, <span class="at">n_features =</span> <span class="dv">90</span>)</span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="co"># How far could I go, with the settings I actually plan to use?</span></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="fu">memory_envelope</span>(<span class="st">"tabpfn-v3-classifier"</span>, <span class="at">n_features =</span> <span class="dv">90</span>,</span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>                <span class="at">available =</span> <span class="fl">24e9</span>, <span class="at">n_estimators =</span> <span class="dv">4</span>,</span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>                <span class="at">save_peak_memory_factor =</span> <span class="dv">4</span>)</span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="co"># The run is fixed and the memory is what it is: how small do the</span></span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="co"># chunks have to be?</span></span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="fu">suggest_chunk_sizes</span>(<span class="st">"tabpfn-v3-classifier"</span>, <span class="at">n_context =</span> <span class="fl">2e5</span>,</span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>                    <span class="at">n_features =</span> <span class="dv">50</span>, <span class="at">available =</span> <span class="fl">24e9</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Will this specific run fit, on this machine, right now?</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="fu">estimate_peak_memory</span>(<span class="st">"tabpfn-v3-classifier"</span>,</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>                     <span class="at">n_context =</span> <span class="dv">6426</span>, <span class="at">n_query =</span> <span class="dv">714</span>, <span class="at">n_features =</span> <span class="dv">90</span>)</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="co"># How far could I go, with the settings I actually plan to use?</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="fu">memory_envelope</span>(<span class="st">"tabpfn-v3-classifier"</span>, <span class="at">n_features =</span> <span class="dv">90</span>,</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>                <span class="at">available =</span> <span class="fl">24e9</span>, <span class="at">n_estimators =</span> <span class="dv">4</span>,</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>                <span class="at">save_peak_memory_factor =</span> <span class="dv">4</span>)</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="co"># The run is fixed and the memory is what it is: how small do the</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="co"># chunks have to be?</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="fu">suggest_chunk_sizes</span>(<span class="st">"tabpfn-v3-classifier"</span>, <span class="at">n_context =</span> <span class="fl">2e5</span>,</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>                    <span class="at">n_features =</span> <span class="dv">50</span>, <span class="at">available =</span> <span class="fl">24e9</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>You do not have to remember to ask. <code>fit()</code> and <code>predict()</code> run the same check themselves and warn before allocating anything, which matters because running out inside libtorch kills the R process outright — no error, no traceback, nothing to catch. <code>options(tabfound.memory_guard = "error")</code> turns the warning into a refusal; <code>"off"</code> silences it. See <code>?estimate_peak_memory</code>.</p>
 </section>
@@ -726,7 +789,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="where-the-numbers-come-from" class="level2">
 <h2 class="anchored" data-anchor-id="where-the-numbers-come-from">Where the numbers come from</h2>
-<p>A scaling model whose constants were <strong>measured</strong>: 72 fit/predict runs across six backends, each in its own process with its peak resident memory sampled from outside. The method, the raw measurements and the fitted constants are all in <code>inst/memory/</code>.</p>
+<p>A scaling model whose constants were <strong>measured</strong>: 156 fit/predict runs on the size grids across eight backends, plus sweeps of each knob, each in its own process with its peak resident memory sampled from outside. The method, the raw measurements and the fitted constants are all in <code>inst/memory/</code>.</p>
 <p>Two things to know when reading a figure off a table above. The estimates deliberately err high — on the calibration grid they land between 1.0× and 1.5× of measured, never below, because for a guard an over-estimate costs a warning and an under-estimate costs the session. And they were measured on an Apple-Silicon CPU in float32, which is the only device calibrated; on another machine, or if a number matters to you, re-run <code>inst/memory/calibrate.R</code>.</p>
 <p>The Mitra and TabFM rows are the roughest, since both are large enough that most of their calibration points ran up against the ceiling of the machine they were measured on. Read those two as orders of magnitude. <code>inst/memory/README.md</code> has the detail, including where the estimator is least sure of itself.</p>
 <p>If a table here contradicts a run you have actually done, the run is the better evidence — please open an issue.</p>

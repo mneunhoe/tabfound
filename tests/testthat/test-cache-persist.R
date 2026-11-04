@@ -178,3 +178,34 @@ test_that("a real checkpoint's cache reproduces its predictions off disk", {
   refit$state$kv_guard  <- reloaded$state$kv_guard
   expect_error(predict(refit, X[te, ]), "does not match its training rows")
 })
+
+
+test_that("a Kumo cache survives a bundle and does not move predictions", {
+  d <- Sys.getenv("TABFOUND_KUMO_CLF_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_KUMO_CLF_DIR not configured")
+
+  set.seed(6)
+  X <- matrix(rnorm(160 * 4), ncol = 4)
+  y <- factor(ifelse(X[, 1] - X[, 3] > 0, "b", "a"))
+  tr <- 1:120; te <- 121:160
+
+  m <- fit(tabular_classifier(d, kv_cache = TRUE, n_estimators = 2L), X[tr, ], y[tr])
+  p_plain <- predict(m, X[te, ], type = "prob")
+
+  cached <- tabfound_cache(m)
+  expect_true(has_cache(cached))
+  # Built once by `tabfound_cache()` and once lazily by `predict()` with
+  # `kv_cache = TRUE`: the same computation, so the same bits.
+  expect_identical(predict(cached, X[te, ], type = "prob"), p_plain)
+
+  bundle <- file.path(withr::local_tempdir(), "kumo-bundle")
+  tabfound_save(cached, bundle)
+  reloaded <- tabfound_load(bundle)
+  expect_true(has_cache(reloaded))
+  expect_identical(predict(reloaded, X[te, ], type = "prob"), p_plain)
+
+  refit <- fit(reloaded, X[tr[1:60], ], y[tr[1:60]])
+  refit$state$kv_caches <- reloaded$state$kv_caches
+  refit$state$kv_guard  <- reloaded$state$kv_guard
+  expect_error(predict(refit, X[te, ]), "does not match its training rows")
+})

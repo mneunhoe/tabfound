@@ -1,0 +1,18 @@
+{
+  "fixture": "clf_binary_missing",
+  "task": "classification",
+  "size": "small",
+  "torch_version": "2.15.0",
+  "sdm_version": "0.2.1",
+  "n_train": 80,
+  "n_test": 40,
+  "categorical_features": [],
+  "stages": [
+    "kumo_cells",
+    "kumo_col0",
+    "kumo_logits",
+    "kumo_reps",
+    "kumo_row0"
+  ],
+  "n_classes": 2
+}

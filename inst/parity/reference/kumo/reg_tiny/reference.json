@@ -1,0 +1,21 @@
+{
+  "fixture": "reg_tiny",
+  "task": "regression",
+  "size": "small",
+  "torch_version": "2.15.0",
+  "sdm_version": "0.2.1",
+  "n_train": 48,
+  "n_test": 12,
+  "categorical_features": [],
+  "stages": [
+    "kumo_cells",
+    "kumo_col0",
+    "kumo_logits",
+    "kumo_reps",
+    "kumo_row0"
+  ],
+  "y_scaler": {
+    "mean": -0.21266768872737885,
+    "scale": 1.4580765962600708
+  }
+}

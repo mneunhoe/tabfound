@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-09-23">
+<meta name="dcterms.date" content="2026-11-04">
 
 <title>Advanced: the engine, ensembles and known limits</title>
 <style>
@@ -97,6 +97,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#ensembling" id="toc-ensembling" class="nav-link" data-scroll-target="#ensembling">Ensembling</a>
   <ul class="collapse">
   <li><a href="#tabfm-tabicl-and-mitra-on-by-default" id="toc-tabfm-tabicl-and-mitra-on-by-default" class="nav-link" data-scroll-target="#tabfm-tabicl-and-mitra-on-by-default">TabFM, TabICL and Mitra: on by default</a></li>
+  <li><a href="#kumo-tabular-eight-members-by-default" id="toc-kumo-tabular-eight-members-by-default" class="nav-link" data-scroll-target="#kumo-tabular-eight-members-by-default">Kumo Tabular: eight members by default</a></li>
   <li><a href="#tabpfn-from-a-dumped-config-directory" id="toc-tabpfn-from-a-dumped-config-directory" class="nav-link" data-scroll-target="#tabpfn-from-a-dumped-config-directory">TabPFN: from a dumped config directory</a></li>
   </ul></li>
   <li><a href="#column-handling-in-detail" id="toc-column-handling-in-detail" class="nav-link" data-scroll-target="#column-handling-in-detail">Column handling in detail</a>
@@ -110,6 +111,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#tabfm" id="toc-tabfm" class="nav-link" data-scroll-target="#tabfm">TabFM</a></li>
   <li><a href="#tabicl" id="toc-tabicl" class="nav-link" data-scroll-target="#tabicl">TabICL</a></li>
   <li><a href="#mitra" id="toc-mitra" class="nav-link" data-scroll-target="#mitra">Mitra</a></li>
+  <li><a href="#kumo-tabular" id="toc-kumo-tabular" class="nav-link" data-scroll-target="#kumo-tabular">Kumo Tabular</a></li>
   <li><a href="#tabpfn" id="toc-tabpfn" class="nav-link" data-scroll-target="#tabpfn">TabPFN</a></li>
   <li><a href="#tabpfn-v2.6" id="toc-tabpfn-v2.6" class="nav-link" data-scroll-target="#tabpfn-v2.6">TabPFN v2.6</a></li>
   <li><a href="#tabpfn-v3" id="toc-tabpfn-v3" class="nav-link" data-scroll-target="#tabpfn-v3">TabPFN v3</a></li>
@@ -139,7 +141,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">September 23, 2026</p>
+      <p class="date">November 4, 2026</p>
     </div>
   </div>
   
@@ -193,9 +195,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"mitra-classifier"</span>), X, y)</span>
 <span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(clf, X_new, <span class="at">type =</span> <span class="st">"prob"</span>)</span>
 <span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a><span class="co"># Saving. `saveRDS()` cannot capture torch weights -- use these instead.</span></span>
-<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_save</span>(clf, <span class="st">"clf.tabfound"</span>)</span>
-<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabfound_load</span>(<span class="st">"clf.tabfound"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a><span class="co"># Kumo Tabular, in one of three sizes. Converted once on download, like</span></span>
+<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a><span class="co"># TabICL; declare categorical columns by index (tabfound() does it for</span></span>
+<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a><span class="co"># factors).</span></span>
+<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_regressor</span>(<span class="st">"kumo-tabular-small-regressor"</span>,</span>
+<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>                             <span class="at">categorical_features =</span> <span class="dv">2</span>), X, y)</span>
+<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(reg, X_new, <span class="at">type =</span> <span class="st">"grid"</span>)              <span class="co"># 999 levels, like TabICL</span></span>
+<span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-46"><a href="#cb1-46" aria-hidden="true" tabindex="-1"></a><span class="co"># Saving. `saveRDS()` cannot capture torch weights -- use these instead.</span></span>
+<span id="cb1-47"><a href="#cb1-47" aria-hidden="true" tabindex="-1"></a><span class="fu">tabfound_save</span>(clf, <span class="st">"clf.tabfound"</span>)</span>
+<span id="cb1-48"><a href="#cb1-48" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabfound_load</span>(<span class="st">"clf.tabfound"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Each model family is a <em>backend</em>: a description of how to build the network from a config, how checkpoint keys map onto R module paths, how to preprocess the design matrix, how to build and combine an ensemble of transformed views of it, and how to turn the network’s output into predictions. <code>list_backends()</code> reports what is registered.</p>
 <section id="model-objects" class="level3">
 <h3 class="anchored" data-anchor-id="model-objects">Model objects</h3>
@@ -274,19 +283,61 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Each normalisation method fits one preprocessing pipeline — <code>CustomStandardScaler</code> → the normaliser → a two-stage outlier clipper — which every member sharing that method reuses. Mitra is the odd one out: it has no designed set of views at all, only a random per-column sign flip per member, and AutoGluon defaults to a single member.</p>
 <p>Two of the reference’s presets are deliberately absent. TabFM’s <code>ensemble()</code> preset (feature crosses, SVD features, NNLS ensemble weights, probability calibration) needs out-of-fold cross-fitting that this package does not have, so <code>n_feature_crosses</code> and <code>n_svd_features</code> raise rather than being silently ignored. Mitra’s fine-tuning is out of scope for an inference-only package, so predictions match a <code>MitraClassifier</code> with <code>fine_tune = FALSE</code>.</p>
 </section>
+<section id="kumo-tabular-eight-members-by-default" class="level3">
+<h3 class="anchored" data-anchor-id="kumo-tabular-eight-members-by-default">Kumo Tabular: eight members by default</h3>
+<p>Kumo’s library, <code>sdm</code>, defaults to one member; NVIDIA’s model card and benchmark wrappers use eight, and so does this package. <code>n_estimators</code> and <code>seed</code> are the knobs:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"kumo-tabular-small-classifier"</span>,</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>                          <span class="at">n_estimators =</span> <span class="dv">8</span>, <span class="at">seed =</span> <span class="dv">42</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The members come from <code>sdm</code>’s default recipe, and the random draws come from libtorch’s own generator, driven in the reference’s order, so on the same platform <code>seed = 42</code> gives exactly the members <code>KumoTabular(...)(..., generator = torch.Generator().manual_seed(42))</code> does. What each member differs by:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th>Kumo Tabular</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>feature order</td>
+<td>Latin-square column shuffles, then the first 500 columns</td>
+</tr>
+<tr class="even">
+<td>numerical columns</td>
+<td>one of four preprocessing variants in rotation, and a random sign per column</td>
+</tr>
+<tr class="odd">
+<td>class labels</td>
+<td>a cyclic shift, from shuffled pools of all shifts</td>
+</tr>
+<tr class="even">
+<td>regression target</td>
+<td>standardized, with a random sign</td>
+</tr>
+<tr class="odd">
+<td>combination</td>
+<td>classification: mean of the logits, then a softmax; regression: a 20% trimmed mean of the members’ sorted 999-quantile grids, level by level</td>
+</tr>
+</tbody>
+</table>
+<p>Past 10 classes each member also draws its own error-correcting codebook (see the known limitations below).</p>
+</section>
 <section id="tabpfn-from-a-dumped-config-directory" class="level3">
 <h3 class="anchored" data-anchor-id="tabpfn-from-a-dumped-config-directory">TabPFN: from a dumped config directory</h3>
 <p>A single forward pass is the default. To reproduce the reference estimator’s n-member ensemble, point at a dumped config directory:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(model_dir, <span class="at">ensemble_configs_dir =</span> <span class="st">"path/to/dump"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(model_dir, <span class="at">ensemble_configs_dir =</span> <span class="st">"path/to/dump"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><code>tabpfn</code>, <code>tabpfn26</code> and <code>tabpfn3</code> all support it. A member is described entirely by its config — which primary transform, whether the transformed block replaces or is appended to the originals, whether an SVD block and polynomial products are added, the column shuffle, the class rotation — so one composer serves every member type of every version, and adding a version means adding entries to a table rather than a code path.</p>
 <p>The implemented primary transforms are <code>none</code>, <code>squashing_scaler_default</code>, <code>squashing_scaler_max10</code>, <code>quantile_uni</code>, <code>quantile_uni_coarse</code>, <code>quantile_uni_fine</code> and <code>quantile_uni_extrapolate</code>, which between them cover every recipe the eight published v3 checkpoints and both v2 generations ask for. A dump naming anything else raises rather than substituting a near neighbour.</p>
 <p>Everything the reference draws from its NumPy generator (the shuffle, the class rotation, the polynomial factor pairs, any target-transform lambda) is read out of the dump rather than recomputed: reproducing PCG64 in R is not worth the days it would take.</p>
 <p><code>generate_ensemble_configs_native()</code> builds a working ensemble in pure R, no Python needed. Pass <code>variant</code> to match your weights — it decides which member menu is used, and the two generations do not share one:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> <span class="fu">tempfile</span>()</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="fu">generate_ensemble_configs_native</span>(X, y, <span class="at">n_estimators =</span> <span class="dv">4</span>,</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">head =</span> <span class="st">"classifier"</span>, <span class="at">variant =</span> <span class="st">"v2.6"</span>,</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">output_dir =</span> d)</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>, <span class="at">ensemble_configs_dir =</span> d)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>d <span class="ot">&lt;-</span> <span class="fu">tempfile</span>()</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="fu">generate_ensemble_configs_native</span>(X, y, <span class="at">n_estimators =</span> <span class="dv">4</span>,</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">head =</span> <span class="st">"classifier"</span>, <span class="at">variant =</span> <span class="st">"v2.6"</span>,</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">output_dir =</span> d)</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>, <span class="at">ensemble_configs_dir =</span> d)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>It is not bit-identical to Python at a given seed, and does not try to be; for verified parity, dump the configs from the reference with <code>generate_ensemble_configs()</code>.</p>
 <p>One catch when combining it with <code>tabfound()</code>: the configs record a code permutation per encoded categorical column, sized from the matrix you pass here — so that matrix and its <code>categorical_features</code> have to be the ones the model will actually see. <code>tabfound()</code> molds the frame through hardhat first, which reorders columns, so generate from the molded matrix rather than the raw frame. A mismatch is caught rather than silently mis-encoded: the pipeline refuses when the config and the data disagree about which columns are categorical.</p>
 <p><code>softmax_temperature</code> defaults to <code>0.9</code> across every backend, matching the reference estimators. Pass <code>softmax_temperature = 1</code> for the untempered distribution.</p>
@@ -298,11 +349,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="text-and-date-columns">Text and date columns</h3>
 <p>A free-text column and a timestamp are the two kinds of column a tabular model is worst at receiving raw. Coded as a categorical, a review field is an arbitrary integer per distinct sentence, and an unseen sentence at predict time is a missing value. As a single number, a timestamp keeps its order and loses its calendar – December is nowhere near January.</p>
 <p>So <code>tabfound()</code> expands them first, the way TabPFN v3.5’s Python estimator does:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(price <span class="sc">~</span> ., <span class="at">data =</span> listings, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>fit<span class="sc">$</span>expansion</span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Text and date expansion</span></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; * dates: listed_on</span></span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; * text (30 components each): description</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(price <span class="sc">~</span> ., <span class="at">data =</span> listings, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>fit<span class="sc">$</span>expansion</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; Text and date expansion</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; * dates: listed_on</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="co">#&gt; * text (30 components each): description</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <ul>
 <li><strong>Text.</strong> A character column with more than <code>min_cardinality_for_text</code>
 <ol start="30" type="1">
@@ -354,15 +405,15 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tbody>
 </table>
 <p>Encoding a factor to codes is only half the job: the model still has to be <em>told</em> those columns are categorical, or it will treat the codes as a quantity with an order and a scale. <code>tabfound()</code> passes the factor columns’ positions down automatically. This matters more than it looks — the reference’s own inference only catches columns with fewer than four distinct values, so a five-level factor is invisible to it, and R knows the answer exactly where pandas has to guess:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Declared for you, from the frame's factor columns.</span></span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(churn <span class="sc">~</span> ., <span class="at">data =</span> d, <span class="at">model =</span> <span class="st">"tabpfn-v2.6-classifier"</span>)</span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Or by hand, on the matrix interface, as 1-based column positions.</span></span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>, <span class="at">categorical_features =</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">3</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Declared for you, from the frame's factor columns.</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(churn <span class="sc">~</span> ., <span class="at">data =</span> d, <span class="at">model =</span> <span class="st">"tabpfn-v2.6-classifier"</span>)</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Or by hand, on the matrix interface, as 1-based column positions.</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>, <span class="at">categorical_features =</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">3</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>What that changes: for members whose config asks for it, declared columns skip the primary transform (a quantile transform on category codes is meaningless), get ordinal-encoded with their codes randomly permuted per member, and move to the front of the matrix. Backends with no categorical handling of their own warn rather than silently ignoring the declaration.</p>
 <p>Logicals are coerced deliberately rather than incidentally: the formula path runs a <code>model.matrix</code> expansion that would turn a bare logical into two dummy columns while leaving a factor alone, so coercing first is what keeps the formula and <code>x</code>/<code>y</code> interfaces producing the same result.</p>
-<p><strong>Missing values</strong> are handled per backend, because the backends genuinely differ — and in every case the handling is the reference implementation’s own. TabPFN encodes missingness as an explicit indicator channel and TabFM maps it to a sentinel. TabICL’s <em>network</em> has none of that and propagates <code>NaN</code> straight to its output, and Mitra’s silently deletes any column containing one; both of their predictors impute first, exactly as their Python wrappers do, so neither failure mode is reachable through the API. All four therefore take <code>NA</code> directly and <code>na_action = "auto"</code> passes it through to them.</p>
-<p>Which route a backend takes is recorded, and is worth knowing rather than glossing: <code>list_backends()$missing</code> reads <code>"encoded"</code> for TabPFN, <code>"imputed"</code> for TabICL and Mitra, <code>"encoded+imputed"</code> for TabFM. The two are not the same guarantee. A network that encodes missingness <em>conditions on</em> it — the fact that a value was absent is available to the model, and to anything you ask the model about it. A wrapper that mean-fills has replaced that fact with a column mean before the network is reached. For prediction the distinction rarely matters; for imputation and synthesis, where the missingness pattern is the object of study, it is most of the question, and it is one reason the MI simulation finds TabPFN and TabICL so far apart.</p>
+<p><strong>Missing values</strong> are handled per backend, because the backends genuinely differ — and in every case the handling is the reference implementation’s own. TabPFN encodes missingness as an explicit indicator channel and TabFM maps it to a sentinel. TabICL’s <em>network</em> has none of that and propagates <code>NaN</code> straight to its output, and Mitra’s silently deletes any column containing one; both of their predictors impute first, exactly as their Python wrappers do, so neither failure mode is reachable through the API. Kumo Tabular handles it inside the network: each missing cell gets the training rows’ column mean, and a learned embedding of which cells were missing is added on top. All of them therefore take <code>NA</code> directly and <code>na_action = "auto"</code> passes it through.</p>
+<p>Which route a backend takes is recorded, and is worth knowing rather than glossing: <code>list_backends()$missing</code> reads <code>"encoded"</code> for TabPFN and Kumo Tabular, <code>"imputed"</code> for TabICL and Mitra, <code>"encoded+imputed"</code> for TabFM. The two are not the same guarantee. A network that encodes missingness <em>conditions on</em> it — the fact that a value was absent is available to the model, and to anything you ask the model about it. A wrapper that mean-fills has replaced that fact with a column mean before the network is reached. For prediction the distinction rarely matters; for imputation and synthesis, where the missingness pattern is the object of study, it is most of the question, and it is one reason the MI simulation finds TabPFN and TabICL so far apart.</p>
 <p>TabICL’s and TabFM’s imputation is <code>SimpleImputer(strategy = "mean")</code>, fitted on the training rows: new data is filled with the <em>training</em> column means. A column that is entirely missing in the training rows is dropped by TabFM; TabICL (following tabicl 2.2.0) fills it with zeros, after which it is constant and the unique-value filter drops it. If every column is constant or missing, TabICL keeps one and predicts the target’s marginal distribution, where TabFM refuses. Mitra’s imputation is AutoGluon’s own, which is the same idea.</p>
 <p><code>Inf</code> is <strong>not</strong> treated as missing and is rejected with an error naming the columns. That is the reference’s line too — sklearn takes <code>NaN</code> where it advertises it and refuses infinities — and it is the right line: an infinity cannot be imputed, and left alone it poisons a column mean and every scaler downstream of it without producing a single <code>NaN</code> to notice. Replace them with <code>NA</code> to have them imputed, or with a finite bound if that is what they encode. Mitra is the exception and maps them to zero, because its own preprocessor does.</p>
 <p><code>na_action</code> still takes <code>"auto"</code> (the default), <code>"pass"</code>, <code>"impute"</code> or <code>"fail"</code>, and <code>"impute"</code> remains available if you would rather this package’s plain column-mean fill ran instead — but it is <em>not</em> a port of any reference implementation and is not covered by the parity harness, so the backend’s own is the better default. Forcing <code>"pass"</code> on a backend that declares it cannot cope still warns rather than silently returning <code>NaN</code>.</p>
@@ -372,18 +423,18 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="model-catalogue-details" class="level2">
 <h2 class="anchored" data-anchor-id="model-catalogue-details">Model catalogue details</h2>
 <p>A family name plus the task picks the head, so <code>"tabpfn"</code> is the classifier under <code>tabular_classifier()</code> and the regressor under <code>tabular_regressor()</code>. <strong><code>"tabpfn"</code> stays pinned to v2.5</strong> — adding v2.6 does not repoint existing code onto different weights. Ask for a version by name:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>)</span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris, <span class="at">model =</span> <span class="st">"tabpfn-v3"</span>)</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v2.6-classifier"</span>)</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris, <span class="at">model =</span> <span class="st">"tabpfn-v3"</span>)</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris, <span class="at">model =</span> <span class="st">"tabpfn-v3.5"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p><strong>TabPFN v3.5 is one checkpoint for both tasks.</strong> From this generation on the head is chosen per forward pass rather than baked into the weights, so there is no <code>-classifier</code> / <code>-regressor</code> pair to pick between: the same <code>"tabpfn-v3.5"</code> resolves under <code>tabular_classifier()</code> and <code>tabular_regressor()</code> alike, and <code>list_models()</code> shows its task as <code>both</code>. One download, 876 MB, serves everything.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The same artifacts, both ways round.</span></span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Species)</span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">2</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Sepal.Length)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The same artifacts, both ways round.</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Species)</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">fit</span>(<span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3.5"</span>), iris[<span class="dv">2</span><span class="sc">:</span><span class="dv">4</span>], iris<span class="sc">$</span>Sepal.Length)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Two v3.5 variants are catalogued by exact id only, so <code>"tabpfn-v3.5"</code> keeps meaning the default: <code>"tabpfn-v3.5-fast"</code> (334 MB, 8 ICL layers instead of 24, an alpha checkpoint the publisher reports as up to 6x faster) and <code>"tabpfn-v3.5-multiclass"</code> (experimental).</p>
 <p>TabPFN v2.6, v3 and v3.5 weights are released under <code>tabpfn-2.6-license-v1.0</code>, <code>tabpfn-3-license-v1.0</code> and <code>tabpfn-3-5-license-v1.0</code>. All three permit research, evaluation and internal benchmarking but <strong>not commercial or production use</strong>; v3.5’s says so in those words and points at a separate Commercial Enterprise License. <code>list_models()</code> prints the licence, and the download prompt repeats it.</p>
 <p>v3 publishes six specialised checkpoints alongside the two defaults, and all eight are catalogued. They are <strong>the same architecture</strong> — identical <code>config</code>, identical state-dict keys and shapes, checked checkpoint by checkpoint — so they load through the same backend with no special handling:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3-classifier-binary"</span>)</span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3-regressor-timeseries"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>clf <span class="ot">&lt;-</span> <span class="fu">tabular_classifier</span>(<span class="st">"tabpfn-v3-classifier-binary"</span>)</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>reg <span class="ot">&lt;-</span> <span class="fu">tabular_regressor</span>(<span class="st">"tabpfn-v3-regressor-timeseries"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 50%">
@@ -425,6 +476,44 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Two of them are worth knowing about before you spend the bandwidth. The <strong><code>_ood</code> checkpoints carry byte-identical weights to the corresponding defaults</strong> — SHA-256 over the full state dict matches. What makes them OOD-robust is the preprocessing recipe bundled in the checkpoint’s <code>inference_config</code> (<code>squashing_scaler_max10</code> in place of <code>squashing_scaler_default</code>, and <code>none</code> or <code>quantile_uni_extrapolate</code> in place of <code>quantile_uni</code> — all three implemented), not the network. Since this package reads that recipe from an ensemble dump rather than from the checkpoint, a single-pass prediction from <code>tabpfn-v3-classifier-ood</code> is <em>the same number</em> as one from <code>tabpfn-v3-classifier</code>. The entries exist so the publisher’s names resolve; they are not four distinct models.</p>
 <p>The remaining four do carry distinct weights, and all eight agree with the Python reference (see <code>inst/parity/README.md</code>).</p>
 <p>Family names stay on the defaults: <code>"tabpfn-v3"</code> plus a task gives you <code>tabpfn-v3-classifier</code> or <code>tabpfn-v3-regressor</code>, never a variant.</p>
+<p><strong>Kumo Tabular comes in three sizes of one architecture</strong>, each with a classifier and a regressor, all from <code>nvidia/Kumo-Tabular</code> pinned at <code>v1.0.1</code> and all under OpenMDW-1.1:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 21%">
+<col style="width: 28%">
+<col style="width: 28%">
+<col style="width: 21%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>family name</th>
+<th style="text-align: right;">parameters</th>
+<th style="text-align: right;">per task</th>
+<th>notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>"kumo-tabular-small"</code></td>
+<td style="text-align: right;">27 M</td>
+<td style="text-align: right;">110 MB</td>
+<td>fastest</td>
+</tr>
+<tr class="even">
+<td><code>"kumo-tabular-medium"</code></td>
+<td style="text-align: right;">61 M</td>
+<td style="text-align: right;">246 MB</td>
+<td>wider cells, 24 ICL layers, grouped-query attention</td>
+</tr>
+<tr class="odd">
+<td><code>"kumo-tabular-large"</code>, <code>"kumo-tabular"</code></td>
+<td style="text-align: right;">214 M</td>
+<td style="text-align: right;">855 MB</td>
+<td>the library’s default; slow on CPU</td>
+</tr>
+</tbody>
+</table>
+<p>The bare family name is the large model, as <code>size = "large"</code> is the default of <code>sdm</code>’s <code>KumoTabular()</code>; name a size to get another. The weights are bare PyTorch state dicts, so <code>download_model()</code> converts them once with Python, and the converter derives each size’s config from the tensor shapes.</p>
 </section>
 <section id="known-limitations-per-model" class="level2">
 <h2 class="anchored" data-anchor-id="known-limitations-per-model">Known limitations, per model</h2>
@@ -441,6 +530,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="mitra" class="level3">
 <h3 class="anchored" data-anchor-id="mitra">Mitra</h3>
 <p>Network and preprocessor both ported and verified. Not ported: fine-tuning, which AutoGluon does by default (<code>fine_tune_steps = 50</code>) and which this package, being inference-only, cannot do — so predictions match a <code>MitraClassifier</code> with <code>fine_tune=False</code>, not the out-of-the-box one. Its raw network still has the sharpest edge in the package — a single <code>NA</code> in a column makes that column’s quantiles all-<code>NaN</code>, which buckets every value to zero, which zeroes the column’s variance, which the zero-variance guard flattens, so one missing value silently deletes the entire feature with no <code>NaN</code> in the output and no error — but nothing reachable through the API hits it, because the predictor mean-imputes first exactly as AutoGluon’s preprocessor does. One more thing is knowingly <em>not</em> faithful: the per-column random sign flips are drawn from a seedable R generator here, where the reference takes them from NumPy’s global generator and never seeds it, so its own flips differ between two of its own runs.</p>
+</section>
+<section id="kumo-tabular" class="level3">
+<h3 class="anchored" data-anchor-id="kumo-tabular">Kumo Tabular</h3>
+<p>The network, the default recipe, the output stage, the K/V cache, row and column chunking and the error-correcting output codes are all ported and graded against <code>structured-data-models</code> 0.2.1 (see <code>inst/parity/README.md</code>). Things worth knowing:</p>
+<ul>
+<li><strong>Numerical and categorical columns only.</strong> That is what <code>sdm</code>’s single-table model takes; <code>transform_dates</code> / <code>transform_text</code> turn dates and text into numbers first, as for the other backends. Columns are categorical only when declared: <code>sdm</code> does not infer low-cardinality numbers as categories, and neither does this port.</li>
+<li><strong>10 classes per pass.</strong> Above that each member runs error-correcting output codes, as the reference does: a random codebook splits the task into <code>T</code> ten-way sub-tasks (8 for 15 or 20 classes, 28 for 250) that run as one batch, so memory and time grow by <code>T</code>.</li>
+<li><strong>Classes absent from the training rows</strong> cannot be predicted; the reference drops them, and this package returns them with probability zero so every factor level has a column. The reference also leaves its probability columns in member 0’s rotated class order; here they are in level order.</li>
+<li><strong>The regression point estimate</strong> (<code>type = "mean"</code>) is the mean of the 999-quantile grid, which is what NVIDIA’s AutoGluon wrapper reports; <code>"median"</code> and <code>"quantiles"</code> read the same grid.</li>
+<li><strong>Not bit-identical across paths.</strong> The K/V cache, <code>row_chunk_size</code>, <code>col_chunk_size</code> and <code>save_peak_memory_factor</code> change batch shapes, and float32 rounds differently at different shapes: up to about 2e-6 on probabilities, the same size as the gap between the reference’s own <code>fit()</code> / <code>predict()</code> and its one-shot forward.</li>
+<li><strong>The random draws are libtorch’s.</strong> They match the reference on Apple arm64. On an Intel machine whose libtorch uses MKL’s Bernoulli stream the random signs could differ from the reference’s (not from run to run).</li>
+<li><strong>Medium and large are graded weight-free</strong> (key lists, and a tiny random network with their GQA and projection paths), and their memory estimates reuse small’s measured constants. Only small has been run end to end against the reference.</li>
+<li>Kumo Relational, NVIDIA’s multi-table model, is a different architecture and input; it is not part of this backend.</li>
+</ul>
 </section>
 <section id="tabpfn" class="level3">
 <h3 class="anchored" data-anchor-id="tabpfn">TabPFN</h3>

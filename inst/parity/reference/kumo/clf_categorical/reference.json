@@ -1,0 +1,22 @@
+{
+  "fixture": "clf_categorical",
+  "task": "classification",
+  "size": "small",
+  "torch_version": "2.15.0",
+  "sdm_version": "0.2.1",
+  "n_train": 200,
+  "n_test": 80,
+  "categorical_features": [
+    1,
+    3,
+    4
+  ],
+  "stages": [
+    "kumo_cells",
+    "kumo_col0",
+    "kumo_logits",
+    "kumo_reps",
+    "kumo_row0"
+  ],
+  "n_classes": 2
+}

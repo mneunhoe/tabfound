@@ -14,7 +14,7 @@ test_that("the catalogue resolves ids and family + task", {
   expect_true(all(m$task %in% c("classification", "regression", "both")))
   expect_setequal(unique(m$backend),
                   c("tabpfn", "tabpfn26", "tabpfn3", "tabpfn35",
-                    "tabicl", "tabfm", "mitra"))
+                    "tabicl", "tabfm", "mitra", "kumo"))
 
   # An exact id resolves without a task.
   expect_identical(tabfound:::.catalog_id("tabpfn-v2.5-classifier"),
@@ -67,6 +67,24 @@ test_that("the catalogue resolves ids and family + task", {
   expect_true(all(spec35 %in% m$id))
   for (id in spec35) expect_identical(tabfound:::.catalog_id(id), id)
   expect_true(all(m$backend[match(spec35, m$id)] == "tabpfn35"))
+  # Kumo Tabular: `"kumo-tabular"` is large, the reference's default,
+  # and each size has a family name of its own so it works with either
+  # task. All six pin the tag the reference loads.
+  expect_identical(tabfound:::.catalog_id("kumo-tabular", "classification"),
+                   "kumo-tabular-large-classifier")
+  expect_identical(tabfound:::.catalog_id("kumo-tabular", "regression"),
+                   "kumo-tabular-large-regressor")
+  for (sz in c("small", "medium", "large")) {
+    expect_identical(
+      tabfound:::.catalog_id(paste0("kumo-tabular-", sz), "regression"),
+      paste0("kumo-tabular-", sz, "-regressor"))
+  }
+  kumo <- tabfound:::.model_catalog()[grep("^kumo-", m$id, value = TRUE)]
+  expect_length(kumo, 6L)
+  for (e in kumo) {
+    expect_identical(e$revision, "v1.0.1")
+    expect_identical(e$file, sprintf("%s/%s.pt", e$model_size, e$head))
+  }
   # Anything not ours passes through as NULL, which is what lets a plain
   # path or Hub repo id reach the old code path untouched.
   expect_null(tabfound:::.catalog_id("/some/local/dir", "classification"))
@@ -249,6 +267,44 @@ test_that("the converter tells the two TabPFN architectures apart", {
     tabfound:::.convert_ckpt(wrong, ckpt, withr::local_tempdir(), py, quiet = TRUE),
     "Conversion failed"
   )
+})
+
+
+test_that("the Kumo converter derives the config and refuses a mislabel", {
+  # Kumo checkpoints carry no config, so everything the R side builds
+  # from comes out of the shape derivation; and the file names do not
+  # say the size, so the catalogue's head and size are cross-checked.
+  ckpt <- Sys.getenv("TABFOUND_KUMO_CLF_CKPT", unset = "")
+  skip_if(!nzchar(ckpt) || !file.exists(ckpt),
+          "TABFOUND_KUMO_CLF_CKPT not set to a local small/classifier.pt")
+  py <- tryCatch(tabfound:::.find_python(), error = function(e) NULL)
+  skip_if(is.null(py), "no Python with torch + safetensors")
+
+  dest <- withr::local_tempdir()
+  entry <- tabfound:::.model_catalog()[["kumo-tabular-small-classifier"]]
+  tabfound:::.convert_ckpt(entry, ckpt, dest, py, quiet = TRUE)
+
+  cfg <- read_model_config(file.path(dest, "config.json"))
+  expect_identical(cfg$arch, "kumo_tabular")
+  expect_identical(cfg$head, "classifier")
+  expect_identical(cfg$size, "small")
+  expect_identical(cfg$source_revision, "v1.0.1")
+  expect_equal(c(cfg$cell_channels, cfg$num_embedding_layers,
+                 cfg$num_inducing_points, cfg$icl_channels,
+                 cfg$num_icl_layers, cfg$num_icl_heads, cfg$num_classes),
+               c(128, 4, 128, 512, 12, 8, 10))
+  # The RoPE table is listed once per row block, query and key side.
+  expect_length(grep("inv_freq$", cfg$state_dict_keys), 8L)
+  expect_true(file.exists(resolve_artifacts(dest)$weights))
+
+  for (bad in list(list(head = "regressor"), list(model_size = "large"))) {
+    wrong <- utils::modifyList(entry, bad)
+    expect_error(
+      tabfound:::.convert_ckpt(wrong, ckpt, withr::local_tempdir(), py,
+                               quiet = TRUE),
+      "Conversion failed"
+    )
+  }
 })
 
 

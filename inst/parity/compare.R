@@ -506,6 +506,101 @@ parity_tabicl <- function(reference_dir, fixture_dir, fixture, label = fixture,
 }
 
 
+# The Kumo network on a fixture, called as `kumo_reference.py` calls
+# `sdm`'s: NaN kept, 0-based class codes or a population-SD standardized
+# target, the manifest's categorical columns flagged.
+# @keywords internal
+.bare_kumo <- function(ctx, fx, meta) {
+  x <- rbind(as.matrix(fx$x_train), as.matrix(fx$x_test))
+  storage.mode(x) <- "double"
+  clf <- identical(meta$task, "classification")
+  y <- as.numeric(fx$y_train)
+  sc <- NULL
+  if (!clf) {
+    # In float32, as the reference does it: the recipe never casts the
+    # regression target up.
+    y32 <- torch::torch_tensor(y, dtype = torch::torch_float())
+    m <- y32$mean(); s <- (y32 - m)$pow(2)$mean()$sqrt()
+    if (as.numeric(s) == 0) s <- torch::torch_ones_like(s)
+    y_t <- ((y32 - m) / s)$unsqueeze(1L)
+    sc <- list(mean = m, scale = s)
+  } else {
+    y_t <- torch::torch_tensor(matrix(as.integer(y), nrow = 1L),
+                               dtype = torch::torch_long())
+  }
+  mask <- seq_len(ncol(x)) %in% unlist(meta$categorical_features)
+  out <- torch::with_no_grad(
+    ctx$net(as_float_tensor(x, device = ctx$device)$unsqueeze(1L), y_t, mask)
+  )
+  test <- out[1, , ]
+  if (clf) {
+    n_cls <- as.integer(meta$n_classes)
+    as.matrix(torch::nnf_softmax(test[, 1:n_cls], dim = -1L)$cpu())
+  } else {
+    as.matrix((test * sc$scale + sc$mean)$cpu())
+  }
+}
+
+
+#' Run the Kumo Tabular backend against a stored Python reference
+#'
+#' @param reference_dir Directory written by `kumo_reference.py`.
+#' @param fixture_dir,fixture Parity fixture location and name.
+#' @param model_dir Converted Kumo artifacts of the size the reference
+#'   was cut from (`reference.json` records it).
+#' @keywords internal
+parity_kumo <- function(reference_dir, fixture_dir, fixture, label = fixture,
+                        model_dir,
+                        trace_dir = tempfile("tabfound-kumo-")) {
+  stopifnot(dir.exists(reference_dir))
+  meta <- jsonlite::fromJSON(file.path(reference_dir, "reference.json"))
+  fx   <- read_parity_fixture(fixture_dir, fixture)
+  dir.create(trace_dir, recursive = TRUE, showWarnings = FALSE)
+
+  rows <- list()
+  add <- function(stage, d, note = "") {
+    rows[[length(rows) + 1L]] <<- data.frame(
+      fixture = label, stage = stage, n = d$n,
+      max_abs = d$max_abs, max_rel = d$max_rel,
+      max_scaled = d$max_scaled %||% NA_real_,
+      note = note, stringsAsFactors = FALSE
+    )
+  }
+
+  old <- Sys.getenv("TABFOUND_DUMP_DIR", unset = NA)
+  Sys.setenv(TABFOUND_DUMP_DIR = trace_dir)
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("TABFOUND_DUMP_DIR")
+    else Sys.setenv(TABFOUND_DUMP_DIR = old)
+  }, add = TRUE)
+
+  ctx <- .bare_net(model_dir, "kumo", meta$task)
+  if (!identical(ctx$config$size, meta$size)) {
+    stop(sprintf("reference was cut from the %s model, but %s holds %s",
+                 meta$size, model_dir, ctx$config$size), call. = FALSE)
+  }
+  r_out <- .bare_kumo(ctx, fx, meta)
+  if (identical(meta$task, "classification")) {
+    py <- read_t(file.path(reference_dir, "final_probs.safetensors"))
+    add("net:probs", tensor_diff(r_out, py))
+  } else {
+    py <- read_t(file.path(reference_dir, "final_quantiles.safetensors"))
+    add("net:quantiles", tensor_diff(r_out, py))
+  }
+
+  for (nm in unlist(meta$stages)) {
+    r <- read_t(file.path(trace_dir, paste0(nm, ".safetensors")))
+    p <- read_t(file.path(reference_dir, paste0(nm, ".safetensors")))
+    if (is.null(r) || is.null(p)) next
+    d <- tensor_diff(r, p)
+    add(paste0("stage:", sub("^kumo_", "", nm)), d,
+        note = if (isTRUE(d$shape_ok)) "" else "SHAPE MISMATCH")
+  }
+
+  list(summary = do.call(rbind, rows), meta = meta, trace_dir = trace_dir)
+}
+
+
 #' Run the Mitra backend against a stored Python reference
 #'
 #' @param reference_dir Directory written by `mitra_reference.py`.
@@ -923,6 +1018,9 @@ parity_tolerances <- function() {
               "stage:col2", "stage:reps", "stage:logits",
               # TabICL stages.
               "stage:col",
+              # Kumo Tabular stages (`stage:reps` / `stage:logits` are
+              # shared with TabFM above). Same bounds as the TabFM ones.
+              "stage:cells", "stage:col0", "stage:row0",
               # Mitra stages. The quantile embedding and the packed
               # input are deterministic arithmetic and come out exact.
               "stage:quantile", "stage:embedded", "stage:encoded",
@@ -989,6 +1087,7 @@ parity_tolerances <- function() {
                 1e-5, 1e-4, 1e-4,
                 1e-6, 1e-4, 1e-4, 1e-4, 1e-4, 1e-3,
                 1e-4,
+                1e-4, 1e-4, 1e-4,
                 1e-6, 1e-6, 1e-4,
                 1e-6, 1e-5, 1e-5, 1e-4,
                 1e-3, 1e-3, 0, 0, 0, 0, 0, 1e-3, 0, 0, Inf, 0),
@@ -996,6 +1095,7 @@ parity_tolerances <- function() {
                 1e-4, 1e-4, 1e-4,
                 1e-6, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3,
                 1e-3,
+                1e-3, 1e-3, 1e-3,
                 1e-6, 1e-6, 1e-3,
                 1e-6, 1e-5, 1e-5, 1e-4,
                 1e-3, 1e-3, 0, 0, 2, 2, 0, 1e-3, 2, 0, Inf, 1.5),
@@ -1005,6 +1105,7 @@ parity_tolerances <- function() {
                    NA, NA, NA,
                    NA, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4,
                    1e-4,
+                   1e-4, 1e-4, 1e-4,
                    NA, NA, 1e-4,
                    NA, 1e-5, 1e-5, NA,
                    1e-4, 1e-4, NA, NA, 5e-5, 5e-5, 1e-4, 1e-4, 5e-5, NA, NA, NA),

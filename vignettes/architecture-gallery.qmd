@@ -19,7 +19,7 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
-## Six architectures, drawn from the models
+## Eight architectures, drawn from the models
 
 Every diagram below was produced by `plot_architecture()` from a loaded
 model — not drawn by hand and not transcribed from a paper. The stages
@@ -35,7 +35,7 @@ the thing that makes a tabular foundation model a tabular foundation
 model, and which a language model has no equivalent of: **an attention
 layer has an axis**. It can run down a column, across a row's features,
 or over the rows of the table. Each attention block carries that axis as
-a tag, and it is the single most useful thing to compare across the seven.
+a tag, and it is the single most useful thing to compare across the eight.
 
 ```{r}
 #| label: backends
@@ -58,7 +58,7 @@ extension picks the format — `.svg`, `.png` or `.pdf`.
 ### How these particular figures were made
 
 The vignette ships the SVGs rather than building them, because
-instantiating all seven networks at their published widths allocates
+instantiating all eight networks at their published widths allocates
 about 2 billion parameters and takes a couple of minutes — too much
 to pay on every `R CMD build`. The script that made them is
 [`inst/gallery/make-gallery.R`](https://github.com/marcel-neunhoeffer/tabfound/blob/main/inst/gallery/make-gallery.R):
@@ -74,7 +74,9 @@ diagram depends on the config, which fixes the architecture, and on the
 these figures depends on the values in the tensors, so a randomly
 initialised network reports exactly what the trained one does. It is
 also why the script needs no gigabytes on disk — for TabFM and Mitra it
-fetches a few hundred bytes of JSON and nothing else.
+fetches a few hundred bytes of JSON and nothing else, and for Kumo
+Tabular, whose publisher ships bare state dicts, it reads the config the
+package's converter derived and keeps in its architecture table.
 
 
 ## The three TabPFN generations
@@ -118,7 +120,7 @@ tokens and 4 × 128 = 512.
 ![TabPFN v3 classifier](figures/tabpfn3.svg){fig-alt="Stacked block
 diagram of the TabPFN v3 classifier"}
 
-## The other three architectures
+## The other four architectures
 
 ### TabICL v2
 
@@ -148,7 +150,7 @@ the TabFM classifier"}
 
 ### Mitra
 
-The flattest of the seven. No column stage, no row stage, no in-context
+The flattest of the eight. No column stage, no row stage, no in-context
 stage — one stack of twelve identical layers, each attending across
 rows and then across features, with an MLP after each. The target is
 feature column 1, and the input transform is a fixed quantile-rank
@@ -157,6 +159,32 @@ diagram reports no parameter count.
 
 ![Mitra classifier](figures/mitra.svg){fig-alt="Stacked block diagram of
 the Mitra classifier"}
+
+### Kumo Tabular
+
+NVIDIA's single-table in-context model, in three sizes of one
+architecture. The same three stages as TabICL, with the details moved:
+every cell is its own token (no grouping of features), embedded with its
+two neighbours in a wrapping window and with context-mean imputation
+plus a learned projection of what was missing, so the network sees
+missingness rather than a filled-in value. Four readout tokens join each
+row, and the column and row blocks alternate rather than running once
+each — a column block summarises a column's context rows through
+inducing points, a row block mixes the row's tokens with RoPE and a
+gated, length-aware query scale.
+
+![Kumo Tabular small classifier](figures/kumo.svg){fig-alt="Stacked block
+diagram of the Kumo Tabular small classifier"}
+
+Medium widens the cells to 256 and doubles the depth of the in-context
+stack, which then needs two things small does not: a projection from
+the 1024 readout numbers down to the in-context width of 512, and
+grouped-query attention, in which the test rows read the context through
+only two of the eight key/value heads. Large drops the projection again
+(1024 wide throughout) and keeps the grouping.
+
+![Kumo Tabular medium classifier](figures/kumo-medium.svg){fig-alt="Stacked
+block diagram of the Kumo Tabular medium classifier"}
 
 
 ## Opening a block up

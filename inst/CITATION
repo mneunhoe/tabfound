@@ -15,9 +15,9 @@ bibentry(
 )
 
 citFooter(
-  "Please also cite the model you use. For TabPFN and TabICL see below;",
-  "for TabFM and Mitra, see the model card on the Hugging Face repository",
-  "listed by list_models()."
+  "Please also cite the model you use. For TabPFN, TabICL and Kumo Tabular",
+  "see below; for TabFM and Mitra, see the model card on the Hugging Face",
+  "repository listed by list_models()."
 )
 
 bibentry(
@@ -41,4 +41,21 @@ bibentry(
                 person("Gaël", "Varoquaux"), person("Marine", "Le Morvan")),
   booktitle = "Proceedings of the 42nd International Conference on Machine Learning",
   year      = "2025"
+)
+
+bibentry(
+  bibtype = "Misc",
+  title   = "{NVIDIA} {Kumo} {Tabular} Sets a New Accuracy-Efficiency Frontier for Tabular Prediction",
+  author  = c(person("Jingang", "Qu"), person("Valter", "Hudovernik"),
+              person("Martin", "Jurkovic"), person("Cedric", "Lorenz"),
+              person("Akihiro", "Nitta"), person("Dmitry", "Gordeev"),
+              person("Federico", "Lopez"), person("Ramona", "Bendias"),
+              person("Gilberto", "Titericz Jr"),
+              person("Aleksandar S.", "Sokolovski"),
+              person("Isabel", "Hulseman"), person("Jure", "Leskovec"),
+              person("Matthias", "Fey")),
+  year    = "2026",
+  howpublished = "Hugging Face blog",
+  url     = "https://huggingface.co/blog/nvidia/kumo-tabular",
+  note    = "Weights: https://huggingface.co/nvidia/Kumo-Tabular"
 )

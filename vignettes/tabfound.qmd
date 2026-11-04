@@ -21,8 +21,8 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## What this is
 
-Six open-weight tabular foundation models — four distinct architectures,
-three generations of one of them — behind one R interface. None needs a
+Eight open-weight tabular foundation models — five distinct architectures,
+four generations of one of them — behind one R interface. None needs a
 Python runtime at predict time; the forward passes are pure R `torch`.
 
 ```{r}
@@ -32,14 +32,15 @@ list_backends()
 ```
 
 ```
-      name                                              description             parity
-1    mitra              Mitra 2-D attention transformer (AutoGluon)     autogluon mitra
-2    tabfm TabFM 1.0.0 column/row/ICL transformer (Google Research)        tabfm (PyPI)
-3   tabicl        TabICL v2 column/row/ICL transformer (soda-inria)       tabicl (PyPI)
-4   tabpfn           TabPFN v2 per-feature transformer (Prior-Labs)       tabpfn (PyPI)
-5 tabpfn26                                 TabPFN v2.6 (Prior-Labs) tabpfn 8.2.0 (PyPI)
-6  tabpfn3                                   TabPFN v3 (Prior-Labs) tabpfn 8.2.0 (PyPI)
-7 tabpfn35                      TabPFN v3.5, multitask (Prior-Labs) tabpfn 9.0.0 (PyPI)
+      name                                                       description                              parity
+1     kumo NVIDIA Kumo Tabular (small/medium/large) cell/row/ICL transformer structured-data-models 0.2.1 (PyPI)
+2    mitra                       Mitra 2-D attention transformer (AutoGluon)                     autogluon mitra
+3    tabfm          TabFM 1.0.0 column/row/ICL transformer (Google Research)                        tabfm (PyPI)
+4   tabicl                 TabICL v2 column/row/ICL transformer (soda-inria)                       tabicl (PyPI)
+5   tabpfn                    TabPFN v2 per-feature transformer (Prior-Labs)                       tabpfn (PyPI)
+6 tabpfn26                                          TabPFN v2.6 (Prior-Labs)                 tabpfn 8.2.0 (PyPI)
+7  tabpfn3                                            TabPFN v3 (Prior-Labs)                 tabpfn 8.2.0 (PyPI)
+8 tabpfn35                               TabPFN v3.5, multitask (Prior-Labs)                 tabpfn 9.0.0 (PyPI)
 ```
 
 The four TabPFN generations are separate backends rather than options on
@@ -47,7 +48,10 @@ one, because they are separate architectures: v2.6 moved the
 preprocessing inside the network, v3 replaced the decoder as well, and
 v3.5 replaced the cell embedder and folded both heads into one
 checkpoint.
-Each is registered independently and graded independently.
+Each is registered independently and graded independently. Kumo Tabular
+goes the other way: one backend for three sizes of the same architecture
+(small, medium and large, 27 M to 214 M parameters), picked by model
+name.
 
 The `parity` column is the point of the package: each backend is checked
 end-to-end against the reference Python implementation it was ported
@@ -246,8 +250,10 @@ TabFM and Mitra ship `model.safetensors` + `config.json` directly, so
 their download is a plain fetch. **TabPFN and TabICL publish PyTorch
 pickles**, which R cannot read — the checkpoints are nested Python dicts
 holding a state dict alongside hyperparameters, and R's torch bindings
-reject them outright. Converting those needs a Python with `torch` and
-`safetensors`, once:
+reject them outright. **Kumo Tabular** publishes bare PyTorch state
+dicts (`.pt`), which R cannot read either, and no architecture config at
+all; its converter derives the config from the tensor shapes. Converting
+any of these needs a Python with `torch` and `safetensors`, once:
 
 ```{r}
 #| eval: false
@@ -343,7 +349,8 @@ models <- c(tabpfn  = "tabpfn-v2.5-classifier",
             tabpfn3 = "tabpfn-v3-classifier",
             tabicl  = "tabicl-v2-classifier",
             mitra   = "mitra-classifier",
-            tabfm   = "tabfm-1.0.0-classifier")
+            tabfm   = "tabfm-1.0.0-classifier",
+            kumo    = "kumo-tabular-small-classifier")
 
 for (nm in names(models)) {
   fit <- tabfound(Species ~ ., data = iris[train, ], model = models[[nm]])
@@ -361,13 +368,15 @@ Measured on this split (100 train / 50 test), CPU, macOS/arm64:
 | `tabicl` | 0.960 | 27.6 M | 0.3 s | 0.10 s |
 | `mitra`  | 0.960 | 75.7 M | 0.4 s | 0.16 s |
 | `tabfm`  | 0.960 | 1639.4 M | 7.1 s | 0.68 s |
+| `kumo` (small) | 0.980 | 27.5 M | 1.4 s | 0.83 s |
 
 "fit" here is almost entirely the cost of loading weights off disk;
 TabFM's 7 seconds is 6.5 GB of float32. On a problem this small the
 accuracies are one or two test rows apart and the ranking should not be
 read as meaningful — `iris` is a 150-row demonstration of the API, not a
-benchmark. (`tabpfn26` is not in the table because it was not run for
-this vignette; it is graded in `inst/parity/` like the rest.)
+benchmark. Kumo's predict time is its default ensemble of 8 members, each
+a full forward pass. (`tabpfn26` is not in the table because it was not
+run for this vignette; it is graded in `inst/parity/` like the rest.)
 
 ## Regression: `cars`
 
@@ -388,11 +397,12 @@ head(predict(fit, cars[ctest, ]), 3)
 The outcome is numeric, so `mode` is inferred as regression and the
 prediction column is `.pred`.
 
-Comparing the four against `lm()`:
+Comparing five against `lm()`:
 
 | model | RMSE |
 |---|---:|
 | `lm(dist ~ speed)` | **18.57** |
+| `kumo` (small) | 19.66 |
 | `tabpfn` | 19.97 |
 | `mitra`  | 20.13 |
 | `tabfm`  | 21.35 |
@@ -456,6 +466,11 @@ fit <- tabfound(dist ~ speed, data = cars[ctrain, ],
 dim(predict(fit, cars[ctest, ], type = "grid"))   # 15 x 999
 ```
 
+**Kumo Tabular** predicts the same 999 levels, per ensemble member, and
+combines members level by level with a trimmed mean; its `type = "mean"`
+is the mean of that grid, the point estimate NVIDIA's own benchmark
+wrapper reports.
+
 **TabFM** and **Mitra** emit a single value per row. Asking them for
 quantiles is an error rather than a fabrication:
 
@@ -513,6 +528,7 @@ actually handle:
 |---|---|---|
 | `tabpfn`, `tabpfn26`, `tabpfn3`, `tabpfn35` | encodes an explicit is-missing indicator | `pass` |
 | `tabfm` | maps it to a sentinel value | `pass` |
+| `kumo` | imputes the training rows' column mean inside the network and adds a learned embedding of which cells were missing | `pass` |
 | `tabicl` | propagates it — you get `NaN` predictions | `impute` |
 | `mitra` | **silently deletes the whole column** | `impute` |
 
@@ -613,7 +629,7 @@ clf <- tabular_classifier("tabpfn-v2.5-classifier",
 ```
 
 `kv_cache` works on every backend; `save_peak_memory_factor` on
-`tabpfn26`, `tabpfn3` and `tabpfn35` only. Asking a backend for a path it does not
+`tabpfn26`, `tabpfn3`, `tabpfn35` and `kumo` only. Asking a backend for a path it does not
 have is an error rather than a silent no-op. Both are off by default.
 
 **`kv_cache`** conditions on the training rows once per `predict()` call
@@ -647,8 +663,12 @@ two paths computing the same sum grouped differently — float32 rounding,
 around 1e-06 of the logit scale. Mitra's support set is never told the
 query rows exist, so its cached predictions are *bit-identical*; the
 catch there is memory, because it has no multi-query path and every
-attention head has to be kept. `print()` on any of these caches reports
-how large it got.
+attention head has to be kept. **Kumo Tabular** caches the training
+rows' column means, each column block's inducing summary and each ICL
+layer's key/values (cut to the two heads the test rows use on medium and
+large); its cached predictions differ by float32 rounding, as the
+reference's own `fit()` / `predict()` split does from its one-shot
+forward. `print()` on any of these caches reports how large it got.
 
 **v2.6 can.** It moved two masks — the constant-column mask and the
 within-group informative mask — to a fit over train *and* test. Building
@@ -804,6 +824,14 @@ hierarchical path; Mitra's fine-tuning, which AutoGluon does by default
 and an inference-only package cannot — so Mitra's predictions match a
 `MitraClassifier(fine_tune = False)`, not the out-of-the-box one.
 
+**Kumo Tabular** has the full `sdm` recipe (per-member numerical
+transforms, random signs, class shifts, column shuffles, count columns
+for high-cardinality categoricals), the trimmed-mean output stage, the
+K/V cache, row and column chunking, and the error-correcting output codes
+it uses past 10 classes, with the random draws replayed from the
+reference's own generator stream. Not ported: Kumo Relational (a
+different, multi-table model).
+
 ## Reproducing this {#reproducing-this}
 
 Every model named in this vignette is fetched the same way. This is the
@@ -821,13 +849,15 @@ download_model("tabicl-v2-classifier")
 download_model("tabicl-v2-regressor")
 download_model("mitra-classifier")
 download_model("tabfm-1.0.0-classifier")    # ~6.6 GB
+download_model("kumo-tabular-small-classifier")
+download_model("kumo-tabular-small-regressor")
 
 list_models()   # confirm what landed, and where
 ```
 
-TabPFN and TabICL are converted on the way in, so
+TabPFN, TabICL and Kumo Tabular are converted on the way in, so
 `options(tabfound.python = )` has to point at an interpreter with `torch`
-and `safetensors` for those two. Skip this block entirely and each model
+and `safetensors` for those. Skip this block entirely and each model
 asks on first use instead.
 
 Timings above are single-threaded CPU on macOS/arm64 with R 4.5.2 and
@@ -842,6 +872,7 @@ Rscript inst/parity/run-parity.R tabpfn35
 Rscript inst/parity/run-parity.R tabfm
 Rscript inst/parity/run-parity.R tabicl
 Rscript inst/parity/run-parity.R mitra
+Rscript inst/parity/run-parity.R kumo
 ```
 
 The two capability vignettes reproduce the same way and add `mice`,
@@ -851,7 +882,8 @@ The two capability vignettes reproduce the same way and add `mice`,
 
 The package is MIT. The weights are not the package, and carry their own
 terms: TabPFN v2.5 and TabICL under their publishers' licences, Mitra
-under Apache-2.0, and two sets that are **non-commercial** — TabFM's
+under Apache-2.0, Kumo Tabular under the permissive OpenMDW-1.1, and two
+sets that are **non-commercial** — TabFM's
 weights (separate from its Apache-2.0 source) and **TabPFN v2.6 and v3**,
 which permit research, evaluation and internal benchmarking but not
 commercial or production use. `list_models()` prints the licence for

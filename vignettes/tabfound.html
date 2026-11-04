@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-09-23">
+<meta name="dcterms.date" content="2026-11-04">
 
 <title>Tabular foundation models with tabfound</title>
 <style>
@@ -139,7 +139,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">September 23, 2026</p>
+      <p class="date">November 4, 2026</p>
     </div>
   </div>
   
@@ -153,20 +153,21 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <section id="what-this-is" class="level2">
 <h2 class="anchored" data-anchor-id="what-this-is">What this is</h2>
-<p>Six open-weight tabular foundation models — four distinct architectures, three generations of one of them — behind one R interface. None needs a Python runtime at predict time; the forward passes are pure R <code>torch</code>.</p>
+<p>Eight open-weight tabular foundation models — five distinct architectures, four generations of one of them — behind one R interface. None needs a Python runtime at predict time; the forward passes are pure R <code>torch</code>.</p>
 <div class="cell">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">list_backends</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<pre><code>      name                                              description             parity
-1    mitra              Mitra 2-D attention transformer (AutoGluon)     autogluon mitra
-2    tabfm TabFM 1.0.0 column/row/ICL transformer (Google Research)        tabfm (PyPI)
-3   tabicl        TabICL v2 column/row/ICL transformer (soda-inria)       tabicl (PyPI)
-4   tabpfn           TabPFN v2 per-feature transformer (Prior-Labs)       tabpfn (PyPI)
-5 tabpfn26                                 TabPFN v2.6 (Prior-Labs) tabpfn 8.2.0 (PyPI)
-6  tabpfn3                                   TabPFN v3 (Prior-Labs) tabpfn 8.2.0 (PyPI)
-7 tabpfn35                      TabPFN v3.5, multitask (Prior-Labs) tabpfn 9.0.0 (PyPI)</code></pre>
-<p>The four TabPFN generations are separate backends rather than options on one, because they are separate architectures: v2.6 moved the preprocessing inside the network, v3 replaced the decoder as well, and v3.5 replaced the cell embedder and folded both heads into one checkpoint. Each is registered independently and graded independently.</p>
+<pre><code>      name                                                       description                              parity
+1     kumo NVIDIA Kumo Tabular (small/medium/large) cell/row/ICL transformer structured-data-models 0.2.1 (PyPI)
+2    mitra                       Mitra 2-D attention transformer (AutoGluon)                     autogluon mitra
+3    tabfm          TabFM 1.0.0 column/row/ICL transformer (Google Research)                        tabfm (PyPI)
+4   tabicl                 TabICL v2 column/row/ICL transformer (soda-inria)                       tabicl (PyPI)
+5   tabpfn                    TabPFN v2 per-feature transformer (Prior-Labs)                       tabpfn (PyPI)
+6 tabpfn26                                          TabPFN v2.6 (Prior-Labs)                 tabpfn 8.2.0 (PyPI)
+7  tabpfn3                                            TabPFN v3 (Prior-Labs)                 tabpfn 8.2.0 (PyPI)
+8 tabpfn35                               TabPFN v3.5, multitask (Prior-Labs)                 tabpfn 9.0.0 (PyPI)</code></pre>
+<p>The four TabPFN generations are separate backends rather than options on one, because they are separate architectures: v2.6 moved the preprocessing inside the network, v3 replaced the decoder as well, and v3.5 replaced the cell embedder and folded both heads into one checkpoint. Each is registered independently and graded independently. Kumo Tabular goes the other way: one backend for three sizes of the same architecture (small, medium and large, 27 M to 214 M parameters), picked by model name.</p>
 <p>The <code>parity</code> column is the point of the package: each backend is checked end-to-end against the reference Python implementation it was ported from, stage by stage. See <code>inst/parity/</code> for the numbers.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
@@ -309,7 +310,7 @@ Download it now? (yes/No/cancel)</code></pre>
 </section>
 <section id="what-conversion-needs" class="level3">
 <h3 class="anchored" data-anchor-id="what-conversion-needs">What conversion needs</h3>
-<p>TabFM and Mitra ship <code>model.safetensors</code> + <code>config.json</code> directly, so their download is a plain fetch. <strong>TabPFN and TabICL publish PyTorch pickles</strong>, which R cannot read — the checkpoints are nested Python dicts holding a state dict alongside hyperparameters, and R’s torch bindings reject them outright. Converting those needs a Python with <code>torch</code> and <code>safetensors</code>, once:</p>
+<p>TabFM and Mitra ship <code>model.safetensors</code> + <code>config.json</code> directly, so their download is a plain fetch. <strong>TabPFN and TabICL publish PyTorch pickles</strong>, which R cannot read — the checkpoints are nested Python dicts holding a state dict alongside hyperparameters, and R’s torch bindings reject them outright. <strong>Kumo Tabular</strong> publishes bare PyTorch state dicts (<code>.pt</code>), which R cannot read either, and no architecture config at all; its converter derives the config from the tensor shapes. Converting any of these needs a Python with <code>torch</code> and <code>safetensors</code>, once:</p>
 <div class="cell">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">options</span>(<span class="at">tabfound.python =</span> <span class="st">"~/.venvs/tabfound/bin/python"</span>)   <span class="co"># or TABFOUND_PYTHON</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
@@ -373,13 +374,14 @@ Download it now? (yes/No/cancel)</code></pre>
 <span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabpfn3 =</span> <span class="st">"tabpfn-v3-classifier"</span>,</span>
 <span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabicl  =</span> <span class="st">"tabicl-v2-classifier"</span>,</span>
 <span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>            <span class="at">mitra   =</span> <span class="st">"mitra-classifier"</span>,</span>
-<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabfm   =</span> <span class="st">"tabfm-1.0.0-classifier"</span>)</span>
-<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (nm <span class="cf">in</span> <span class="fu">names</span>(models)) {</span>
-<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>  fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris[train, ], <span class="at">model =</span> models[[nm]])</span>
-<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>  acc <span class="ot">&lt;-</span> <span class="fu">mean</span>(<span class="fu">predict</span>(fit, iris[test, ])<span class="sc">$</span>.pred_class <span class="sc">==</span> iris<span class="sc">$</span>Species[test])</span>
-<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">"%-8s accuracy %.3f</span><span class="sc">\n</span><span class="st">"</span>, nm, acc))</span>
-<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>            <span class="at">tabfm   =</span> <span class="st">"tabfm-1.0.0-classifier"</span>,</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>            <span class="at">kumo    =</span> <span class="st">"kumo-tabular-small-classifier"</span>)</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> (nm <span class="cf">in</span> <span class="fu">names</span>(models)) {</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>  fit <span class="ot">&lt;-</span> <span class="fu">tabfound</span>(Species <span class="sc">~</span> ., <span class="at">data =</span> iris[train, ], <span class="at">model =</span> models[[nm]])</span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>  acc <span class="ot">&lt;-</span> <span class="fu">mean</span>(<span class="fu">predict</span>(fit, iris[test, ])<span class="sc">$</span>.pred_class <span class="sc">==</span> iris<span class="sc">$</span>Species[test])</span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">"%-8s accuracy %.3f</span><span class="sc">\n</span><span class="st">"</span>, nm, acc))</span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Measured on this split (100 train / 50 test), CPU, macOS/arm64:</p>
 <table class="caption-top table">
@@ -428,9 +430,16 @@ Download it now? (yes/No/cancel)</code></pre>
 <td style="text-align: right;">7.1 s</td>
 <td style="text-align: right;">0.68 s</td>
 </tr>
+<tr class="even">
+<td><code>kumo</code> (small)</td>
+<td style="text-align: right;">0.980</td>
+<td style="text-align: right;">27.5 M</td>
+<td style="text-align: right;">1.4 s</td>
+<td style="text-align: right;">0.83 s</td>
+</tr>
 </tbody>
 </table>
-<p>“fit” here is almost entirely the cost of loading weights off disk; TabFM’s 7 seconds is 6.5 GB of float32. On a problem this small the accuracies are one or two test rows apart and the ranking should not be read as meaningful — <code>iris</code> is a 150-row demonstration of the API, not a benchmark. (<code>tabpfn26</code> is not in the table because it was not run for this vignette; it is graded in <code>inst/parity/</code> like the rest.)</p>
+<p>“fit” here is almost entirely the cost of loading weights off disk; TabFM’s 7 seconds is 6.5 GB of float32. On a problem this small the accuracies are one or two test rows apart and the ranking should not be read as meaningful — <code>iris</code> is a 150-row demonstration of the API, not a benchmark. Kumo’s predict time is its default ensemble of 8 members, each a full forward pass. (<code>tabpfn26</code> is not in the table because it was not run for this vignette; it is graded in <code>inst/parity/</code> like the rest.)</p>
 </section>
 </section>
 <section id="regression-cars" class="level2">
@@ -446,7 +455,7 @@ Download it now? (yes/No/cancel)</code></pre>
 <span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">predict</span>(fit, cars[ctest, ]), <span class="dv">3</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The outcome is numeric, so <code>mode</code> is inferred as regression and the prediction column is <code>.pred</code>.</p>
-<p>Comparing the four against <code>lm()</code>:</p>
+<p>Comparing five against <code>lm()</code>:</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
@@ -460,18 +469,22 @@ Download it now? (yes/No/cancel)</code></pre>
 <td style="text-align: right;"><strong>18.57</strong></td>
 </tr>
 <tr class="even">
+<td><code>kumo</code> (small)</td>
+<td style="text-align: right;">19.66</td>
+</tr>
+<tr class="odd">
 <td><code>tabpfn</code></td>
 <td style="text-align: right;">19.97</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>mitra</code></td>
 <td style="text-align: right;">20.13</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>tabfm</code></td>
 <td style="text-align: right;">21.35</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>tabicl</code></td>
 <td style="text-align: right;">21.41</td>
 </tr>
@@ -519,6 +532,7 @@ Download it now? (yes/No/cancel)</code></pre>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>                <span class="at">model =</span> <span class="st">"tabicl-v2-regressor"</span>)</span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(<span class="fu">predict</span>(fit, cars[ctest, ], <span class="at">type =</span> <span class="st">"grid"</span>))   <span class="co"># 15 x 999</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
+<p><strong>Kumo Tabular</strong> predicts the same 999 levels, per ensemble member, and combines members level by level with a trimmed mean; its <code>type = "mean"</code> is the mean of that grid, the point estimate NVIDIA’s own benchmark wrapper reports.</p>
 <p><strong>TabFM</strong> and <strong>Mitra</strong> emit a single value per row. Asking them for quantiles is an error rather than a fabrication:</p>
 <div class="cell">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb26"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="fu">predict</span>(fit_tabfm, cars[ctest, ], <span class="at">type =</span> <span class="st">"quantiles"</span>)</span>
@@ -579,11 +593,16 @@ Download it now? (yes/No/cancel)</code></pre>
 <td><code>pass</code></td>
 </tr>
 <tr class="odd">
+<td><code>kumo</code></td>
+<td>imputes the training rows’ column mean inside the network and adds a learned embedding of which cells were missing</td>
+<td><code>pass</code></td>
+</tr>
+<tr class="even">
 <td><code>tabicl</code></td>
 <td>propagates it — you get <code>NaN</code> predictions</td>
 <td><code>impute</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>mitra</code></td>
 <td><strong>silently deletes the whole column</strong></td>
 <td><code>impute</code></td>
@@ -633,7 +652,7 @@ Download it now? (yes/No/cancel)</code></pre>
 <span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>                          <span class="at">kv_cache =</span> <span class="cn">TRUE</span>,             <span class="co"># condition once</span></span>
 <span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>                          <span class="at">save_peak_memory_factor =</span> <span class="dv">8</span>) <span class="co"># smaller transients</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p><code>kv_cache</code> works on every backend; <code>save_peak_memory_factor</code> on <code>tabpfn26</code>, <code>tabpfn3</code> and <code>tabpfn35</code> only. Asking a backend for a path it does not have is an error rather than a silent no-op. Both are off by default.</p>
+<p><code>kv_cache</code> works on every backend; <code>save_peak_memory_factor</code> on <code>tabpfn26</code>, <code>tabpfn3</code>, <code>tabpfn35</code> and <code>kumo</code> only. Asking a backend for a path it does not have is an error rather than a silent no-op. Both are off by default.</p>
 <p><strong><code>kv_cache</code></strong> conditions on the training rows once per <code>predict()</code> call and reuses that for every chunk and every ensemble member. On TabPFN the training rows reach the test rows through exactly two channels — the key/value projections of the between-items attention, and the preprocessing statistics fitted on the training rows — and both are computed once. Measured here on 1500 train / 3000 test rows, 10 columns:</p>
 <table class="caption-top table">
 <thead>
@@ -667,7 +686,7 @@ Download it now? (yes/No/cancel)</code></pre>
 </table>
 <p>The generations and architectures differ in what the cache costs you, and it is worth knowing which one you are on.</p>
 <p><strong>v2.5 and v3 pay nothing.</strong> Every statistic their networks fit comes from the training rows alone, so conditioning once cannot answer a different question. What remains is float32 reduction order — on v2.5 here, not even that.</p>
-<p><strong>TabICL, TabFM and Mitra pay nothing either</strong>, though each holds a different shape of thing. TabICL slices its context down to the labelled rows, so it caches one inducing summary per column block plus one key/value pair per ICL block. TabFM masks instead of slicing and runs the column stage twice, so it caches two sets of summaries plus its ICL key/values; masked positions contribute exactly zero, which leaves the two paths computing the same sum grouped differently — float32 rounding, around 1e-06 of the logit scale. Mitra’s support set is never told the query rows exist, so its cached predictions are <em>bit-identical</em>; the catch there is memory, because it has no multi-query path and every attention head has to be kept. <code>print()</code> on any of these caches reports how large it got.</p>
+<p><strong>TabICL, TabFM and Mitra pay nothing either</strong>, though each holds a different shape of thing. TabICL slices its context down to the labelled rows, so it caches one inducing summary per column block plus one key/value pair per ICL block. TabFM masks instead of slicing and runs the column stage twice, so it caches two sets of summaries plus its ICL key/values; masked positions contribute exactly zero, which leaves the two paths computing the same sum grouped differently — float32 rounding, around 1e-06 of the logit scale. Mitra’s support set is never told the query rows exist, so its cached predictions are <em>bit-identical</em>; the catch there is memory, because it has no multi-query path and every attention head has to be kept. <strong>Kumo Tabular</strong> caches the training rows’ column means, each column block’s inducing summary and each ICL layer’s key/values (cut to the two heads the test rows use on medium and large); its cached predictions differ by float32 rounding, as the reference’s own <code>fit()</code> / <code>predict()</code> split does from its one-shot forward. <code>print()</code> on any of these caches reports how large it got.</p>
 <p><strong>v2.6 can.</strong> It moved two masks — the constant-column mask and the within-group informative mask — to a fit over train <em>and</em> test. Building a cache fits them on the training rows alone. Where those agree a cached prediction is bit-identical; where they don’t it is a genuinely different prediction. The clearest case is a column constant across the training rows but varying across the test rows: uncached it survives and is used, cached it was dropped before the cache existed. That is the reference’s own behaviour on the same fixtures, and the parity harness reports it one by one rather than averaging it away.</p>
 <p><strong><code>save_peak_memory_factor</code></strong> splits each sublayer’s work into that many chunks, shrinking the attention score matrix each one materialises. It buys peak memory, not speed — on the run above it cost about 25% in wall time — and it is bit-identical on v2.6 because it only reorganises work that was already independent. On v3 it is not quite: chunking changes the batch shapes the attention kernel sees, and the difference stays at float32 noise (~4e-06 of the logits’ own scale here).</p>
 </section>
@@ -738,6 +757,7 @@ Download it now? (yes/No/cancel)</code></pre>
 <p>Every <strong>network</strong> is complete and verified against its reference, and so is the <strong>sklearn-style wrapper</strong> around each one: the preprocessing pipeline, the ensemble of transformed views, and the K/V cache. What is missing is specific rather than wholesale.</p>
 <p><strong>The three TabPFN backends</strong> have ensembling (feature shuffling, class rotation, preprocessing variants, SVD and polynomial blocks), the K/V cache and the chunked forward, all graded — the ensemble against a dumped reference config directory, the cache and the chunking against both the reference’s own run of the same mechanism and this package’s plain forward.</p>
 <p><strong>TabICL, TabFM and Mitra</strong> have their preprocessing pipelines, their ensemble generators (Latin-square or random feature permutations, class shifts, per-member normalisation) and a K/V cache each. What they do not have: TabFM’s heavier <code>ensemble()</code> preset (feature crosses, SVD features, NNLS weights, probability calibration) and its <code>TransformToNumerical</code> datetime handling; TabICL’s many-class hierarchical path; Mitra’s fine-tuning, which AutoGluon does by default and an inference-only package cannot — so Mitra’s predictions match a <code>MitraClassifier(fine_tune = False)</code>, not the out-of-the-box one.</p>
+<p><strong>Kumo Tabular</strong> has the full <code>sdm</code> recipe (per-member numerical transforms, random signs, class shifts, column shuffles, count columns for high-cardinality categoricals), the trimmed-mean output stage, the K/V cache, row and column chunking, and the error-correcting output codes it uses past 10 classes, with the random draws replayed from the reference’s own generator stream. Not ported: Kumo Relational (a different, multi-table model).</p>
 </section>
 <section id="reproducing-this" class="level2">
 <h2 class="anchored" data-anchor-id="reproducing-this">Reproducing this</h2>
@@ -753,10 +773,12 @@ Download it now? (yes/No/cancel)</code></pre>
 <span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabicl-v2-regressor"</span>)</span>
 <span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"mitra-classifier"</span>)</span>
 <span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"tabfm-1.0.0-classifier"</span>)    <span class="co"># ~6.6 GB</span></span>
-<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a><span class="fu">list_models</span>()   <span class="co"># confirm what landed, and where</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"kumo-tabular-small-classifier"</span>)</span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a><span class="fu">download_model</span>(<span class="st">"kumo-tabular-small-regressor"</span>)</span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-14"><a href="#cb38-14" aria-hidden="true" tabindex="-1"></a><span class="fu">list_models</span>()   <span class="co"># confirm what landed, and where</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>TabPFN and TabICL are converted on the way in, so <code>options(tabfound.python = )</code> has to point at an interpreter with <code>torch</code> and <code>safetensors</code> for those two. Skip this block entirely and each model asks on first use instead.</p>
+<p>TabPFN, TabICL and Kumo Tabular are converted on the way in, so <code>options(tabfound.python = )</code> has to point at an interpreter with <code>torch</code> and <code>safetensors</code> for those. Skip this block entirely and each model asks on first use instead.</p>
 <p>Timings above are single-threaded CPU on macOS/arm64 with R 4.5.2 and <code>torch</code> 0.16.3, against TabPFN v2.5 and v3. The parity harness that backs the <code>parity</code> column lives in <code>inst/parity/</code>; run it with</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb39"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn</span>
 <span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn26</span>
@@ -764,12 +786,13 @@ Download it now? (yes/No/cancel)</code></pre>
 <span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabpfn35</span>
 <span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabfm</span>
 <span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R tabicl</span>
-<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R mitra</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R mitra</span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/parity/run-parity.R kumo</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>The two capability vignettes reproduce the same way and add <code>mice</code>, <code>Amelia</code> and <code>synthpop</code>; neither needs any weights beyond TabPFN v2.5.</p>
 </section>
 <section id="licences" class="level2">
 <h2 class="anchored" data-anchor-id="licences">Licences</h2>
-<p>The package is MIT. The weights are not the package, and carry their own terms: TabPFN v2.5 and TabICL under their publishers’ licences, Mitra under Apache-2.0, and two sets that are <strong>non-commercial</strong> — TabFM’s weights (separate from its Apache-2.0 source) and <strong>TabPFN v2.6 and v3</strong>, which permit research, evaluation and internal benchmarking but not commercial or production use. <code>list_models()</code> prints the licence for each. Check before you deploy.</p>
+<p>The package is MIT. The weights are not the package, and carry their own terms: TabPFN v2.5 and TabICL under their publishers’ licences, Mitra under Apache-2.0, Kumo Tabular under the permissive OpenMDW-1.1, and two sets that are <strong>non-commercial</strong> — TabFM’s weights (separate from its Apache-2.0 source) and <strong>TabPFN v2.6 and v3</strong>, which permit research, evaluation and internal benchmarking but not commercial or production use. <code>list_models()</code> prints the licence for each. Check before you deploy.</p>
 </section>
 
 </main>

@@ -16,11 +16,15 @@ tabfm_reference.py       runs the PyPI `tabfm` network, dumps per-stage outputs
 tabicl_reference.py      runs the PyPI `tabicl` network, dumps per-stage outputs
 tabicl_e2e_reference.py  runs `TabICLClassifier` / `TabICLRegressor` end to end
 mitra_reference.py       runs AutoGluon's `Tab2D`, dumps per-stage outputs
+kumo_reference.py        runs `sdm`'s bare Kumo Tabular network, dumps per-stage outputs
 transforms_reference.py  pins the individual column transforms (no weights needed)
 transforms/              its output -- small, and ships with the package
 ensemble_reference.py    pins the wrapper layer: preprocessing + ensembling
 ensemble/                its output -- also ships with the package
 layers_reference.py      pins the shared transformer layers (no weights needed)
+kumo_layers_reference.py pins the Kumo blocks and two tiny Kumo networks (no weights)
+kumo_ensemble_reference.py pins the Kumo recipe's members and output reduction (no weights)
+kumo_e2e_reference.py    runs `sdm.models.KumoTabular` end to end (small checkpoints)
 layers/                  its output -- also ships with the package
 compare.R                staged comparison + tolerances
 run-parity.R             driver
@@ -63,6 +67,9 @@ checkout:
 | `TABFOUND_TABICL_CLF_CKPT` / `_REG_CKPT` | raw `.ckpt`, only for `--regenerate` |
 | `TABFOUND_MITRA_CLF_DIR` / `_REG_DIR` | Mitra Hub snapshots |
 | `TABFOUND_MITRA_SHIM` | directory holding the `mitrapkg` shim, only for `--regenerate` |
+| `TABFOUND_KUMO_CLF_DIR` / `_REG_DIR` | converted Kumo Tabular **small** artifacts |
+| `TABFOUND_KUMO_CLF_CKPT` / `_REG_CKPT` | raw `small/{classifier,regressor}.pt`, only for `--regenerate` |
+| `TABFOUND_REF_PYTHON_KUMO` | python with `structured-data-models` (default `.venvs/sdm/bin/python`) |
 | `TABFOUND_REF_PYTHON` | python with the reference packages (default `.venvs/ref/bin/python`) |
 
 Set up the reference environment with:
@@ -282,7 +289,7 @@ a prediction; the second is the same rounding, so neither can the
 second. The comparisons align by method and compare after the narrowing
 rather than pretending the differences are not there.
 
-## Five backends, two stagings
+## Six architectures, two stagings
 
 The staging follows whatever the model's own structure makes bisectable.
 
@@ -297,7 +304,8 @@ handful of modules, so they are staged by module — `stage:cell`,
 `stage:col1`, `stage:row1`, `stage:col2`, `stage:reps`, `stage:logits`
 for TabFM; `stage:col`, `stage:reps`, `stage:logits` for TabICL;
 `stage:quantile`, `stage:embedded`, `stage:encoded`, `stage:logits` for
-Mitra — plus the final prediction. Both sides dump the same tensors: Python via forward hooks,
+Mitra; `stage:cells`, `stage:col0`, `stage:row0`, `stage:reps`,
+`stage:logits` for Kumo Tabular — plus the final prediction. Both sides dump the same tensors: Python via forward hooks,
 R via the `TABFOUND_DUMP_DIR` hook built into the model.
 
 Both also get a *layer-level* check that needs no checkpoint at all
@@ -517,6 +525,64 @@ R torch's float32 would measure the dtype, not the port.
   network has no missing-value handling of its own, so unimputed NaN
   propagates to NaN logits. That behaviour is pinned by a test instead.
 
+### Kumo Tabular (small) vs `structured-data-models` 0.2.1 / torch 2.15.0
+
+```
+24/24 checks within tolerance
+```
+
+- All 328 tensors of each small checkpoint map onto the R module tree by
+  **identity**; the RoPE table the reference shares across row blocks is
+  stored once per block by the converter.
+- The reference is the bare `_KumoTabular` network under `no_grad`
+  (its in-place inference path), on fixture tensors with NaN kept and the
+  manifest's categorical columns flagged. `clf_binary_missing` runs on
+  the raw network: Kumo imputes and encodes missingness itself.
+- Every stage agrees to ~7e-6 of its scale or better; `net:probs` to
+  2.2e-6, the 999-quantile grid to 3.8e-6. Not bit-exact: the R and
+  Python libtorch builds differ, and the gap starts at the cell
+  embedding's `sin`/`cos` (~1e-6).
+- Medium's grouped-query attention and `row_project` have no stored
+  checkpoint dumps; `kumo_layers_reference.py` grades them on a tiny
+  random network of the same shape (`test-backend-kumo.R`), 2.4e-6 on
+  outputs of order 6, against 5.5 if the GQA is dropped.
+- Set up the venv with
+  `uv venv --python 3.12 .venvs/sdm && uv pip install --python .venvs/sdm/bin/python "structured-data-models==0.2.1" pandas safetensors huggingface_hub`.
+
+### Kumo Tabular recipe and end to end vs `structured-data-models` 0.2.1
+
+- **Recipe** (`kumo_ensemble_reference.py` -> `ensemble/kumo_ensemble.*`,
+  `test-prep-kumo.R`, no weights): `sdm`'s own `RecipeExecution` with 8
+  members and a generator seeded at 42, on six fixtures and four
+  synthetic tables (a 70-level categorical with unseen and missing query
+  values, 520 columns, 9,000 context rows for the rank-Gaussian knot
+  spacing, and +-Inf / constant / all-missing / `[5, NaN, 5]` columns).
+  Every member's column order, categorical mask, class order and target
+  match; 97-99% of feature values are bit-identical and the rest one
+  float32 ulp (float64 summation order). The draws themselves are exact:
+  R torch's generator, driven through the
+  `cpp_torch_namespace_*_generator_Generator` bindings, reproduces
+  CPython torch's `randperm` / `bernoulli_` stream on arm64. The float32
+  regression target can sit one ulp off, because R's libtorch sums
+  float32 in a different order. The output reduction (class realignment,
+  per-member target inverse, sorting, 20% trimmed mean) is checked on
+  synthetic member outputs. On `clf_many_classes` (15 classes) each
+  member's ECOC codebook -- drawn from the same generator after the
+  recipe, as `KumoTabular.forward()` draws it -- is identical.
+- **End to end** (`kumo_e2e_reference.py` -> `reference/kumo_e2e/`,
+  `test-parity-kumo-e2e.R`): the public `KumoTabular()` on CPU float32
+  against `tabular_classifier()` / `tabular_regressor()` with `seed = 42`.
+  Probabilities agree to 2.3e-6, quantile grids to 1.3e-5 of `sd(y)`,
+  on `clf_binary_missing`, `clf_categorical`, `reg_skewed`,
+  `reg_categorical`, `clf_many_classes` (15 classes of 16, so 8
+  error-correcting sub-tasks per member; 1.0e-7, and the codebooks are
+  the very ones the reference's forward pass drew), an all-constant table (the network sees zero
+  columns), a column missing in every training row, an empty query and a
+  class absent from the training rows (tabfound returns it at zero; the
+  reference has no column for it). The reference's own `fit()` +
+  `predict()` path differs from its one-shot forward by at most 2.4e-6,
+  recorded in `reference.json`.
+
 ### Mitra vs `autogluon` Tab2D
 
 ```
@@ -647,8 +713,11 @@ dominate, with the v2.6 and v3 bare-network trees at 7 MB each and TabFM's
 per-stage activations at 11 MB. It is
 `.Rbuildignore`d, so it never ships in the package tarball. If you would
 rather not track it in git, delete it and regenerate with
-`--regenerate`. The small `transforms/` (16 KB), `ensemble/` (130 KB) and
-`layers/` (84 KB) references are worth keeping either way — they ship
+`--regenerate`. Kumo's are small by comparison: `reference/kumo/` keeps
+only the first column and row block per fixture (`--stages minimal`,
+6 MB) and `reference/kumo_e2e/` is 0.7 MB. The small `transforms/`
+(24 KB), `ensemble/` (2.2 MB, 1.8 MB of it Kumo's eight members on ten
+tables) and `layers/` (0.7 MB) references are worth keeping either way — they ship
 with the package and are what let `test-prep-transforms.R`,
 `test-prep-sklearn.R`, `test-prep-ensemble.R`, `test-py-random.R` and
 `test-nn-layers.R` run without any checkpoint at all. `transforms/` is
@@ -724,6 +793,25 @@ regression:
   the logits by 3.7e-3 when it is not. That last number is why the check
   exists: the mask is not bookkeeping, and a wrapper that builds one
   while the network ignores it looks correct in every stage-level check.
+
+**Kumo Tabular** (27 M parameters for small, 328 tensors) against
+`structured-data-models` 0.2.1, 24/24 network checks in tolerance on the
+small checkpoints, plus weight-free and end-to-end grading:
+
+- All checkpoint tensors map onto the R module tree by **identity**, for
+  all three sizes (medium and large by key list and shape).
+- Every network stage agrees to ~7e-6 of its scale; probabilities to
+  2.2e-6, the 999-quantile grid to 3.8e-6. Medium's grouped-query
+  attention and row projection are graded on a tiny random network.
+- The recipe's random draws -- class shifts, signs, column shuffles and
+  ECOC codebooks -- are **replayed exactly** from libtorch's generator, so
+  every member's inputs match `sdm`'s own (bit-identical, or one float32
+  ulp) and every codebook is identical.
+- End to end, probabilities agree to 2.5e-6 and quantile grids to 1.3e-5
+  of `sd(y)`, including a 15-class table run through error-correcting
+  output codes (1.0e-7), an all-constant table, an empty query and an
+  absent class. The KV cache and the row, column and
+  `save_peak_memory_factor` chunking stay within the same bounds.
 
 Headline for the TabPFN backend, against `tabpfn` 8.2.0:
 
@@ -822,7 +910,10 @@ two searches occasionally take different final steps and stop within
 `xatol` (1.48e-8) of each other. And Mitra's random sign flips cannot be
 reproduced at all, because the reference draws them from NumPy's
 *global* generator and never seeds it; they differ between two of its
-own runs.
+own runs. Kumo Tabular's recipe draws are libtorch's own generator, which
+R torch and CPython torch share, so on Apple arm64 they are exact; on an
+Intel build whose libtorch takes `bernoulli_` from MKL the random signs
+are unverified.
 
 The shared preprocessing steps are additionally pinned against sklearn
 and TabPFN's own step classes in `tests/testthat/test-prep-transforms.R`,

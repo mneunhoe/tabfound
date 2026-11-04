@@ -11,7 +11,8 @@ sdpa(
   attn_mask = NULL,
   dropout_p = 0,
   is_causal = FALSE,
-  scale = NULL
+  scale = NULL,
+  enable_gqa = FALSE
 )
 }
 \arguments{
@@ -24,6 +25,12 @@ sdpa(
 \item{is_causal}{Passed through.}
 
 \item{scale}{Optional override for \code{1/sqrt(D)}.}
+
+\item{enable_gqa}{Grouped-query attention: \code{key}/\code{value} carry fewer
+heads than \code{query}, and query head \code{h} reads key/value head
+\code{h \%/\% (Hq / Hkv)}. Passed to the fused kernel, which is what the
+reference calls -- expanding the heads first gives the same answer
+but not the same rounding.}
 }
 \description{
 R torch registers \code{torch_scaled_dot_product_attention} but does not

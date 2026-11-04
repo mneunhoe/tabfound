@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Marcel Neunhoeffer">
-<meta name="dcterms.date" content="2026-09-23">
+<meta name="dcterms.date" content="2026-11-04">
 
 <title>Architecture gallery</title>
 <style>
@@ -89,7 +89,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">Table of contents</h2>
    
   <ul>
-  <li><a href="#six-architectures-drawn-from-the-models" id="toc-six-architectures-drawn-from-the-models" class="nav-link active" data-scroll-target="#six-architectures-drawn-from-the-models">Six architectures, drawn from the models</a>
+  <li><a href="#eight-architectures-drawn-from-the-models" id="toc-eight-architectures-drawn-from-the-models" class="nav-link active" data-scroll-target="#eight-architectures-drawn-from-the-models">Eight architectures, drawn from the models</a>
   <ul class="collapse">
   <li><a href="#how-these-particular-figures-were-made" id="toc-how-these-particular-figures-were-made" class="nav-link" data-scroll-target="#how-these-particular-figures-were-made">How these particular figures were made</a></li>
   </ul></li>
@@ -99,11 +99,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#tabpfn-v2.6" id="toc-tabpfn-v2.6" class="nav-link" data-scroll-target="#tabpfn-v2.6">TabPFN v2.6</a></li>
   <li><a href="#tabpfn-v3" id="toc-tabpfn-v3" class="nav-link" data-scroll-target="#tabpfn-v3">TabPFN v3</a></li>
   </ul></li>
-  <li><a href="#the-other-three-architectures" id="toc-the-other-three-architectures" class="nav-link" data-scroll-target="#the-other-three-architectures">The other three architectures</a>
+  <li><a href="#the-other-four-architectures" id="toc-the-other-four-architectures" class="nav-link" data-scroll-target="#the-other-four-architectures">The other four architectures</a>
   <ul class="collapse">
   <li><a href="#tabicl-v2" id="toc-tabicl-v2" class="nav-link" data-scroll-target="#tabicl-v2">TabICL v2</a></li>
   <li><a href="#tabfm" id="toc-tabfm" class="nav-link" data-scroll-target="#tabfm">TabFM</a></li>
   <li><a href="#mitra" id="toc-mitra" class="nav-link" data-scroll-target="#mitra">Mitra</a></li>
+  <li><a href="#kumo-tabular" id="toc-kumo-tabular" class="nav-link" data-scroll-target="#kumo-tabular">Kumo Tabular</a></li>
   </ul></li>
   <li><a href="#opening-a-block-up" id="toc-opening-a-block-up" class="nav-link" data-scroll-target="#opening-a-block-up">Opening a block up</a></li>
   <li><a href="#tabpfn-v3.5" id="toc-tabpfn-v3.5" class="nav-link" data-scroll-target="#tabpfn-v3.5">TabPFN v3.5</a></li>
@@ -137,7 +138,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">September 23, 2026</p>
+      <p class="date">November 4, 2026</p>
     </div>
   </div>
   
@@ -149,10 +150,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<section id="six-architectures-drawn-from-the-models" class="level2">
-<h2 class="anchored" data-anchor-id="six-architectures-drawn-from-the-models">Six architectures, drawn from the models</h2>
+<section id="eight-architectures-drawn-from-the-models" class="level2">
+<h2 class="anchored" data-anchor-id="eight-architectures-drawn-from-the-models">Eight architectures, drawn from the models</h2>
 <p>Every diagram below was produced by <code>plot_architecture()</code> from a loaded model — not drawn by hand and not transcribed from a paper. The stages come from the backend’s own description of its network; the widths, head counts and parameter totals are read off the network that was built from the published checkpoint’s <code>config.json</code>.</p>
-<p>The layout owes its shape to Sebastian Raschka’s <a href="https://sebastianraschka.com/llm-architecture-gallery/">LLM architecture gallery</a>: blocks stacked in the order they run, repeated blocks drawn once with their repeat count, a fact sheet underneath. What is different here is the thing that makes a tabular foundation model a tabular foundation model, and which a language model has no equivalent of: <strong>an attention layer has an axis</strong>. It can run down a column, across a row’s features, or over the rows of the table. Each attention block carries that axis as a tag, and it is the single most useful thing to compare across the seven.</p>
+<p>The layout owes its shape to Sebastian Raschka’s <a href="https://sebastianraschka.com/llm-architecture-gallery/">LLM architecture gallery</a>: blocks stacked in the order they run, repeated blocks drawn once with their repeat count, a fact sheet underneath. What is different here is the thing that makes a tabular foundation model a tabular foundation model, and which a language model has no equivalent of: <strong>an attention layer has an axis</strong>. It can run down a column, across a row’s features, or over the rows of the table. Each attention block carries that axis as a tag, and it is the single most useful thing to compare across the eight.</p>
 <div class="cell">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tabfound)</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">list_backends</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -160,10 +161,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="kable-table">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
-<col style="width: 8%">
-<col style="width: 55%">
-<col style="width: 15%">
-<col style="width: 19%">
+<col style="width: 7%">
+<col style="width: 51%">
+<col style="width: 12%">
+<col style="width: 28%">
 </colgroup>
 <thead>
 <tr class="header">
@@ -175,42 +176,48 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </thead>
 <tbody>
 <tr class="odd">
+<td style="text-align: left;">kumo</td>
+<td style="text-align: left;">NVIDIA Kumo Tabular (small/medium/large) cell/row/ICL transformer</td>
+<td style="text-align: left;">encoded</td>
+<td style="text-align: left;">structured-data-models 0.2.1 (PyPI)</td>
+</tr>
+<tr class="even">
 <td style="text-align: left;">mitra</td>
 <td style="text-align: left;">Mitra 2-D attention transformer (AutoGluon)</td>
 <td style="text-align: left;">imputed</td>
 <td style="text-align: left;">autogluon mitra</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td style="text-align: left;">tabfm</td>
 <td style="text-align: left;">TabFM 1.0.0 column/row/ICL transformer (Google Research)</td>
 <td style="text-align: left;">encoded+imputed</td>
 <td style="text-align: left;">tabfm (PyPI)</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td style="text-align: left;">tabicl</td>
 <td style="text-align: left;">TabICL v2 column/row/ICL transformer (soda-inria)</td>
 <td style="text-align: left;">imputed</td>
 <td style="text-align: left;">tabicl (PyPI)</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td style="text-align: left;">tabpfn</td>
 <td style="text-align: left;">TabPFN v2 per-feature transformer (Prior-Labs)</td>
 <td style="text-align: left;">encoded</td>
 <td style="text-align: left;">tabpfn (PyPI)</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td style="text-align: left;">tabpfn26</td>
 <td style="text-align: left;">TabPFN v2.6 (Prior-Labs)</td>
 <td style="text-align: left;">encoded</td>
 <td style="text-align: left;">tabpfn 8.2.0 (PyPI)</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td style="text-align: left;">tabpfn3</td>
 <td style="text-align: left;">TabPFN v3 (Prior-Labs)</td>
 <td style="text-align: left;">encoded</td>
 <td style="text-align: left;">tabpfn 8.2.0 (PyPI)</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td style="text-align: left;">tabpfn35</td>
 <td style="text-align: left;">TabPFN v3.5, multitask (Prior-Labs)</td>
 <td style="text-align: left;">encoded</td>
@@ -229,9 +236,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p><code>file = NULL</code> draws on the current graphics device instead, so <code>plot(clf)</code> works the way it does for any other model object. The extension picks the format — <code>.svg</code>, <code>.png</code> or <code>.pdf</code>.</p>
 <section id="how-these-particular-figures-were-made" class="level3">
 <h3 class="anchored" data-anchor-id="how-these-particular-figures-were-made">How these particular figures were made</h3>
-<p>The vignette ships the SVGs rather than building them, because instantiating all seven networks at their published widths allocates about 2 billion parameters and takes a couple of minutes — too much to pay on every <code>R CMD build</code>. The script that made them is <a href="https://github.com/marcel-neunhoeffer/tabfound/blob/main/inst/gallery/make-gallery.R"><code>inst/gallery/make-gallery.R</code></a>:</p>
+<p>The vignette ships the SVGs rather than building them, because instantiating all eight networks at their published widths allocates about 2 billion parameters and takes a couple of minutes — too much to pay on every <code>R CMD build</code>. The script that made them is <a href="https://github.com/marcel-neunhoeffer/tabfound/blob/main/inst/gallery/make-gallery.R"><code>inst/gallery/make-gallery.R</code></a>:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">Rscript</span> inst/gallery/make-gallery.R vignettes/figures</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>It reads each model’s <code>config.json</code> and builds the network <strong>without loading any weights</strong>. That is not a shortcut for the numbers: a diagram depends on the config, which fixes the architecture, and on the <em>shapes</em> of the parameters, which the config fixes too. Nothing on these figures depends on the values in the tensors, so a randomly initialised network reports exactly what the trained one does. It is also why the script needs no gigabytes on disk — for TabFM and Mitra it fetches a few hundred bytes of JSON and nothing else.</p>
+<p>It reads each model’s <code>config.json</code> and builds the network <strong>without loading any weights</strong>. That is not a shortcut for the numbers: a diagram depends on the config, which fixes the architecture, and on the <em>shapes</em> of the parameters, which the config fixes too. Nothing on these figures depends on the values in the tensors, so a randomly initialised network reports exactly what the trained one does. It is also why the script needs no gigabytes on disk — for TabFM and Mitra it fetches a few hundred bytes of JSON and nothing else, and for Kumo Tabular, whose publisher ships bare state dicts, it reads the config the package’s converter derived and keeps in its architecture table.</p>
 </section>
 </section>
 <section id="the-three-tabpfn-generations" class="level2">
@@ -268,8 +275,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </section>
 </section>
-<section id="the-other-three-architectures" class="level2">
-<h2 class="anchored" data-anchor-id="the-other-three-architectures">The other three architectures</h2>
+<section id="the-other-four-architectures" class="level2">
+<h2 class="anchored" data-anchor-id="the-other-four-architectures">The other four architectures</h2>
 <section id="tabicl-v2" class="level3">
 <h3 class="anchored" data-anchor-id="tabicl-v2">TabICL v2</h3>
 <p>Structurally a cousin of TabPFN v3 — column stage, row stage, in-context stage — arrived at independently, and different in every detail: affine LayerNorm, a packed q/k/v projection, a scalable softmax on the length-varying attentions. Its distinctive choice is that the labelled rows are held apart from the test rows by <em>slicing</em>, never by masking: a labelled row cannot see a test row at any stage, which is what makes its KV cache exact.</p>
@@ -292,11 +299,28 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="mitra" class="level3">
 <h3 class="anchored" data-anchor-id="mitra">Mitra</h3>
-<p>The flattest of the seven. No column stage, no row stage, no in-context stage — one stack of twelve identical layers, each attending across rows and then across features, with an MLP after each. The target is feature column 1, and the input transform is a fixed quantile-rank mapping with no weights at all, which is why the first block on the diagram reports no parameter count.</p>
+<p>The flattest of the eight. No column stage, no row stage, no in-context stage — one stack of twelve identical layers, each attending across rows and then across features, with an MLP after each. The target is feature column 1, and the input transform is a fixed quantile-rank mapping with no weights at all, which is why the first block on the diagram reports no parameter count.</p>
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
 <p><img src="figures/mitra.svg" class="img-fluid figure-img" alt="Stacked block diagram of the Mitra classifier"></p>
 <figcaption>Mitra classifier</figcaption>
+</figure>
+</div>
+</section>
+<section id="kumo-tabular" class="level3">
+<h3 class="anchored" data-anchor-id="kumo-tabular">Kumo Tabular</h3>
+<p>NVIDIA’s single-table in-context model, in three sizes of one architecture. The same three stages as TabICL, with the details moved: every cell is its own token (no grouping of features), embedded with its two neighbours in a wrapping window and with context-mean imputation plus a learned projection of what was missing, so the network sees missingness rather than a filled-in value. Four readout tokens join each row, and the column and row blocks alternate rather than running once each — a column block summarises a column’s context rows through inducing points, a row block mixes the row’s tokens with RoPE and a gated, length-aware query scale.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="figures/kumo.svg" class="img-fluid figure-img" alt="Stacked block diagram of the Kumo Tabular small classifier"></p>
+<figcaption>Kumo Tabular small classifier</figcaption>
+</figure>
+</div>
+<p>Medium widens the cells to 256 and doubles the depth of the in-context stack, which then needs two things small does not: a projection from the 1024 readout numbers down to the in-context width of 512, and grouped-query attention, in which the test rows read the context through only two of the eight key/value heads. Large drops the projection again (1024 wide throughout) and keeps the grouping.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="figures/kumo-medium.svg" class="img-fluid figure-img" alt="Stacked block diagram of the Kumo Tabular medium classifier"></p>
+<figcaption>Kumo Tabular medium classifier</figcaption>
 </figure>
 </div>
 </section>

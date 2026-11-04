@@ -86,6 +86,18 @@ arch_test_configs <- function() {
                     feature_group_size = 3L, num_freq = 4L,
                     is_classifier = TRUE, decoder_hidden = NULL),
       task = "classification"),
+    # Medium's shape (a row projection, grouped-query attention) so the
+    # optional `row_project` stage is the one exercised.
+    kumo = list(
+      config = list(arch = "kumo_tabular", head = "classifier", size = "medium",
+                    cell_channels = 8L, num_embedding_layers = 2L,
+                    num_embedding_heads = 2L, num_inducing_points = 4L,
+                    group_size = 3L, num_frequencies = 4L,
+                    num_readout_tokens = 2L, icl_channels = 8L,
+                    num_icl_layers = 2L, num_icl_heads = 2L,
+                    num_icl_key_value_heads_for_query = 1L, gate_hidden = 4L,
+                    num_classes = 10L, num_quantiles = 0L),
+      task = "classification"),
     mitra = list(
       config = list(dim = 8L, dim_output = 6L, n_heads = 2L, n_layers = 2L,
                     task = "CLASSIFICATION"),

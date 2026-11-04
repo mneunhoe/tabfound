@@ -31,6 +31,11 @@
 #   TABFOUND_MITRA_CLF_DIR    Mitra classifier snapshot
 #   TABFOUND_MITRA_REG_DIR    Mitra regressor snapshot
 #   TABFOUND_MITRA_SHIM       dir holding the `mitrapkg` shim (regenerate only)
+#   TABFOUND_KUMO_CLF_DIR     converted Kumo Tabular small classifier
+#   TABFOUND_KUMO_REG_DIR     converted Kumo Tabular small regressor
+#   TABFOUND_KUMO_CLF_CKPT    raw small/classifier.pt, only needed with --regenerate
+#   TABFOUND_KUMO_REG_CKPT
+#   TABFOUND_REF_PYTHON_KUMO  venv with structured-data-models (default .venvs/sdm)
 
 suppressMessages({
   library(torch)
@@ -63,6 +68,10 @@ py_for <- function(backend) {
   guess <- file.path(".venvs", paste0("ref", sub("^tabpfn", "", backend)),
                      "bin", "python")
   if (identical(backend, "tabpfn35") && file.exists(guess)) return(guess)
+  # Kumo's reference is a different package altogether (`sdm`), in its
+  # own venv.
+  sdm <- file.path(".venvs", "sdm", "bin", "python")
+  if (identical(backend, "kumo") && file.exists(sdm)) return(sdm)
   PY
 }
 
@@ -652,6 +661,64 @@ run_mitra <- function() {
 }
 
 
+# ---------------------------------------------------------------------------
+# Kumo Tabular
+# ---------------------------------------------------------------------------
+
+run_kumo <- function() {
+  cat("\n=== backend: kumo ===\n")
+  clf_dir <- env_dir("TABFOUND_KUMO_CLF_DIR", "converted Kumo small classifier")
+  reg_dir <- env_dir("TABFOUND_KUMO_REG_DIR", "converted Kumo small regressor")
+
+  # The network handles NaN itself, so `clf_binary_missing` (NaN and a
+  # constant column) is graded on the raw network, and `clf_categorical`
+  # exercises the categorical frequency/projection branch. Stored dumps
+  # are from the small model; the medium-only GQA path is graded
+  # weight-free in `test-backend-kumo.R`.
+  fixtures <- list(clf_tiny = clf_dir, clf_binary_missing = clf_dir,
+                   clf_categorical = clf_dir, reg_tiny = reg_dir)
+
+  if (regenerate) {
+    py <- py_for("kumo")
+    ckpts <- c(clf = Sys.getenv("TABFOUND_KUMO_CLF_CKPT", ""),
+               reg = Sys.getenv("TABFOUND_KUMO_REG_CKPT", ""))
+    for (fx in names(fixtures)) {
+      head <- if (startsWith(fx, "clf")) "clf" else "reg"
+      if (!nzchar(ckpts[[head]]) || !file.exists(ckpts[[head]])) {
+        cat(sprintf("  SKIP regenerate %s: checkpoint not found\n", fx)); next
+      }
+      out <- file.path(REF_ROOT, "kumo", fx)
+      unlink(out, recursive = TRUE)
+      cat(sprintf("  regenerating %s ...\n", fx))
+      st <- system2(py, c(file.path(here, "kumo_reference.py"),
+                          "--fixture-dir", FIXTURE_DIR, "--fixture", fx,
+                          "--ckpt", ckpts[[head]], "--size", "small",
+                          "--out", out),
+                    stdout = TRUE, stderr = TRUE)
+      status <- attr(st, "status")
+      if (!is.null(status) && status != 0L) {
+        cat(paste(tail(st, 15), collapse = "\n"), "\n")
+        cat(sprintf("  FAILED to regenerate %s\n", fx))
+      }
+    }
+  }
+
+  all_rows <- list()
+  for (fx in names(fixtures)) {
+    ref <- file.path(REF_ROOT, "kumo", fx)
+    md <- fixtures[[fx]]
+    if (is.null(md) || !file.exists(file.path(ref, "reference.json"))) {
+      cat(sprintf("  SKIP %s (no reference dump or model dir)\n", fx)); next
+    }
+    res <- parity_kumo(ref, FIXTURE_DIR, fx, fx, md)
+    all_rows[[fx]] <- print_parity(res)
+  }
+  combined <- do.call(rbind, all_rows)
+  if (!is.null(combined)) combined$known <- FALSE
+  invisible(combined)
+}
+
+
 results <- list()
 for (b in backends) {
   results[[b]] <- switch(
@@ -664,6 +731,7 @@ for (b in backends) {
     tabfm  = run_tabfm(),
     tabicl = run_tabicl(),
     mitra  = run_mitra(),
+    kumo   = run_kumo(),
     { cat(sprintf("No parity runner for backend '%s' yet.\n", b)); NULL }
   )
 }
