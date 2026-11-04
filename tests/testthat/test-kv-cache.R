@@ -1,4 +1,4 @@
-# KV caches for the Mitra, TabICL and TabFM backends.
+# KV caches for the Mitra, TabICL, TabFM and Kumo backends.
 #
 # One question, asked three times: does conditioning on the training rows
 # once and reusing that give the same answer as re-encoding them for every
@@ -17,6 +17,8 @@
 #   tabfm   float32 rounding, plus the regrouping that comes of reducing
 #           over `n_train` keys instead of `T` keys of which most are
 #           masked to zero.
+#   kumo    float32 rounding, as for TabICL: the query rows go through
+#           without the context rows beside them.
 #
 # Agreement with the Python references is a separate question, answered in
 # `test-parity-*.R`.
@@ -409,6 +411,117 @@ test_that("the TabFM regressor caches too", {
 
 
 # ---------------------------------------------------------------------------
+# Kumo Tabular
+# ---------------------------------------------------------------------------
+
+tiny_kumo_config <- function(head = "classifier", kv = 2L) {
+  list(arch = "kumo_tabular", head = head, cell_channels = 8L,
+       num_embedding_layers = 2L, num_embedding_heads = 2L,
+       num_inducing_points = 3L, group_size = 3L, num_frequencies = 4L,
+       num_readout_tokens = 4L, icl_channels = 32L, num_icl_layers = 2L,
+       num_icl_heads = 4L, num_icl_key_value_heads_for_query = kv,
+       gate_hidden = 8L,
+       num_classes = if (head == "classifier") 10L else 0L,
+       num_quantiles = if (head == "classifier") 0L else 9L)
+}
+
+# `sdm` zero-initialises the output projections, which would make every
+# block an identity; redraw everything so the cache has something to get
+# wrong.
+tiny_kumo <- function(head = "classifier", kv = 2L) {
+  torch::torch_manual_seed(13L)
+  net <- kumo_model(tiny_kumo_config(head, kv))
+  ps <- net$parameters
+  torch::with_no_grad(for (nm in names(ps)) {
+    if (!grepl("inv_freq$", nm)) ps[[nm]]$normal_(std = 0.3)
+  })
+  net$eval()
+  net
+}
+
+kumo_inputs <- function(n_tr = 20L, n_te = 9L, p = 5L, seed = 4L, clf = TRUE) {
+  torch::torch_manual_seed(seed)
+  x <- torch::torch_randn(c(1L, n_tr + n_te, p))
+  x[1, 3, 2] <- NaN
+  list(x = x, x_tr = x[, 1:n_tr, ], x_te = x[, (n_tr + 1L):(n_tr + n_te), ],
+       y = if (clf) torch::torch_randint(0L, 3L, c(1L, n_tr), dtype = torch::torch_long())
+           else torch::torch_randn(c(1L, n_tr)),
+       mask = c(FALSE, TRUE, rep(FALSE, p - 2L)))
+}
+
+
+test_that("the Kumo network advertises a cache", {
+  net <- tiny_kumo()
+  expect_true(isTRUE(net$supports_kv_cache))
+  expect_true(isTRUE(net$kv_cache_is_exact))
+  expect_true(isTRUE(get_backend("kumo")$kv_cache_capable))
+})
+
+
+test_that("a Kumo cache reproduces the forward it was built from", {
+  for (kv in list(NULL, 2L)) {
+    net <- tiny_kumo(kv = kv)
+    d <- kumo_inputs()
+    plain <- torch::with_no_grad(net(d$x, d$y, d$mask))
+    cache <- torch::with_no_grad(net$build_kv_cache(d$x_tr, d$y, d$mask))
+    expect_s3_class(cache, "kumo_kv_cache")
+    expect_length(cache$col_kv, 2L)
+    expect_length(cache$icl_kv, 2L)
+    expect_identical(cache$n_train, 20L)
+    cached <- torch::with_no_grad(net(d$x_te, NULL, d$mask, kv_cache = cache))
+    expect_equal(as.array(cached), as.array(plain), tolerance = 1e-5)
+  }
+})
+
+
+test_that("the Kumo cache holds only what the context rows produced", {
+  net <- tiny_kumo()
+  d <- kumo_inputs(n_tr = 24L)
+  a <- torch::with_no_grad(net$build_kv_cache(d$x_tr, d$y, d$mask))
+  # The column summaries are M inducing vectors per column, whatever the
+  # context size; the ICL keys are one per context row, on the 2 heads
+  # the query rows use.
+  expect_identical(as.integer(a$col_kv[[1]]$key$size(3)), 3L)
+  expect_identical(as.integer(a$icl_kv[[1]]$key$size(2)), 24L)
+  expect_identical(as.integer(a$icl_kv[[1]]$key$size(3)), 2L)
+  # Changing a query row cannot touch it.
+  x2 <- d$x$clone(); x2[1, 30, ] <- 3
+  b <- torch::with_no_grad(net$build_kv_cache(x2[, 1:24, ], d$y, d$mask))
+  expect_true(as.logical(torch::torch_equal(a$icl_kv[[2]]$key, b$icl_kv[[2]]$key)))
+})
+
+
+test_that("one Kumo cache serves any split of the query rows", {
+  net <- tiny_kumo()
+  d <- kumo_inputs()
+  cache <- torch::with_no_grad(net$build_kv_cache(d$x_tr, d$y, d$mask))
+  full <- as.array(torch::with_no_grad(net(d$x_te, NULL, d$mask, kv_cache = cache)))
+  head <- as.array(torch::with_no_grad(net(d$x_te[, 1:3, ], NULL, d$mask,
+                                           kv_cache = cache)))
+  expect_equal(head, full[, 1:3, , drop = FALSE], tolerance = 1e-5)
+})
+
+
+test_that("a Kumo cache refuses a different width", {
+  net <- tiny_kumo()
+  d <- kumo_inputs()
+  cache <- torch::with_no_grad(net$build_kv_cache(d$x_tr, d$y, d$mask))
+  expect_error(net(torch::torch_randn(c(1L, 4L, 7L)), NULL, rep(FALSE, 7L),
+                   kv_cache = cache), "5 features")
+})
+
+
+test_that("the Kumo regressor caches too", {
+  net <- tiny_kumo("regressor", kv = NULL)
+  d <- kumo_inputs(clf = FALSE)
+  plain <- torch::with_no_grad(net(d$x, d$y, d$mask))
+  cache <- torch::with_no_grad(net$build_kv_cache(d$x_tr, d$y, d$mask))
+  cached <- torch::with_no_grad(net(d$x_te, NULL, d$mask, kv_cache = cache))
+  expect_equal(as.array(cached), as.array(plain), tolerance = 1e-5)
+})
+
+
+# ---------------------------------------------------------------------------
 # The per-member store the predictors use
 # ---------------------------------------------------------------------------
 
@@ -497,6 +610,52 @@ test_that("a cached regressor prediction matches an uncached one", {
     icl(kv_cache = TRUE)$predict(icl(kv_cache = TRUE)$fit(X, y), X_new),
     tolerance = 1e-5
   )
+})
+
+
+test_that("the Kumo predictors give the same answer with the cache on", {
+  X <- cache_test_matrix(); y <- factor(rep(c("a", "b", "c"), length.out = 30L))
+  X_new <- cache_test_matrix(n = 22L, seed = 46L)
+  clf <- function(...) do.call(kumo_classifier, list(
+    fake_ctx(tiny_kumo(), config = list(num_classes = 10L)),
+    n_estimators = 2L, predict_chunk_size = CHUNK, ...))
+  a <- clf()$predict(clf()$fit(X, y), X_new, type = "prob")
+  b <- clf(kv_cache = TRUE)$predict(clf(kv_cache = TRUE)$fit(X, y), X_new,
+                                    type = "prob")
+  expect_equal(a, b, tolerance = 1e-5)
+
+  yr <- as.numeric(X[, 1] * 2 + stats::rnorm(30L, sd = 0.1))
+  reg <- function(...) do.call(kumo_regressor, list(
+    fake_ctx(tiny_kumo("regressor"), config = list(num_quantiles = 9L)),
+    n_estimators = 2L, predict_chunk_size = CHUNK, ...))
+  expect_equal(reg()$predict(reg()$fit(X, yr), X_new),
+               reg(kv_cache = TRUE)$predict(reg(kv_cache = TRUE)$fit(X, yr), X_new),
+               tolerance = 1e-5)
+})
+
+
+test_that("a Kumo cache built by tabfound_cache() survives save and load", {
+  # The whole persistence path, with a random network standing in for a
+  # checkpoint: build, predict, write the bundle, read it back.
+  net <- tiny_kumo()
+  spec <- kumo_classifier(fake_ctx(net, config = list(num_classes = 10L)),
+                          n_estimators = 2L, predict_chunk_size = CHUNK)
+  X <- cache_test_matrix(); y <- factor(rep(c("a", "b", "c"), length.out = 30L))
+  X_new <- cache_test_matrix(n = 12L, seed = 47L)
+  state <- spec$fit(X, y)
+  caches <- spec$build_cache(state)
+  expect_length(caches, 2L)
+  expect_s3_class(caches[[1]], "kumo_kv_cache")
+  plain <- spec$predict(state, X_new, type = "prob")
+  state$kv_caches <- caches
+  expect_equal(spec$predict(state, X_new, type = "prob"), plain, tolerance = 1e-5)
+
+  dir <- withr::local_tempdir()
+  w <- .kv_write(caches, dir)
+  back <- .kv_read(w$skeleton, file.path(dir, w$file))
+  expect_s3_class(back[[1]], "kumo_kv_cache")
+  state$kv_caches <- back
+  expect_equal(spec$predict(state, X_new, type = "prob"), plain, tolerance = 1e-5)
 })
 
 

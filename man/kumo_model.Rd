@@ -8,8 +8,21 @@ kumo_model(config)
 }
 \arguments{
 \item{config}{A converted Kumo config (\code{arch = "kumo_tabular"}).}
+
+\item{x}{\verb{[..., Rt, C]}, the context rows only.}
+}
+\value{
+A \code{\link[=kumo_kv_cache]{kumo_kv_cache()}}.
 }
 \description{
 Kumo Tabular network
 }
+\keyword{Everything}
+\keyword{a}
+\keyword{context}
+\keyword{contribute}
 \keyword{internal}
+\keyword{prediction}
+\keyword{rows}
+\keyword{the}
+\keyword{to}

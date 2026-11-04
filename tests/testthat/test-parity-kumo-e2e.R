@@ -76,3 +76,43 @@ for (nm in names(meta$cases)) {
     })
   })
 }
+
+
+# The cache and the three chunking knobs change batch shapes, never which
+# rows see which; graded against the reference's own one-shot forward,
+# they must clear the same bounds as the plain path.
+VARIANTS <- list(
+  cached  = list(kv_cache = TRUE),
+  chunked = list(row_chunk_size = 64L, save_peak_memory_factor = 3L,
+                 col_chunk_size = 2L)
+)
+for (nm in c("clf_binary_missing", "clf_categorical", "reg_skewed",
+             "reg_categorical")) {
+  for (vn in names(VARIANTS)) {
+    local({
+      name <- nm; variant <- VARIANTS[[vn]]; label <- vn
+      cs <- meta$cases[[name]]
+      test_that(sprintf("the %s Kumo path matches sdm on %s", label, name), {
+        p <- paste0(name, ".")
+        X_train <- as_mat(ref[[paste0(p, "x_train")]])
+        X_test <- as_mat(ref[[paste0(p, "x_test")]])
+        y <- as.numeric(as_mat(ref[[paste0(p, "y_train")]]))
+        want <- as_mat(ref[[paste0(p, "out")]])
+        args <- c(list(categorical_features = unlist(cs$categorical),
+                       device = "cpu"), variant)
+        if (identical(cs$task, "classification")) {
+          m <- suppressMessages(do.call(tabular_classifier, c(list(clf_dir), args)))
+          m <- fit(m, X_train, factor(y, levels = 0:2))
+          got <- predict(m, X_test, type = "prob")[, as.character(unlist(cs$classes)),
+                                                    drop = FALSE]
+          expect_lt(max(abs(got - want)), TOL_PROBA)
+        } else {
+          m <- suppressMessages(do.call(tabular_regressor, c(list(reg_dir), args)))
+          m <- fit(m, X_train, y)
+          got <- predict(m, X_test, type = "grid")
+          expect_lt(max(abs(got - want)) / sd(y), TOL_REG)
+        }
+      })
+    })
+  }
+}

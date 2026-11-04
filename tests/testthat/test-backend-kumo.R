@@ -380,3 +380,47 @@ test_that("Kumo registers, detects only its own config, and maps the task", {
   expect_true(spec$handles_missing)
   expect_false(spec$imputes_internally)
 })
+
+
+test_that("chunking that splits nothing is the plain forward, bit for bit", {
+  for (kv in list(NULL, 2L)) {
+    net <- randomized(kumo_model(tiny_cfg(kv = kv)))
+    i <- tiny_input(R = 30L, Rt = 20L, C = 5L)
+    run <- function(...) as.array(torch::with_no_grad(net(i$x, i$y, i$mask, ...)))
+    plain <- run()
+    expect_identical(run(save_peak_memory_factor = 1L), plain)
+    expect_identical(run(row_chunk_size = 30L), plain)
+    expect_identical(run(row_chunk_size = 1000L), plain)
+    expect_identical(run(col_chunk_size = 5L), plain)
+  }
+})
+
+test_that("chunking that splits moves the answer only by float32 rounding", {
+  # Columns are the column blocks' batch axis, rows are independent in
+  # every chunked step, and the inducing step and the log-n scaling always
+  # see the whole context -- so a different answer here would be a bug,
+  # not noise. What is left is the rounding of different batch shapes.
+  for (kv in list(NULL, 2L)) {
+    net <- randomized(kumo_model(tiny_cfg(kv = kv)))
+    i <- tiny_input(R = 30L, Rt = 20L, C = 5L)
+    run <- function(...) as.array(torch::with_no_grad(net(i$x, i$y, i$mask, ...)))
+    plain <- run()
+    for (args in list(list(save_peak_memory_factor = 3L),
+                      list(row_chunk_size = 7L),
+                      list(row_chunk_size = 1L),
+                      list(col_chunk_size = 2L),
+                      list(row_chunk_size = 4L, save_peak_memory_factor = 2L,
+                           col_chunk_size = 2L))) {
+      expect_equal(do.call(run, args), plain, tolerance = 1e-5,
+                   label = paste(names(args), unlist(args), collapse = ", "))
+    }
+  }
+})
+
+test_that("the chunk-length rule takes the smaller of size and factor", {
+  expect_identical(.kumo_chunk_len(10L, 4L, NULL), 4L)
+  expect_identical(.kumo_chunk_len(10L, NULL, 3L), 4L)
+  expect_identical(.kumo_chunk_len(10L, 6L, 5L), 2L)
+  expect_true(is.na(.kumo_chunk_len(10L)))
+  expect_true(is.na(.kumo_chunk_len(0L, 4L)))
+})

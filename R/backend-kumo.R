@@ -65,15 +65,29 @@ kumo_row_embedding <- torch::nn_module(
 
   # @param x `[..., R, C]`, NaN for missing; the first `length(y)` rows
   #   are context.
-  # @param y `[..., Rt]`.
+  # @param y `[..., Rt]`, or `NULL` when every row is a query row and
+  #   `cache` stands in for the context.
   # @param categorical_mask `[..., C]` boolean tensor.
+  # @param cache A [kumo_kv_cache()]: the context's column means and each
+  #   column block's projected inducing summary.
+  # @param record Return those for the rows given (which must all be
+  #   context) alongside the output: `list(reps, col_kv, impute_mean)`.
+  # @param rows,factor Row chunking of the steps whose keys are fixed --
+  #   each column block's output step (keys: the inducing summary) and
+  #   each row block (a row attends only to itself). `rows` is a chunk
+  #   size, `factor` a number of chunks; the smaller chunk wins.
+  # @param cols Columns per pass through each column block. Columns are
+  #   that block's batch axis, so slicing them changes nothing but the
+  #   float32 rounding a different batch size brings.
   # @return `[..., R, K * D]`.
-  forward = function(x, y, categorical_mask) {
-    Rt <- y$size(y$dim())
+  forward = function(x, y, categorical_mask, cache = NULL, record = FALSE,
+                     rows = NULL, factor = NULL, cols = NULL) {
+    Rt <- if (is.null(y)) 0L else y$size(y$dim())
     K <- self$K
     nd <- x$dim()
 
-    cells <- self$cell_embedding(x, categorical_mask, train_size = Rt)
+    cells <- self$cell_embedding(x, categorical_mask, train_size = Rt,
+                                 impute_mean = cache$impute_mean)
     dump_if_enabled("kumo_cells", cells)
     if (Rt > 0L) {
       cells$narrow(nd - 1L, 1L, Rt)$add_(
@@ -87,21 +101,79 @@ kumo_row_embedding <- torch::nn_module(
     rm(cells, readout)
 
     L <- length(self$row_blocks)
+    col_kv <- vector("list", L)
     for (i in seq_len(L)) {
+      blk <- self$col_blocks[[i]]
       tok <- seq$size(nd)
-      cols <- seq$narrow(nd, K + 1L, tok - K)$transpose(-2L, -3L)  # [..., C, R, D]
-      cols <- self$col_blocks[[i]](cols, cols$narrow(nd, 1L, Rt))
-      dump_if_enabled(sprintf("kumo_col%d", i - 1L), cols)
+      cs <- seq$narrow(nd, K + 1L, tok - K)$transpose(-2L, -3L)  # [..., C, R, D]
+      kv_i <- cache$col_kv[[i]]
+      res <- .kumo_split_apply(function(sl, c0, n) {
+        kv <- if (is.null(kv_i)) {
+          if (is.null(rows) && is.null(factor) && !isTRUE(record)) {
+            # The reference's own call: inducing step and output step in
+            # one, from the context rows of this very tensor.
+            return(list(out = blk(sl, sl$narrow(nd, 1L, Rt)), kv = NULL))
+          }
+          ob <- blk$output_block
+          ob$attn$project_kv(ob$key_value_norm(blk$induce(sl$narrow(nd, 1L, Rt))))
+        } else {
+          lapply(kv_i, function(t) t$narrow(nd - 1L, c0, n))
+        }
+        list(out = .kumo_split_apply(function(q, ...) blk$output_block(q, kv),
+                                     sl, nd, rows, factor),
+             kv = kv)
+      }, cs, nd - 1L, cols, NULL, combine = function(parts) {
+        list(out = torch::torch_cat(lapply(parts, `[[`, "out"), dim = nd - 1L),
+             kv = if (is.null(parts[[1]]$kv)) NULL else
+               lapply(c(key = "key", value = "value"), function(k) {
+                 torch::torch_cat(lapply(parts, function(p) p$kv[[k]]), dim = nd - 1L)
+               }))
+      })
+      cs <- res$out
+      col_kv[[i]] <- res$kv
+      dump_if_enabled(sprintf("kumo_col%d", i - 1L), cs)
       seq <- torch::torch_cat(
-        list(seq$narrow(nd, 1L, K), cols$transpose(-2L, -3L)), dim = -2L
+        list(seq$narrow(nd, 1L, K), cs$transpose(-2L, -3L)), dim = -2L
       )
-      q <- if (i == L) seq$narrow(nd, 1L, K) else seq
-      seq <- self$row_blocks[[i]](q, seq)
+      rb <- self$row_blocks[[i]]
+      last <- i == L
+      seq <- .kumo_split_apply(function(sq, ...) {
+        rb(if (last) sq$narrow(nd, 1L, K) else sq, sq)
+      }, seq, nd - 1L, rows, factor)
       dump_if_enabled(sprintf("kumo_row%d", i - 1L), seq)
     }
-    self$norm(seq)$flatten(start_dim = -2L)
+    reps <- self$norm(seq)$flatten(start_dim = -2L)
+    if (!isTRUE(record)) return(reps)
+    list(reps = reps, col_kv = col_kv,
+         impute_mean = self$cell_embedding$impute_mean(x, Rt))
   }
 )
+
+# Apply `f` to slices of `x` along `axis` and stitch the results. `size`
+# is a slice length, `factor` a number of slices; with neither, or with
+# slices no smaller than `x`, it is one call on `x` itself -- the same
+# call, so a chunking that does nothing changes nothing. `f` receives the
+# slice, its 1-based start and its length.
+# @keywords internal
+.kumo_split_apply <- function(f, x, axis, size = NULL, factor = NULL,
+                              combine = NULL) {
+  n <- x$size(axis)
+  s <- .kumo_chunk_len(n, size, factor)
+  if (is.na(s) || s >= n) return(f(x, 1L, n))
+  starts <- seq(1L, n, by = s)
+  parts <- lapply(starts, function(a) {
+    len <- min(s, n - a + 1L)
+    f(x$narrow(axis, a, len), a, len)
+  })
+  if (is.null(combine)) torch::torch_cat(parts, dim = axis) else combine(parts)
+}
+
+.kumo_chunk_len <- function(n, size = NULL, factor = NULL) {
+  cand <- c(if (!is.null(size)) as.integer(size),
+            if (!is.null(factor)) as.integer(ceiling(n / as.integer(factor))))
+  cand <- cand[!is.na(cand) & cand >= 1L]
+  if (!length(cand) || n == 0L) NA_integer_ else min(cand)
+}
 
 
 #' Kumo in-context-learning block
@@ -143,10 +215,17 @@ kumo_icl_block <- torch::nn_module(
   },
 
   # @param x `[..., R, E]`, context rows first.
-  # @param y `[..., Rt]`, as for [kumo_row_embedding].
-  # @return `[..., R - Rt, n_out]`.
-  forward = function(x, y) {
-    Rt <- y$size(y$dim())
+  # @param y `[..., Rt]`, as for [kumo_row_embedding]; `NULL` with
+  #   `icl_kv`, when every row is a query row.
+  # @param icl_kv Per layer, the context's key/value projections (already
+  #   cut to the query heads).
+  # @param record Every row is context: return those projections instead
+  #   of predicting.
+  # @param rows,factor Row chunking of the passes whose keys are fixed.
+  # @return `[..., R - Rt, n_out]`, or with `record` the per-layer list.
+  forward = function(x, y, icl_kv = NULL, record = FALSE, rows = NULL,
+                     factor = NULL) {
+    Rt <- if (is.null(y)) 0L else y$size(y$dim())
     nd <- x$dim()
     R <- x$size(nd - 1L)
     ax <- nd - 1L
@@ -156,27 +235,57 @@ kumo_icl_block <- torch::nn_module(
       x <- torch::torch_cat(list(x$narrow(ax, 1L, Rt) + emb$to(dtype = x$dtype),
                                  x$narrow(ax, Rt + 1L, R - Rt)), dim = ax)
     }
-
     L <- length(self$layers)
+    against <- function(layer, kv) {
+      force(layer); force(kv)
+      function(q, ...) layer(q, kv)
+    }
+    cut <- function(kv) {
+      if (is.null(self$kv_heads)) return(kv)
+      lapply(kv, function(t) t$narrow(t$dim() - 1L, 1L, self$kv_heads)$contiguous())
+    }
+
+    if (!is.null(icl_kv)) {
+      for (j in seq_len(L)) {
+        x <- .kumo_split_apply(against(self$layers[[j]], icl_kv[[j]]), x, ax,
+                               rows, factor)
+      }
+      return(self$head(self$norm(x)))
+    }
+
+    if (isTRUE(record)) {
+      out <- vector("list", L)
+      for (j in seq_len(L)) {
+        layer <- self$layers[[j]]
+        kv <- layer$attn$project_kv(layer$key_value_norm(x))
+        out[[j]] <- cut(kv)
+        if (j < L) x <- .kumo_split_apply(against(layer, kv), x, ax, rows, factor)
+      }
+      return(out)
+    }
+
+    # Only a chunking that actually splits something leaves the
+    # reference's one-call path: `factor = 1` is the plain forward.
+    s_ <- .kumo_chunk_len(R - Rt, rows, factor)
+    chunked <- !is.na(s_) && s_ < R - Rt
     for (j in seq_len(L)) {
       layer <- self$layers[[j]]
       last <- j == L
       ctx <- x$narrow(ax, 1L, Rt)
       qry <- x$narrow(ax, Rt + 1L, R - Rt)
-      if (is.null(self$kv_heads)) {
+      if (is.null(self$kv_heads) && !chunked) {
         # One call over every row, as the reference makes it: the same
         # call shapes are what keep the rounding the same.
         x <- layer(if (last) qry else x, ctx)
         next
       }
       # Context rows attend with every head; query rows with the first
-      # `kv_heads` of the same projections.
+      # `kv_heads` of the same projections (all of them on small).
       kv <- layer$attn$project_kv(layer$key_value_norm(ctx))
-      kvq <- lapply(kv, function(t) {
-        t$narrow(t$dim() - 1L, 1L, self$kv_heads)$contiguous()
-      })
-      xq <- layer(qry, kvq)
-      x <- if (last) xq else torch::torch_cat(list(layer(ctx, kv), xq), dim = ax)
+      xq <- .kumo_split_apply(against(layer, cut(kv)), qry, ax, rows, factor)
+      x <- if (last) xq else torch::torch_cat(
+        list(.kumo_split_apply(against(layer, kv), ctx, ax, rows, factor), xq),
+        dim = ax)
     }
     self$head(self$norm(x))
   }
@@ -197,6 +306,28 @@ kumo_model <- torch::nn_module(
     E <- as.integer(config$icl_channels)
     self$row_project <- if (kd != E) torch::nn_linear(kd, E) else torch::nn_identity()
     self$icl_block <- kumo_icl_block(config)
+    # Read by the predictors and the cache machinery.
+    self$supports_kv_cache <- TRUE
+    self$supports_stage_chunking <- TRUE
+    self$supports_chunked_eval <- TRUE
+    self$kv_cache_is_exact <- TRUE
+  },
+
+  .prepare = function(x, y, categorical_mask) {
+    if (!inherits(categorical_mask, "torch_tensor")) {
+      categorical_mask <- torch::torch_tensor(as.logical(categorical_mask),
+                                              dtype = torch::torch_bool(),
+                                              device = x$device)
+    }
+    nd <- x$dim()
+    mask <- categorical_mask$to(dtype = torch::torch_bool())$expand(
+      c(x$shape[seq_len(nd - 2L)], x$size(nd))
+    )
+    if (!is.null(y)) {
+      y <- if (self$row_embedding$is_classifier) y$to(dtype = torch::torch_long())
+           else y$to(dtype = x$dtype)
+    }
+    list(y = y, mask = mask)
   },
 
   # @param x `[..., R, C]` float, NaN for missing, context rows first.
@@ -205,45 +336,183 @@ kumo_model <- torch::nn_module(
   #   of context rows.
   # @param categorical_mask Logical vector of length `C`, or a boolean
   #   tensor broadcastable to `[..., C]`.
+  # @param kv_cache A [kumo_kv_cache()]; then every row of `x` is a query
+  #   row and `y` is ignored.
+  # @param row_chunk_size Rows per pass. Set below the row count, the
+  #   context is encoded on its own into a cache and the query rows then
+  #   stream through against it, so only one chunk of them is in flight.
+  # @param save_peak_memory_factor Split every step whose keys are fixed
+  #   into this many chunks of rows.
+  # @param col_chunk_size Columns per pass through each column block.
   # @return `[..., R - Rt, 10]` logits or `[..., R - Rt, 999]` quantiles.
-  forward = function(x, y, categorical_mask) {
-    if (!inherits(categorical_mask, "torch_tensor")) {
-      categorical_mask <- torch::torch_tensor(as.logical(categorical_mask),
-                                              dtype = torch::torch_bool(),
-                                              device = x$device)
+  forward = function(x, y, categorical_mask, kv_cache = NULL,
+                     row_chunk_size = NULL, save_peak_memory_factor = NULL,
+                     col_chunk_size = NULL) {
+    if (!is.null(kv_cache)) {
+      return(self$forward_cached(x, kv_cache, row_chunk_size,
+                                 save_peak_memory_factor, col_chunk_size))
     }
+    p <- self$.prepare(x, y, categorical_mask)
     nd <- x$dim()
-    categorical_mask <- categorical_mask$to(dtype = torch::torch_bool())$expand(
-      c(x$shape[seq_len(nd - 2L)], x$size(nd))
-    )
-    y <- if (self$row_embedding$is_classifier) y$to(dtype = torch::torch_long())
-         else y$to(dtype = x$dtype)
-
-    reps <- self$row_embedding(x, y, categorical_mask)
+    R <- x$size(nd - 1L)
+    Rt <- p$y$size(p$y$dim())
+    if (!is.na(.kumo_chunk_len(R, row_chunk_size)) && row_chunk_size < R) {
+      cache <- self$build_kv_cache(x$narrow(nd - 1L, 1L, Rt), p$y, p$mask,
+                                   row_chunk_size, save_peak_memory_factor,
+                                   col_chunk_size)
+      return(self$forward_cached(x$narrow(nd - 1L, Rt + 1L, R - Rt), cache,
+                                 row_chunk_size, save_peak_memory_factor,
+                                 col_chunk_size))
+    }
+    reps <- self$row_embedding(x, p$y, p$mask, factor = save_peak_memory_factor,
+                               cols = col_chunk_size)
     dump_if_enabled("kumo_reps", reps)
-    out <- self$icl_block(self$row_project(reps), y)
+    out <- self$icl_block(self$row_project(reps), p$y,
+                          factor = save_peak_memory_factor)
     dump_if_enabled("kumo_logits", out)
     out
+  },
+
+  #' Everything the context rows contribute to a prediction
+  #'
+  #' @param x `[..., Rt, C]`, the context rows only.
+  #' @return A [kumo_kv_cache()].
+  build_kv_cache = function(x, y, categorical_mask, row_chunk_size = NULL,
+                            save_peak_memory_factor = NULL,
+                            col_chunk_size = NULL) {
+    p <- self$.prepare(x, y, categorical_mask)
+    enc <- self$row_embedding(x, p$y, p$mask, record = TRUE,
+                              rows = row_chunk_size,
+                              factor = save_peak_memory_factor,
+                              cols = col_chunk_size)
+    icl_kv <- self$icl_block(self$row_project(enc$reps), p$y, record = TRUE,
+                             rows = row_chunk_size,
+                             factor = save_peak_memory_factor)
+    kumo_kv_cache(enc$impute_mean, enc$col_kv, icl_kv,
+                  n_train = x$size(x$dim() - 1L), n_features = x$size(x$dim()),
+                  categorical_mask = as.logical(
+                    p$mask$reshape(c(-1L, x$size(x$dim())))[1, ]$cpu()))
+  },
+
+  #' @keywords internal
+  forward_cached = function(x, kv_cache, row_chunk_size = NULL,
+                            save_peak_memory_factor = NULL,
+                            col_chunk_size = NULL) {
+    nd <- x$dim()
+    if (x$size(nd) != kv_cache$n_features) {
+      cli::cli_abort(
+        "This cache was built for {kv_cache$n_features} feature{?s}; \\
+         got {x$size(nd)}."
+      )
+    }
+    p <- self$.prepare(x, NULL, kv_cache$categorical_mask)
+    # Query rows see only the context, never each other, so they can go
+    # through a chunk at a time with nothing but the cache in common.
+    .kumo_split_apply(function(xq, a, n) {
+      reps <- self$row_embedding(xq, NULL, p$mask, cache = kv_cache,
+                                 factor = save_peak_memory_factor,
+                                 cols = col_chunk_size)
+      self$icl_block(self$row_project(reps), NULL, icl_kv = kv_cache$icl_kv,
+                     factor = save_peak_memory_factor)
+    }, x, nd - 1L, row_chunk_size)
   }
 )
+
+
+# ---------------------------------------------------------------------------
+# KV cache
+# ---------------------------------------------------------------------------
+
+#' Everything the context rows contribute to a Kumo Tabular prediction
+#'
+#' Context rows never attend to query rows anywhere in the network: the
+#' cell embedding imputes from context means, each column block's inducing
+#' points read the context rows only, a row block is attention within one
+#' row, and in the ICL stack only context rows are keys. So the context
+#' half of the forward pass is a function of the context alone, and this
+#' is it -- what `sdm`'s `fit()` records and its `predict()` replays:
+#'
+#' * `impute_mean` -- the context column means, `[..., 1, C]`;
+#' * `col_kv` -- per column block, the output step's key/value projection
+#'   of the `M` inducing vectors, `[..., C, M, H, hd]` (fixed size,
+#'   however many context rows);
+#' * `icl_kv` -- per ICL layer, the context rows' keys and values, cut to
+#'   the heads the query rows use (two on medium and large).
+#'
+#' Predicting against it differs from the one-shot forward only by the
+#' float32 rounding that a different batch shape brings (the reference's
+#' own two paths differ by up to 2.4e-6 on the parity fixtures).
+#'
+#' @param impute_mean,col_kv,icl_kv See above.
+#' @param n_train Context rows it was built from.
+#' @param n_features Columns it was built for.
+#' @param categorical_mask The member's categorical flags.
+#' @keywords internal
+kumo_kv_cache <- function(impute_mean, col_kv, icl_kv, n_train, n_features,
+                          categorical_mask) {
+  structure(
+    list(impute_mean = impute_mean, col_kv = col_kv, icl_kv = icl_kv,
+         n_train = as.integer(n_train), n_features = as.integer(n_features),
+         categorical_mask = as.logical(categorical_mask)),
+    class = "kumo_kv_cache"
+  )
+}
+
+#' @export
+print.kumo_kv_cache <- function(x, ...) {
+  n_bytes <- .tensor_bytes(x$impute_mean) + .tensor_bytes(x$col_kv) +
+    .tensor_bytes(x$icl_kv)
+  cli::cli_text("{.strong Kumo Tabular KV cache}")
+  cli::cli_bullets(c(
+    "*" = "built from {.val {x$n_train}} context row{?s}, \\
+           {.val {x$n_features}} column{?s}",
+    "*" = "{length(x$col_kv)} column block{?s}, \\
+           {length(x$icl_kv)} ICL layer{?s}, \\
+           {round(n_bytes / 1e6, 1)} MB"
+  ))
+  invisible(x)
+}
 
 
 # ---------------------------------------------------------------------------
 # Predictors
 # ---------------------------------------------------------------------------
 
-# One member's network output for the query rows: the context rows and the
-# chunk are transformed together (every transform is row-wise once
-# fitted), the target is the member's view of it, and the whole thing is
-# one forward pass, as `sdm`'s `KumoTabular.forward()` makes it.
+# One member's network output for the query rows. Without a cache the
+# context rows and the chunk are transformed together (every transform is
+# row-wise once fitted) and go through one forward pass, as `sdm`'s
+# `KumoTabular.forward()` makes it. With one, the member's context is
+# encoded once per store -- what the reference's `fit()` records -- and
+# the chunk alone runs against it.
 # @keywords internal
-.kumo_member_out <- function(net, dev, rec, X_train, y_train, X_query, m) {
-  mem <- kumo_recipe_member(rec, rbind(X_train, X_query), m)
-  yt <- kumo_recipe_target(rec, y_train, m)
-  out <- torch::with_no_grad(
-    net(mem$x$to(device = dev)$unsqueeze(1L), yt$to(device = dev)$unsqueeze(1L),
-        mem$categorical_mask)
-  )
+.kumo_member_out <- function(net, dev, rec, X_train, y_train, X_query, m,
+                             cache_store = NULL, chunks = list()) {
+  run <- function(...) {
+    do.call(net, c(list(...), list(row_chunk_size = chunks$row_chunk_size,
+                                   save_peak_memory_factor = chunks$save_peak_memory_factor,
+                                   col_chunk_size = chunks$col_chunk_size)))
+  }
+  if (is.null(cache_store)) {
+    mem <- kumo_recipe_member(rec, rbind(X_train, X_query), m)
+    yt <- kumo_recipe_target(rec, y_train, m)
+    out <- torch::with_no_grad(run(
+      mem$x$to(device = dev)$unsqueeze(1L), yt$to(device = dev)$unsqueeze(1L),
+      mem$categorical_mask
+    ))
+    return(out[1, , ]$cpu())
+  }
+  cache <- member_cache(cache_store, m, function() {
+    mem <- kumo_recipe_member(rec, X_train, m)
+    yt <- kumo_recipe_target(rec, y_train, m)
+    torch::with_no_grad(net$build_kv_cache(
+      mem$x$to(device = dev)$unsqueeze(1L), yt$to(device = dev)$unsqueeze(1L),
+      mem$categorical_mask, chunks$row_chunk_size,
+      chunks$save_peak_memory_factor, chunks$col_chunk_size
+    ))
+  })
+  mem <- kumo_recipe_member(rec, X_query, m)
+  out <- torch::with_no_grad(run(mem$x$to(device = dev)$unsqueeze(1L), NULL,
+                                 mem$categorical_mask, kv_cache = cache))
   out[1, , ]$cpu()
 }
 
@@ -284,13 +553,30 @@ kumo_model <- torch::nn_module(
 #' @param predict_chunk_size Max query rows per forward pass. Query rows
 #'   attend only to context rows, so chunking changes nothing but float32
 #'   rounding.
+#' @param kv_cache Encode each member's context once per `predict()` call
+#'   and run every chunk against it, rather than re-encoding it with each
+#'   chunk -- what the reference's `fit()` / `predict()` split does.
+#'   [tabfound_cache()] keeps it across calls and sessions. Off by
+#'   default; the answer moves only by float32 rounding (see
+#'   [kumo_kv_cache()]).
+#' @param save_peak_memory_factor Split every step whose keys are fixed
+#'   (each column block's output step, each row block, the query rows of
+#'   the ICL stack) into this many chunks of rows.
+#' @param row_chunk_size Rows in flight per pass: the context is encoded
+#'   on its own with its row-independent steps a chunk at a time, then the
+#'   query rows stream through against it.
+#' @param col_chunk_size Columns per pass through each column block.
 #' @param categorical_features 1-based indices of categorical columns.
 #' @keywords internal
 kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
-                            predict_chunk_size = 1024L,
+                            predict_chunk_size = 1024L, kv_cache = FALSE,
+                            save_peak_memory_factor = NULL,
+                            row_chunk_size = NULL, col_chunk_size = NULL,
                             categorical_features = NULL) {
   net <- ctx$net; dev <- ctx$device
   max_classes <- as.integer(ctx$config$num_classes)
+  chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
+                 save_peak_memory_factor = save_peak_memory_factor)
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
@@ -316,13 +602,13 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
          n_train = nrow(X), categorical = categorical, recipe = rec)
   }
 
-  .chunk <- function(state, X_query) {
+  .chunk <- function(state, X_query, caches) {
     rec <- state$recipe
     K <- length(rec$target$classes)
     outs <- lapply(seq_len(rec$n_members), function(m) {
       if (m > 1L) collect_between_chunks()
       o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train_int,
-                            X_query, m)
+                            X_query, m, caches, chunks)
       kumo_recipe_unshift(rec, o[, 1:K, drop = FALSE], m)
     })
     p <- as.matrix(kumo_recipe_reduce(outs, TRUE))
@@ -332,14 +618,37 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
+    caches <- .kumo_store(state, kv_cache)
     probs <- chunk_apply(as.matrix(newdata), predict_chunk_size,
-                         function(chunk) .chunk(state, chunk))
+                         function(chunk) .chunk(state, chunk, caches))
     colnames(probs) <- as.character(state$class_levels)
     if (type == "prob") return(probs)
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
-  list(fit = fit_fn, predict = predict_fn)
+  list(fit = fit_fn, predict = predict_fn,
+       build_cache = function(state) .kumo_build_all(state, function(st, one, store) {
+         .chunk(st, one, store)
+       }))
+}
+
+# A cache carried on the fitted state was built once, possibly in another
+# session; otherwise build lazily, per `predict()` call, when asked to.
+# @keywords internal
+.kumo_store <- function(state, kv_cache) {
+  member_cache_store_from(state$kv_caches) %||%
+    (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+}
+
+# Building every member's cache is what one prediction over a single
+# query row does, so ask for that: the store comes back full, and the
+# row's own answer is thrown away.
+# @keywords internal
+.kumo_build_all <- function(state, chunk_fn) {
+  store <- member_cache_store()
+  one <- state$X_train[1, , drop = FALSE]
+  chunk_fn(state, one, store)
+  member_cache_list(store)
 }
 
 #' Build the Kumo Tabular regressor predictor
@@ -355,10 +664,14 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
 #' @inheritParams kumo_classifier
 #' @keywords internal
 kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
-                           predict_chunk_size = 1024L,
+                           predict_chunk_size = 1024L, kv_cache = FALSE,
+                           save_peak_memory_factor = NULL,
+                           row_chunk_size = NULL, col_chunk_size = NULL,
                            categorical_features = NULL) {
   net <- ctx$net; dev <- ctx$device
   n_q <- as.integer(ctx$config$num_quantiles)
+  chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
+                 save_peak_memory_factor = save_peak_memory_factor)
   levels_ <- seq_len(n_q) / (n_q + 1)
 
   fit_fn <- function(X, y) {
@@ -373,12 +686,12 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
          categorical = categorical, recipe = rec)
   }
 
-  .grid <- function(state, X_query) {
+  .grid <- function(state, X_query, caches = NULL) {
     rec <- state$recipe
     outs <- lapply(seq_len(rec$n_members), function(m) {
       if (m > 1L) collect_between_chunks()
       o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train,
-                            X_query, m)
+                            X_query, m, caches, chunks)
       kumo_recipe_inverse(rec, o, m)
     })
     as.matrix(kumo_recipe_reduce(outs, FALSE))
@@ -387,8 +700,9 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
   predict_fn <- function(state, newdata, type = "mean",
                          quantiles = c(0.1, 0.5, 0.9), ...) {
     if (identical(type, "grid")) type <- "raw_quantiles"
+    caches <- .kumo_store(state, kv_cache)
     res <- chunk_apply(as.matrix(newdata), predict_chunk_size, function(chunk) {
-      g <- .grid(state, chunk)
+      g <- .grid(state, chunk, caches)
       quantile_dist_stat(g, levels_, type, quantiles)
     })
     if (type %in% c("mean", "median")) return(as.numeric(res))
@@ -399,6 +713,9 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
   }
 
   list(fit = fit_fn, predict = predict_fn,
+       build_cache = function(state) .kumo_build_all(state, function(st, one, store) {
+         .grid(st, one, store)
+       }),
        types = c("mean", "median", "quantiles", "grid"),
        quantile_levels = levels_)
 }
@@ -612,6 +929,7 @@ register_kumo_backend <- function() {
     # The network conditions on missingness itself: context-mean
     # imputation inside the cell embedding plus a learned projection of
     # the missingness pattern.
+    kv_cache_capable   = TRUE,
     handles_missing    = TRUE,
     imputes_internally = FALSE,
     description   = "NVIDIA Kumo Tabular (small/medium/large) cell/row/ICL transformer",

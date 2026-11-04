@@ -9,6 +9,10 @@ kumo_regressor(
   n_estimators = 8L,
   seed = 42L,
   predict_chunk_size = 1024L,
+  kv_cache = FALSE,
+  save_peak_memory_factor = NULL,
+  row_chunk_size = NULL,
+  col_chunk_size = NULL,
   categorical_features = NULL
 )
 }
@@ -23,6 +27,23 @@ stream, so on the same platform they are the reference's.}
 \item{predict_chunk_size}{Max query rows per forward pass. Query rows
 attend only to context rows, so chunking changes nothing but float32
 rounding.}
+
+\item{kv_cache}{Encode each member's context once per \code{predict()} call
+and run every chunk against it, rather than re-encoding it with each
+chunk -- what the reference's \code{fit()} / \code{predict()} split does.
+\code{\link[=tabfound_cache]{tabfound_cache()}} keeps it across calls and sessions. Off by
+default; the answer moves only by float32 rounding (see
+\code{\link[=kumo_kv_cache]{kumo_kv_cache()}}).}
+
+\item{save_peak_memory_factor}{Split every step whose keys are fixed
+(each column block's output step, each row block, the query rows of
+the ICL stack) into this many chunks of rows.}
+
+\item{row_chunk_size}{Rows in flight per pass: the context is encoded
+on its own with its row-independent steps a chunk at a time, then the
+query rows stream through against it.}
+
+\item{col_chunk_size}{Columns per pass through each column block.}
 
 \item{categorical_features}{1-based indices of categorical columns.}
 }
