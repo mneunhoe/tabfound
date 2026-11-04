@@ -87,6 +87,16 @@ for (nm in names(meta$cases)) {
           expect_identical(as.integer(f$rec$target$classes[rot]),
                            as.integer(unlist(cs$members[[m]]$classes)),
                            label = sprintf("%s member %d class order", name, m))
+          # Past 10 classes, the member's ECOC codebook: integer symbols
+          # from the same stream, so exact or wrong.
+          if (!is.null(ref[[paste0(p, "codebook")]])) {
+            want_cb <- as.matrix(ref[[paste0(p, "codebook")]])
+            storage.mode(want_cb) <- "integer"
+            expect_identical(f$rec$target$codebooks[[m]], want_cb,
+                             label = sprintf("%s member %d codebook", name, m))
+          } else {
+            expect_null(f$rec$target$codebooks)
+          }
         }
       }
     })
@@ -143,4 +153,28 @@ test_that("the recipe state is plain R data", {
   rec <- kumo_recipe_fit(matrix(rnorm(40), 20), rnorm(20), FALSE, n_members = 4L)
   bad <- rapply(rec, function(x) inherits(x, "torch_tensor"), how = "unlist")
   expect_false(any(bad))
+})
+
+test_that("an ECOC codebook gives every class its own symbol somewhere", {
+  for (K in c(11L, 15L, 40L, 250L)) {
+    g <- .kumo_generator(K)
+    cb <- .kumo_ecoc_codebook(K, g)
+    T_ <- max(ceiling(K / 9), 4 * ceiling(log10(K)))
+    expect_identical(dim(cb), c(as.integer(T_), K))
+    for (t in seq_len(T_)) {
+      own <- cb[t, ] != 9L
+      # Nine classes per task, holding the symbols 0..8 once each.
+      expect_identical(sum(own), 9L)
+      expect_setequal(cb[t, own], 0:8)
+    }
+    expect_true(all(colSums(cb != 9L) >= 1L), label = paste("K =", K))
+  }
+  # Drawn after the rest of the recipe, so ten classes or fewer draw none
+  # and leave every other draw where it was.
+  X <- matrix(rnorm(60), 30)
+  a <- kumo_recipe_fit(X, rep(0:9, 3), TRUE, n_members = 2L)
+  expect_null(a$target$codebooks)
+  b <- kumo_recipe_fit(X, rep(0:14, 2), TRUE, n_members = 2L)
+  expect_length(b$target$codebooks, 2L)
+  expect_false(identical(b$target$codebooks[[1]], b$target$codebooks[[2]]))
 })

@@ -674,3 +674,41 @@ test_that("the member cache store builds each member once and reuses it", {
   expect_null(member_cache(NULL, 1L, make("c")))
   expect_identical(built, 2L)
 })
+
+
+test_that("ECOC scores are mean log-probabilities over a class's own tasks", {
+  torch::torch_manual_seed(9L)
+  logits <- torch::torch_randn(3L, 4L, 10L)
+  book <- rbind(c(0L, 1L, 9L, 9L, 2L, 9L, 3L, 4L, 5L, 6L, 7L, 8L),
+                c(9L, 0L, 1L, 2L, 9L, 3L, 4L, 5L, 6L, 7L, 8L, 9L),
+                c(8L, 9L, 0L, 1L, 2L, 3L, 9L, 4L, 5L, 6L, 7L, 9L))
+  got <- as.matrix(.kumo_ecoc_scores(logits, book))
+  lp <- as.array(torch::nnf_log_softmax(logits, dim = -1L))
+  want <- sapply(seq_len(ncol(book)), function(k) {
+    own <- which(book[, k] != 9L)
+    rowMeans(sapply(own, function(t) lp[t, , book[t, k] + 1L]), dims = 1L)
+  })
+  if (!is.matrix(want)) want <- matrix(want, nrow = 4L)
+  expect_equal(got, want, tolerance = 1e-6)
+})
+
+test_that("a Kumo classifier past 10 classes runs ECOC, cached and chunked", {
+  X <- cache_test_matrix(n = 60L)
+  lv <- letters[1:14]
+  y <- factor(rep(lv[-5], length.out = 60L), levels = lv)   # "e" never seen
+  X_new <- cache_test_matrix(n = 9L, seed = 48L)
+  clf <- function(...) do.call(kumo_classifier, list(
+    fake_ctx(tiny_kumo(), config = list(num_classes = 10L)),
+    n_estimators = 2L, predict_chunk_size = CHUNK, ...))
+  st <- clf()$fit(X, y)
+  expect_length(st$recipe$target$codebooks, 2L)
+  a <- clf()$predict(st, X_new, type = "prob")
+  expect_identical(dim(a), c(9L, 14L))
+  expect_equal(unname(rowSums(a)), rep(1, 9L), tolerance = 1e-6)
+  expect_true(all(a[, "e"] == 0))
+  b <- clf(kv_cache = TRUE)$predict(clf(kv_cache = TRUE)$fit(X, y), X_new,
+                                    type = "prob")
+  expect_equal(a, b, tolerance = 1e-5)
+  ch <- clf(row_chunk_size = 16L, col_chunk_size = 2L, save_peak_memory_factor = 2L)
+  expect_equal(ch$predict(ch$fit(X, y), X_new, type = "prob"), a, tolerance = 1e-5)
+})

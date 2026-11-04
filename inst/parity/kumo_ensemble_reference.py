@@ -6,7 +6,10 @@ Runs `sdm`'s own `RecipeExecution(default_recipe())` -- the exact object
 `num_members = 8` and a `torch.Generator` seeded at 42, and dumps every
 member's network inputs: `x` (context rows then query rows, float32),
 `y`, the categorical mask, the column order, and the class order. Then it
-pushes synthetic member outputs through the reference's
+draws each member's ECOC codebook where there are more than 10 classes,
+from the same generator after the recipe's draws (where
+`KumoTabular.forward()` draws it), and pushes synthetic member outputs
+through the reference's
 `inverse_transform_target()` and `transform_output()`, so the reduction
 (class realignment, trimmed mean) is pinned too.
 
@@ -34,6 +37,7 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from sdm import Stype, TableTensor
+from sdm.models import ECOC
 from sdm.models.base import _categorical_mask
 from sdm.models.kumo.tabular.recipe import default_recipe
 from sdm.processing.execution import RecipeExecution
@@ -90,6 +94,14 @@ def run_case(name: str, x_train: np.ndarray, y_train: np.ndarray,
         contexts = ex.fit_transform(x=xc, y=yc, related_tables=None,
                                     num_members=E, generator=g)
         queries = ex.transform(x=xq, related_tables=None)
+        # What `ECOC.forward()` draws next, member by member, from the same
+        # generator -- nothing in between consumes it.
+        books = []
+        if task == "classification":
+            K = contexts[0].y.categorical.categories[0].numel()
+            ecoc = ECOC(max_classes=10)
+            if K > ecoc.max_classes:
+                books = [ecoc._draw_codebook(K, "cpu", g) for _ in range(E)]
 
     p = f"{name}."
     out[p + "x_train"] = torch.as_tensor(x_train, dtype=torch.float64)
@@ -116,6 +128,8 @@ def run_case(name: str, x_train: np.ndarray, y_train: np.ndarray,
             out[p + f"m{m}.y"] = c.y.categorical.code.squeeze(-1).double()
             classes = c.y.categorical.categories[0].tolist()
             info["classes"] = [int(v) for v in classes]
+            if books:
+                out[p + f"m{m}.codebook"] = books[m].double()
             logits = torch.randn(n_out, len(classes), generator=gen)
             out[p + f"m{m}.out"] = logits
             member_outs.append(TableTensor(
@@ -149,7 +163,7 @@ def run_case(name: str, x_train: np.ndarray, y_train: np.ndarray,
 fixture_dir = Path(args.fixture_dir)
 manifest = json.loads((fixture_dir / "manifest.json").read_text())
 for fx in ("clf_binary_missing", "clf_categorical", "reg_skewed",
-           "reg_categorical", "clf_iris"):
+           "reg_categorical", "clf_iris", "clf_many_classes"):
     info = manifest["fixtures"][fx]
     d = load_file(str(fixture_dir / f"{fx}.safetensors"))
     run_case(fx, d["x_train"].double().numpy(), d["y_train"].double().numpy(),

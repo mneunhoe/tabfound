@@ -60,8 +60,13 @@ benchmark wrappers use 8, which is the default here.
 
 Classes that do not occur in the training rows cannot be predicted --
 the recipe drops them, as the reference's does -- and come back with
-probability zero. More than 10 classes needs the reference's
-error-correcting output codes, which are not ported yet.
+probability zero. Above 10 classes the network's 10 outputs are not
+enough, and each member runs error-correcting output codes as the
+reference does: its own random codebook splits the task into \code{T}
+ten-way sub-tasks (8 for 15 or 20 classes, 28 for 250), which run as one
+batch, and each class is scored by its mean log-probability over the
+sub-tasks that give it a symbol of its own. Memory and time grow by
+\code{T}.
 
 Columns are categorical only when declared: \code{sdm}'s type inference
 keeps numeric columns numerical. \code{\link[=tabfound]{tabfound()}} declares a frame's

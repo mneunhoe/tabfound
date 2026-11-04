@@ -11,7 +11,8 @@ kumo_recipe_fit(
   categorical = NULL,
   n_members = 8L,
   seed = 42L,
-  max_columns = 500L
+  max_columns = 500L,
+  max_classes = 10L
 )
 }
 \arguments{
@@ -30,6 +31,11 @@ classification, numeric for regression.}
 \item{seed}{Generator seed.}
 
 \item{max_columns}{Columns kept per member after the shuffle.}
+
+\item{max_classes}{Classes the network separates in one pass. With
+more, each member also draws an error-correcting codebook (see
+\code{\link[=.kumo_ecoc_codebook]{.kumo_ecoc_codebook()}}) -- after every other draw, in member order,
+which is where the reference's network pass makes them.}
 }
 \value{
 A fitted recipe (plain R data).

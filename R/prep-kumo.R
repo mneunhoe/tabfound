@@ -61,6 +61,13 @@
   torch::torch_empty(shape, dtype = dtype)$bernoulli_(p, generator = g)
 }
 
+# `torch.rand(shape, generator = g)`, float32.
+# @keywords internal
+.kumo_rand <- function(shape, g) {
+  fn <- .kumo_torch_binding("cpp_torch_namespace_rand_size_IntArrayRef_generator_Generator")
+  fn(as.integer(shape), g, list(dtype = torch::torch_float32()))
+}
+
 # `torch.special.ndtri` / `ndtr`: registered by R torch, not exported.
 .kumo_ndtri <- function(x) .kumo_torch_binding("torch_special_ndtri")(x)
 .kumo_ndtr <- function(x) .kumo_torch_binding("torch_special_ndtr")(x)
@@ -442,10 +449,15 @@
 #' @param n_members Ensemble size.
 #' @param seed Generator seed.
 #' @param max_columns Columns kept per member after the shuffle.
+#' @param max_classes Classes the network separates in one pass. With
+#'   more, each member also draws an error-correcting codebook (see
+#'   [.kumo_ecoc_codebook()]) -- after every other draw, in member order,
+#'   which is where the reference's network pass makes them.
 #' @return A fitted recipe (plain R data).
 #' @keywords internal
 kumo_recipe_fit <- function(X, y, classification, categorical = NULL,
-                            n_members = 8L, seed = 42L, max_columns = 500L) {
+                            n_members = 8L, seed = 42L, max_columns = 500L,
+                            max_classes = 10L) {
   X <- as.matrix(X); storage.mode(X) <- "double"
   E <- as.integer(n_members)
   categorical <- categorical %||% rep(FALSE, ncol(X))
@@ -517,7 +529,58 @@ kumo_recipe_fit <- function(X, y, classification, categorical = NULL,
     base[((m %% W) - rws) %% W + 1L]
   })
   rec$max_columns <- as.integer(max_columns)
+
+  K <- length(target$classes)
+  if (classification && K > max_classes) {
+    rec$target$codebooks <- lapply(seq_len(E), function(m) {
+      .kumo_ecoc_codebook(K, g, max_classes)
+    })
+  }
   rec
+}
+
+#' Draw one member's error-correcting output codebook
+#'
+#' A port of `sdm.models.ECOC._draw_codebook()` (itself from TabPFN
+#' Extensions). Each of `T = max(ceil(K / 9), 4 ceil(log_10 K))` sub-tasks
+#' gives 9 classes their own symbol `0..8` and merges the rest into
+#' symbol 9; classes are picked least-covered first, with a random
+#' tie-break. With `K <= 200`, 50 candidate codebooks are drawn and the
+#' one with the largest minimum pairwise Hamming distance kept (ties: the
+#' largest total distance, then the first). Same generator calls, in the
+#' same order, as the reference.
+#'
+#' @param K Number of classes.
+#' @param g A torch generator.
+#' @param max_classes Network classes per pass.
+#' @return Integer matrix `[T, K]` of 0-based symbols.
+#' @keywords internal
+.kumo_ecoc_codebook <- function(K, g, max_classes = 10L) {
+  rest <- as.integer(max_classes) - 1L
+  T_ <- as.integer(max(ceiling(K / rest),
+                       4 * ceiling(log(K) / log(max_classes))))
+  nd <- if (K <= 200L) 50L else 1L
+  book <- array(rest, c(nd, T_, K))
+  coverage <- torch::torch_zeros(nd, K)   # float32, as the reference's
+  for (t in seq_len(T_)) {
+    priority <- coverage + 0.1 * .kumo_rand(c(nd, K), g)
+    chosen <- torch::torch_argsort(priority, dim = -1L)[, 1:rest]
+    symbols <- as.matrix(torch::torch_argsort(.kumo_rand(c(nd, rest), g),
+                                              dim = -1L)) - 1L
+    ch <- as.matrix(chosen)
+    for (d in seq_len(nd)) book[d, t, ch[d, ]] <- symbols[d, ]
+    coverage$scatter_add_(-1L, chosen, torch::torch_ones_like(chosen,
+                                                               dtype = coverage$dtype))
+  }
+  if (nd == 1L) return(matrix(book[1, , ], T_, K))
+
+  pairs <- which(upper.tri(diag(K)), arr.ind = TRUE)
+  score <- vapply(seq_len(nd), function(d) {
+    b <- matrix(book[d, , ], T_, K)
+    dist <- colSums(b[, pairs[, 1], drop = FALSE] != b[, pairs[, 2], drop = FALSE])
+    min(dist) * (nrow(pairs) * T_ + 1) + sum(dist)
+  }, numeric(1))
+  matrix(book[which.max(score), , ], T_, K)
 }
 
 # Float32 rounding, then float64 -- what `TableTensor.from_pandas` and

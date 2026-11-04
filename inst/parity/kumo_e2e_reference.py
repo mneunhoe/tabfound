@@ -30,7 +30,7 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from sdm import Stype, TableTensor
-from sdm.models import KumoTabular
+from sdm.models import ECOC, KumoTabular
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--fixture-dir", required=True)
@@ -50,6 +50,20 @@ for task, ckpt in (("classification", args.clf_ckpt), ("regression", args.reg_ck
     m.models[task].load_state_dict(torch.load(ckpt, map_location="cpu", weights_only=True))
     m.eval()
     models[task] = m
+
+# Record every ECOC codebook the forward pass draws, so the R side can
+# check its own draws against the ones the network actually used.
+drawn: list[torch.Tensor] = []
+_draw = ECOC._draw_codebook
+
+
+def _recording_draw(self, *a, **kw):
+    cb = _draw(self, *a, **kw)
+    drawn.append(cb.clone())
+    return cb
+
+
+ECOC._draw_codebook = _recording_draw
 
 out: dict[str, torch.Tensor] = {}
 meta: dict = {"members": args.members, "seed": args.seed, "size": "small",
@@ -100,9 +114,12 @@ def run(name, x_train, y_train, x_test, task, cat=()):
     cat = list(cat)
     xc, yc, xq = tables(x_train, y_train, x_test, task, cat)
     m = models[task]
+    drawn.clear()
     with torch.no_grad():
         fwd = m(xc, yc, xq, num_estimators=args.members,
                 generator=torch.Generator().manual_seed(args.seed))
+    books = list(drawn)
+    with torch.no_grad():
         m.fit(xc, yc, num_estimators=args.members,
               generator=torch.Generator().manual_seed(args.seed))
         pred = m.predict(xq)
@@ -113,6 +130,8 @@ def run(name, x_train, y_train, x_test, task, cat=()):
     out[p + "x_test"] = torch.as_tensor(x_test, dtype=torch.float64)
     out[p + "y_train"] = torch.as_tensor(y_train, dtype=torch.float64)
     out[p + "out"] = r_fwd.float()
+    for i, cb in enumerate(books):
+        out[p + f"codebook{i}"] = cb.double()
     gap = float((r_fwd - r_pred).abs().max()) if r_fwd.numel() else 0.0
     meta["cases"][name] = {"task": task, "categorical": [c + 1 for c in cat],
                            "classes": classes, "fit_predict_gap": gap,
@@ -122,7 +141,8 @@ def run(name, x_train, y_train, x_test, task, cat=()):
 
 fixture_dir = Path(args.fixture_dir)
 manifest = json.loads((fixture_dir / "manifest.json").read_text())
-for fx in ("clf_binary_missing", "clf_categorical", "reg_skewed", "reg_categorical"):
+for fx in ("clf_binary_missing", "clf_categorical", "reg_skewed", "reg_categorical",
+           "clf_many_classes"):
     info = manifest["fixtures"][fx]
     d = load_file(str(fixture_dir / f"{fx}.safetensors"))
     run(fx, d["x_train"].double().numpy(), d["y_train"].double().numpy(),

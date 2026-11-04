@@ -38,6 +38,9 @@ lives until the query rows are through, so one member's cache is
 persistent even with \code{kv_cache = FALSE}.
 \item \code{col_chunk_size} slices the column axis of every column block,
 chunked or not.
+\item Past 10 classes (\code{opts$n_classes}), every member runs its \code{T}
+error-correcting sub-tasks as one batch, so every term -- the cache
+included -- is \code{T} times as large.
 }
 
 Columns are capped at the recipe's 500; categorical count columns,

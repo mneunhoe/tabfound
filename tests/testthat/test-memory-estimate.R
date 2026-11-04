@@ -549,6 +549,22 @@ test_that("Kumo's caches use the in-context width and the query heads", {
                    kumo_terms(n_features = 500)$stages)
 })
 
+test_that("Kumo past 10 classes pays for every ECOC sub-task", {
+  ten <- kumo_terms(n_classes = 10)
+  # 15 classes: max(ceil(15 / 9), 4 * ceil(log10(15))) = 8 sub-tasks.
+  many <- kumo_terms(n_classes = 15, kv_cache = TRUE)
+  for (nm in names(ten$by)) {
+    expect_equal(many$by[[nm]]$act, 8 * ten$by[[nm]]$act, info = nm)
+  }
+  expect_equal(many$persistent, 8 * kumo_terms(kv_cache = TRUE)$persistent)
+  expect_identical(kumo_terms(n_classes = 250)$by[["row interaction"]]$act,
+                   28 * ten$by[["row interaction"]]$act)
+  # And the estimate passes it through.
+  a <- peak(mem_config_kumo(), 2000, 500, 20)
+  b <- peak(mem_config_kumo(), 2000, 500, 20, n_classes = 15)
+  expect_gt(b$total_peak_bytes, a$total_peak_bytes)
+})
+
 test_that("Kumo's advice names a smaller size, then its own knobs", {
   big <- peak(mem_config_kumo("large"), 50000, 1000, 100, available = 8e9)
   expect_false(big$verdict == "ok")

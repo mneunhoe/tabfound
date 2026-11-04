@@ -59,6 +59,32 @@
     999
    ]
   },
+  "clf_many_classes": {
+   "task": "classification",
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+   ],
+   "fit_predict_gap": 0.0,
+   "shape": [
+    60,
+    15
+   ]
+  },
   "all_const": {
    "task": "classification",
    "categorical": [],

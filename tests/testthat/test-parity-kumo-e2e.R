@@ -4,7 +4,10 @@
 # generator, the network, the class realignment and the trimmed mean over
 # members. Plus the edge cases: an all-constant table (the network sees no
 # feature columns at all), a column missing in every training row, an
-# empty query, and a class that never occurs in the training rows.
+# empty query, and a class that never occurs in the training rows. And 15
+# classes, past the network's 10, where each member runs error-correcting
+# output codes; its codebooks are the ones the reference's forward pass
+# actually drew.
 #
 # Regenerate with `inst/parity/kumo_e2e_reference.py`. Skips unless
 # TABFOUND_KUMO_CLF_DIR / TABFOUND_KUMO_REG_DIR point at the converted
@@ -53,10 +56,19 @@ for (nm in names(meta$cases)) {
       want <- as_mat(ref[[paste0(p, "out")]])
       cats <- unlist(cs$categorical)
       if (identical(cs$task, "classification")) {
+        lv <- 0:max(2L, as.integer(max(y)))
         m <- tabfound:::.rebuild_predictor(clf, categorical_features = cats)
-        m <- fit(m, X_train, factor(y, levels = 0:2))
+        m <- fit(m, X_train, factor(y, levels = lv))
         got <- predict(m, X_test, type = "prob")
-        expect_identical(dim(got), c(nrow(X_test), 3L))
+        expect_identical(dim(got), c(nrow(X_test), length(lv)))
+        books <- grep(paste0("^", name, "\\.codebook"), names(ref), value = TRUE)
+        mine <- m$state$recipe$target$codebooks
+        expect_identical(length(mine), length(books))
+        for (i in seq_along(books)) {
+          want_cb <- as_mat(ref[[paste0(p, "codebook", i - 1L)]])
+          storage.mode(want_cb) <- "integer"
+          expect_identical(mine[[i]], want_cb)
+        }
         # The reference has a column only for classes seen in training;
         # tabfound returns every level, the unseen ones at zero.
         seen <- as.character(unlist(cs$classes))
@@ -87,7 +99,7 @@ VARIANTS <- list(
                  col_chunk_size = 2L)
 )
 for (nm in c("clf_binary_missing", "clf_categorical", "reg_skewed",
-             "reg_categorical")) {
+             "reg_categorical", "clf_many_classes")) {
   for (vn in names(VARIANTS)) {
     local({
       name <- nm; variant <- VARIANTS[[vn]]; label <- vn
@@ -102,7 +114,7 @@ for (nm in c("clf_binary_missing", "clf_categorical", "reg_skewed",
                        device = "cpu"), variant)
         if (identical(cs$task, "classification")) {
           m <- suppressMessages(do.call(tabular_classifier, c(list(clf_dir), args)))
-          m <- fit(m, X_train, factor(y, levels = 0:2))
+          m <- fit(m, X_train, factor(y, levels = 0:max(2L, as.integer(max(y)))))
           got <- predict(m, X_test, type = "prob")[, as.character(unlist(cs$classes)),
                                                     drop = FALSE]
           expect_lt(max(abs(got - want)), TOL_PROBA)

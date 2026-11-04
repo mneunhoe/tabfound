@@ -552,7 +552,7 @@ R torch's float32 would measure the dtype, not the port.
 
 - **Recipe** (`kumo_ensemble_reference.py` -> `ensemble/kumo_ensemble.*`,
   `test-prep-kumo.R`, no weights): `sdm`'s own `RecipeExecution` with 8
-  members and a generator seeded at 42, on four fixtures and four
+  members and a generator seeded at 42, on six fixtures and four
   synthetic tables (a 70-level categorical with unseen and missing query
   values, 520 columns, 9,000 context rows for the rank-Gaussian knot
   spacing, and +-Inf / constant / all-missing / `[5, NaN, 5]` columns).
@@ -565,13 +565,17 @@ R torch's float32 would measure the dtype, not the port.
   regression target can sit one ulp off, because R's libtorch sums
   float32 in a different order. The output reduction (class realignment,
   per-member target inverse, sorting, 20% trimmed mean) is checked on
-  synthetic member outputs.
+  synthetic member outputs. On `clf_many_classes` (15 classes) each
+  member's ECOC codebook -- drawn from the same generator after the
+  recipe, as `KumoTabular.forward()` draws it -- is identical.
 - **End to end** (`kumo_e2e_reference.py` -> `reference/kumo_e2e/`,
   `test-parity-kumo-e2e.R`): the public `KumoTabular()` on CPU float32
   against `tabular_classifier()` / `tabular_regressor()` with `seed = 42`.
   Probabilities agree to 2.3e-6, quantile grids to 1.3e-5 of `sd(y)`,
   on `clf_binary_missing`, `clf_categorical`, `reg_skewed`,
-  `reg_categorical`, an all-constant table (the network sees zero
+  `reg_categorical`, `clf_many_classes` (15 classes of 16, so 8
+  error-correcting sub-tasks per member; 1.0e-7, and the codebooks are
+  the very ones the reference's forward pass drew), an all-constant table (the network sees zero
   columns), a column missing in every training row, an empty query and a
   class absent from the training rows (tabfound returns it at zero; the
   reference has no column for it). The reference's own `fit()` +

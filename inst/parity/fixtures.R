@@ -175,6 +175,28 @@ build_parity_fixtures <- function() {
     x_test  = X[n_tr + seq_len(n_te), , drop = FALSE]
   )
 
+  # --- many classes ------------------------------------------------------
+  # More classes than one network pass separates (Kumo Tabular's 10), so
+  # the reference switches to error-correcting output codes. Codes 0..15
+  # with 7 never in the training rows: 15 observed classes, one level to
+  # come back at zero. Class centres along two features, the rest noise,
+  # some NaNs.
+  set.seed(20261104)
+  n_tr <- 300L; n_te <- 60L; n <- n_tr + n_te; p <- 6L
+  y <- sample(setdiff(0:15, 7L), n, replace = TRUE)
+  X <- matrix(rnorm(n * p), ncol = p)
+  X[, 1] <- X[, 1] + cos(2 * pi * y / 16) * 2
+  X[, 2] <- X[, 2] + sin(2 * pi * y / 16) * 2
+  X[cbind(sample.int(n, 30L), sample.int(p, 30L, replace = TRUE))] <- NA_real_
+  fx$clf_many_classes <- list(
+    task    = "classification",
+    note    = paste("300/60 rows, 6 features, 15 observed classes of 16 --",
+                    "past Kumo's 10, so ECOC"),
+    x_train = X[seq_len(n_tr), , drop = FALSE],
+    y_train = y[seq_len(n_tr)],
+    x_test  = X[n_tr + seq_len(n_te), , drop = FALSE]
+  )
+
   fx
 }
 

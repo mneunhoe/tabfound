@@ -33,7 +33,10 @@ term.}
 \item{...}{Backend knobs that change the peak, overriding both the
 predictor's defaults and (for a model object) the arguments it was
 built with: \code{n_estimators}, \code{kv_cache}, \code{save_peak_memory_factor},
-\code{predict_chunk_size}.}
+\code{predict_chunk_size}, \code{row_chunk_size}, \code{col_chunk_size}. Also
+\code{n_classes}, the classes a classifier is fitted on: Kumo Tabular runs
+more than 10 as several sub-tasks in one batch, which multiplies its
+peak. \code{fit()} and \code{predict()} pass it themselves.}
 
 \item{backend}{Optional backend name, when detection from the config
 is ambiguous.}

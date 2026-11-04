@@ -72,6 +72,14 @@
       "n_test": 64,
       "n_features": 10,
       "categorical_features": []
+    },
+    "clf_many_classes": {
+      "task": "classification",
+      "note": "300/60 rows, 6 features, 15 observed classes of 16 -- past Kumo's 10, so ECOC",
+      "n_train": 300,
+      "n_test": 60,
+      "n_features": 6,
+      "categorical_features": []
     }
   }
 }

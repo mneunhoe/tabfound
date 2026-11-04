@@ -9,7 +9,8 @@
   n_context,
   n_query,
   n_features,
-  stage = c("fit", "predict")
+  stage = c("fit", "predict"),
+  n_classes = NULL
 )
 }
 \arguments{

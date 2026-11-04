@@ -1002,7 +1002,10 @@ DTYPE_BYTES <- 4
 #' @param ... Backend knobs that change the peak, overriding both the
 #'   predictor's defaults and (for a model object) the arguments it was
 #'   built with: `n_estimators`, `kv_cache`, `save_peak_memory_factor`,
-#'   `predict_chunk_size`.
+#'   `predict_chunk_size`, `row_chunk_size`, `col_chunk_size`. Also
+#'   `n_classes`, the classes a classifier is fitted on: Kumo Tabular runs
+#'   more than 10 as several sub-tasks in one batch, which multiplies its
+#'   peak. `fit()` and `predict()` pass it themselves.
 #' @param backend Optional backend name, when detection from the config
 #'   is ambiguous.
 #' @param device Device the run will use. Constants are per-device;
@@ -1592,7 +1595,7 @@ reset_memory_guard <- function() {
 #' @return Invisibly, the estimate when one was made, else `NULL`.
 #' @keywords internal
 .memory_guard <- function(object, n_context, n_query, n_features,
-                          stage = c("fit", "predict")) {
+                          stage = c("fit", "predict"), n_classes = NULL) {
   stage <- match.arg(stage)
   mode <- .memory_guard_mode()
   if (identical(mode, "off")) return(invisible(NULL))
@@ -1607,14 +1610,16 @@ reset_memory_guard <- function() {
   # something once. `"error"` is a live gate and re-checks every call,
   # because what it guards against is the memory available now.
   in_key <- paste(object$backend, object$device, stage,
-                  n_context, n_query, n_features, sep = "/")
+                  n_context, n_query, n_features, n_classes %||% "", sep = "/")
   if (identical(mode, "warn") && !is.null(.guard_seen[[in_key]])) {
     return(invisible(.guard_seen[[in_key]]))
   }
 
   est <- tryCatch(
-    estimate_peak_memory(object, n_context = n_context, n_query = n_query,
-                         n_features = n_features),
+    do.call(estimate_peak_memory,
+            c(list(object, n_context = n_context, n_query = n_query,
+                   n_features = n_features),
+              if (!is.null(n_classes)) list(n_classes = n_classes))),
     error = function(e) NULL,
     warning = function(w) NULL
   )

@@ -484,6 +484,12 @@ print.kumo_kv_cache <- function(x, ...) {
 # `KumoTabular.forward()` makes it. With one, the member's context is
 # encoded once per store -- what the reference's `fit()` records -- and
 # the chunk alone runs against it.
+#
+# With more classes than the network separates, the member's codebook
+# turns one task into `T`: the rows are repeated along a leading task
+# axis, each task sees its own relabelled context, and the `T` logit sets
+# are folded back into `K` class scores by [.kumo_ecoc_scores()]. The
+# cache then carries the task axis too.
 # @keywords internal
 .kumo_member_out <- function(net, dev, rec, X_train, y_train, X_query, m,
                              cache_store = NULL, chunks = list()) {
@@ -492,28 +498,57 @@ print.kumo_kv_cache <- function(x, ...) {
                                    save_peak_memory_factor = chunks$save_peak_memory_factor,
                                    col_chunk_size = chunks$col_chunk_size)))
   }
+  book <- rec$target$codebooks[[m]]
+  tasks <- if (is.null(book)) 1L else nrow(book)
+  lead <- function(x) x$to(device = dev)$unsqueeze(1L)$expand(c(tasks, -1L, -1L))
+  target <- function() {
+    yt <- kumo_recipe_target(rec, y_train, m)
+    if (is.null(book)) return(yt$to(device = dev)$unsqueeze(1L))
+    code <- as.integer(yt)
+    torch::torch_tensor(book[, code + 1L, drop = FALSE], dtype = torch::torch_long(),
+                        device = dev)
+  }
+  fold <- function(out) {
+    if (is.null(book)) out[1, , ]$cpu() else .kumo_ecoc_scores(out, book)$cpu()
+  }
   if (is.null(cache_store)) {
     mem <- kumo_recipe_member(rec, rbind(X_train, X_query), m)
-    yt <- kumo_recipe_target(rec, y_train, m)
-    out <- torch::with_no_grad(run(
-      mem$x$to(device = dev)$unsqueeze(1L), yt$to(device = dev)$unsqueeze(1L),
-      mem$categorical_mask
-    ))
-    return(out[1, , ]$cpu())
+    out <- torch::with_no_grad(run(lead(mem$x), target(), mem$categorical_mask))
+    return(fold(out))
   }
   cache <- member_cache(cache_store, m, function() {
     mem <- kumo_recipe_member(rec, X_train, m)
-    yt <- kumo_recipe_target(rec, y_train, m)
     torch::with_no_grad(net$build_kv_cache(
-      mem$x$to(device = dev)$unsqueeze(1L), yt$to(device = dev)$unsqueeze(1L),
-      mem$categorical_mask, chunks$row_chunk_size,
+      lead(mem$x), target(), mem$categorical_mask, chunks$row_chunk_size,
       chunks$save_peak_memory_factor, chunks$col_chunk_size
     ))
   })
   mem <- kumo_recipe_member(rec, X_query, m)
-  out <- torch::with_no_grad(run(mem$x$to(device = dev)$unsqueeze(1L), NULL,
-                                 mem$categorical_mask, kv_cache = cache))
-  out[1, , ]$cpu()
+  out <- torch::with_no_grad(run(lead(mem$x), NULL, mem$categorical_mask,
+                                 kv_cache = cache))
+  fold(out)
+}
+
+#' Fold error-correcting sub-task logits into class scores
+#'
+#' `sdm.models.ECOC.forward()`'s last step: each sub-task's logits become
+#' log-probabilities, class `k` reads its own symbol's in every task, and
+#' the score is their mean over the tasks in which `k` is not merged into
+#' the rest symbol.
+#'
+#' @param logits `[T, n, max_classes]`.
+#' @param book Integer codebook `[T, K]`, 0-based.
+#' @return `[n, K]`.
+#' @keywords internal
+.kumo_ecoc_scores <- function(logits, book) {
+  rest <- logits$size(3L) - 1L
+  idx <- torch::torch_tensor(array(book, c(nrow(book), 1L, ncol(book))),
+                             dtype = torch::torch_long(), device = logits$device)
+  scores <- torch::nnf_log_softmax(logits, dim = -1L)$gather(
+    -1L, (idx + 1L)$expand(c(logits$size(1L), logits$size(2L), ncol(book)))
+  )
+  active <- idx != rest
+  scores$masked_fill(active$logical_not(), 0)$sum(dim = 1L) / active$sum(dim = 1L)
 }
 
 # 1-based declared column indices -> one logical per column.
@@ -539,8 +574,13 @@ print.kumo_kv_cache <- function(x, ...) {
 #'
 #' Classes that do not occur in the training rows cannot be predicted --
 #' the recipe drops them, as the reference's does -- and come back with
-#' probability zero. More than 10 classes needs the reference's
-#' error-correcting output codes, which are not ported yet.
+#' probability zero. Above 10 classes the network's 10 outputs are not
+#' enough, and each member runs error-correcting output codes as the
+#' reference does: its own random codebook splits the task into `T`
+#' ten-way sub-tasks (8 for 15 or 20 classes, 28 for 250), which run as one
+#' batch, and each class is scored by its mean log-probability over the
+#' sub-tasks that give it a symbol of its own. Memory and time grow by
+#' `T`.
 #'
 #' Columns are categorical only when declared: `sdm`'s type inference
 #' keeps numeric columns numerical. [tabfound()] declares a frame's
@@ -586,18 +626,10 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
       levels_ <- sort(unique(y)); y_int <- match(y, levels_) - 1L
     }
     if (anyNA(y_int)) cli::cli_abort("{.arg y} has missing values.")
-    observed <- length(unique(y_int))
-    if (observed > max_classes) {
-      cli::cli_abort(c(
-        "Kumo Tabular predicts at most {max_classes} classes per pass; \\
-         the training rows have {observed}.",
-        i = "Above that the reference switches to error-correcting output \\
-             codes, which tabfound does not implement yet."
-      ))
-    }
     categorical <- .kumo_categorical(categorical_features, ncol(X))
     rec <- kumo_recipe_fit(X, y_int, TRUE, categorical = categorical,
-                           n_members = n_estimators, seed = seed)
+                           n_members = n_estimators, seed = seed,
+                           max_classes = max_classes)
     list(X_train = X, y_train_int = y_int, class_levels = levels_,
          n_train = nrow(X), categorical = categorical, recipe = rec)
   }
@@ -882,6 +914,10 @@ kumo_describe <- function(config, task) {
 #' * `col_chunk_size` slices the column axis of every column block,
 #'   chunked or not.
 #'
+#' * Past 10 classes (`opts$n_classes`), every member runs its `T`
+#'   error-correcting sub-tasks as one batch, so every term -- the cache
+#'   included -- is `T` times as large.
+#'
 #' Columns are capped at the recipe's 500; categorical count columns,
 #' which can add up to one per categorical, are not known here.
 #'
@@ -914,15 +950,23 @@ kumo_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   # layer, cut to the heads the query rows use.
   cache <- L * tok * M * D * 2 + tok + Li * 2 * n_context * E * kvh / He
 
+  # Error-correcting sub-tasks, as `.kumo_ecoc_codebook()` counts them.
+  K  <- suppressWarnings(as.numeric(opts$n_classes %||% NA))
+  Kn <- as.numeric(config$num_classes %||% 0)
+  T_ <- if (Kn > 0 && isTRUE(K > Kn)) {
+    max(ceiling(K / (Kn - 1)), 4 * ceiling(log(K) / log(Kn)))
+  } else 1
+  cache <- T_ * cache
+
   stages <- list(
     list(name = "column summaries", act = 0, res = 0, att = 0,
-         prepass = if (chunked) n_context * cc * D else 0),
-    list(name = "column embedding", act = rc * cc * D,
-         res = if (chunked) n_context * hc * D else 0, att = 0),
-    list(name = "row interaction", act = rc * hc * D,
-         res = if (chunked) n_context * hc * D else 0, att = 0),
-    list(name = "in-context learning", act = rc * E,
-         res = if (chunked) n_context * E else 0, att = 0, copies = "icl")
+         prepass = if (chunked) T_ * n_context * cc * D else 0),
+    list(name = "column embedding", act = T_ * rc * cc * D,
+         res = if (chunked) T_ * n_context * hc * D else 0, att = 0),
+    list(name = "row interaction", act = T_ * rc * hc * D,
+         res = if (chunked) T_ * n_context * hc * D else 0, att = 0),
+    list(name = "in-context learning", act = T_ * rc * E,
+         res = if (chunked) T_ * n_context * E else 0, att = 0, copies = "icl")
   )
   persistent <- if (isTRUE(opts$kv_cache)) n_est * cache
                 else if (chunked) cache else 0
