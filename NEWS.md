@@ -1,5 +1,13 @@
 # tabfound (development version)
 
+* Fixed regression `predict()` returning too many values when the test
+  rows span more than one `predict_chunk_size` chunk: the per-chunk means
+  (or medians) were joined with `rbind()`, which recycled the last chunk,
+  so 3,000 rows in chunks of 1,024 gave 3,072 numbers. Affected the Kumo
+  Tabular and TabICL regressors' `type = "mean"` and `"median"`;
+  classification, quantile output and the other backends were not
+  affected. `chunk_apply()` now concatenates vectors and checks
+  it returns one result per row.
 * New backend `kumo` for NVIDIA Kumo Tabular (small, medium and large;
   classification and regression), ported from `structured-data-models`
   0.2.1 with weights from `nvidia/Kumo-Tabular` `v1.0.1` (OpenMDW-1.1).

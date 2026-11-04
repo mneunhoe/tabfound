@@ -712,3 +712,23 @@ test_that("a Kumo classifier past 10 classes runs ECOC, cached and chunked", {
   ch <- clf(row_chunk_size = 16L, col_chunk_size = 2L, save_peak_memory_factor = 2L)
   expect_equal(ch$predict(ch$fit(X, y), X_new, type = "prob"), a, tolerance = 1e-5)
 })
+
+
+test_that("chunked regression returns one value per row on every backend path", {
+  # The point estimate is a vector per chunk; 25 rows in chunks of 7 used
+  # to come back as 28 (the last chunk recycled to the chunk width).
+  X <- cache_test_matrix(); yr <- as.numeric(X[, 1] * 2)
+  X_new <- cache_test_matrix(n = 25L, seed = 49L)
+  reg <- kumo_regressor(fake_ctx(tiny_kumo("regressor", kv = NULL),
+                                 config = list(num_quantiles = 9L)),
+                        n_estimators = 2L, predict_chunk_size = CHUNK)
+  st <- reg$fit(X, yr)
+  for (type in c("mean", "median")) {
+    p <- reg$predict(st, X_new, type = type)
+    expect_length(p, 25L)
+    # Each row's answer is the one it gets when predicted on its own.
+    expect_equal(p[25], reg$predict(st, X_new[25, , drop = FALSE], type = type),
+                 tolerance = 1e-5, label = type)
+  }
+  expect_identical(dim(reg$predict(st, X_new, type = "grid")), c(25L, 9L))
+})
