@@ -1,5 +1,38 @@
 # tabfound (development version)
 
+* New backend `kumo` for NVIDIA Kumo Tabular (small, medium and large;
+  classification and regression), ported from `structured-data-models`
+  0.2.1 with weights from `nvidia/Kumo-Tabular` `v1.0.1` (OpenMDW-1.1).
+  * Six catalogue entries, `kumo-tabular-{small,medium,large}-{classifier,regressor}`;
+    the family name `"kumo-tabular"` is large, as in the reference.
+    `download_model()` converts the published state dicts once with Python
+    (`inst/python/kumo_convert_ckpt.py`), deriving the config from the
+    tensor shapes, and now pins a Hub revision.
+  * The full default recipe and ensemble (8 members by default, as on the
+    model card), with the reference's random draws replayed from
+    libtorch's own generator: on Apple arm64 the members are the
+    reference's own. Classification averages member logits; regression
+    takes a trimmed mean of 999-quantile grids, and `type = "mean"` is the
+    grid's mean.
+  * More than 10 classes run the reference's error-correcting output
+    codes. Classes absent from the training rows come back with
+    probability zero.
+  * Missing values are handled inside the network (`na_action = "auto"`
+    passes them through).
+  * `kv_cache`, `tabfound_cache()` / `tabfound_save()` bundles,
+    `predict_chunk_size`, `save_peak_memory_factor`, `row_chunk_size` and
+    `col_chunk_size` all work; they move outputs by float32 rounding only.
+  * Memory preflight calibrated on small; `suggest_chunk_sizes()` covers
+    Kumo, and the preflight suggests a smaller Kumo size before a smaller
+    context. Medium and large estimates reuse small's constants.
+  * Parity: the network, the recipe (weight-free, every member and
+    codebook), and end-to-end predictions on the small checkpoints,
+    including a 15-class case; see `inst/parity/README.md`.
+  * Architecture diagrams for small and medium in
+    `vignette("architecture-gallery")`.
+* `estimate_peak_memory()` takes `n_classes`; `fit()` and `predict()` pass
+  it to the memory guard.
+* `sdpa()` passes `enable_gqa` to the fused kernel.
 * The TabICL backend now follows `tabicl` 2.2.0 (previously 2.1.1). The
   network is unchanged; the wrapper changes are ported:
   * An entirely missing training column is zero-filled rather than

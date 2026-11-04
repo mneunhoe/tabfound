@@ -27,7 +27,10 @@ MODELS <- c(
   "TabPFN v3.5" = "tabpfn-v3.5",
   "TabICL"      = "tabicl-v2-classifier",
   "TabFM"       = "tabfm-1.0.0-classifier",
-  "Mitra"       = "mitra-classifier"
+  "Mitra"       = "mitra-classifier",
+  "Kumo small"  = "kumo-tabular-small-classifier",
+  "Kumo medium" = "kumo-tabular-medium-classifier",
+  "Kumo large"  = "kumo-tabular-large-classifier"
 )
 
 # One row per model, one column per point on whichever axis is varying.
@@ -137,6 +140,12 @@ Three things stand out, and all three are measured rather than assumed:
 * **TabFM is in a different regime.** 6.5 GB of weights are resident
   before anything happens, and its 32-member default multiplies what
   comes after.
+* **Kumo Tabular small sits beside TabICL** — the same three stages at
+  the same width, an 8-member default like TabICL's, but one token per
+  column where TabICL groups three. Medium and large widen the row stage
+  to 256 and reach about half as far. Those two rows are the estimator's
+  reading of their shapes with small's measured constants; only small
+  has been measured.
 
 ## Columns cost as much as rows
 
@@ -304,6 +313,11 @@ finishing:
 fs <- list.files(system.file("memory", "measurements", package = "tabfound"),
                  pattern = "json$", full.names = TRUE)
 fs <- fs[!startsWith(basename(fs), "ensemble-")]
+# A `-chunked` grid is the same backend measured with stage chunking on.
+# Read the default grids first, so the reshape keeps their times where a
+# backend has both, and falls back to the chunked grid only where it
+# has nothing else at 90 features.
+fs <- fs[order(endsWith(basename(fs), "-chunked.json"))]
 tm <- do.call(rbind, lapply(fs, function(f) {
   b <- jsonlite::fromJSON(f, simplifyVector = FALSE)
   do.call(rbind, lapply(b$points, function(p) {
@@ -324,7 +338,7 @@ tm
 ```
 
 Multiply those by the default member count for the real figure: TabICL's
-8 and TabFM's 32. TabFM at 3,200 context rows is 71 seconds for one
+and Kumo's 8, and TabFM's 32. TabFM at 3,200 context rows is 71 seconds for one
 member, so around 38 minutes for its default ensemble — long before
 memory becomes the binding constraint. Mitra's 145 seconds at the same
 size is the steepest curve in the package.
@@ -337,13 +351,14 @@ than the memory table does.
 
 | if your table is | use | why |
 |---|---|---|
-| under ~2,000 rows, any width | anything | all seven are comfortable |
+| under ~2,000 rows, any width | almost anything | all are comfortable but Kumo medium and large, which need about 64 GB free for 2,000 rows at 50 columns |
 | a few thousand rows, ≤ 100 columns | TabPFN v3 | furthest reach, seconds not minutes |
 | tens of thousands of rows | TabPFN v3 | one of the two backends that bound the row axis of their embedding tensor, and the roomier of them; 32,768 × 120 measures 18 GB against v3.5's 23 GB |
 | tens of thousands of rows, and you want v3.5 | TabPFN v3.5 | same chunking, about half the reach; budget roughly twice v3's memory for the same table |
 | wide (200+ columns) | TabPFN v2.6, with `save_peak_memory_factor` | the v3 and v3.5 chunking bounds rows, not columns, and their state is a vector per column |
 | large and you want TabICL's ensembling | TabICL with `n_estimators` lowered | the default 8 costs about three times what one does |
 | small (hundreds of rows) | Mitra or TabFM are fine here | this is the size they were published for |
+| Kumo Tabular, short of memory | `row_chunk_size` and `save_peak_memory_factor` together, or fewer members | its row tensor stays whole under chunking, so each knob buys less than on v3; at 50 columns and 32 GB the two together about double the comfortable context, as does `n_estimators = 1` |
 
 And regardless of size, if the run is going to be tight: subsample the
 context. These models do not learn parameters, so halving the context
@@ -404,8 +419,8 @@ must be built before the first torch call, or with
 
 ## Where the numbers come from
 
-A scaling model whose constants were **measured**: 72 fit/predict runs
-across six backends, each in its own process with its peak resident
+A scaling model whose constants were **measured**: 156 fit/predict runs
+on the size grids across eight backends, plus sweeps of each knob, each in its own process with its peak resident
 memory sampled from outside. The method, the raw measurements and the
 fitted constants are all in `inst/memory/`.
 

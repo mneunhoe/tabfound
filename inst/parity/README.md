@@ -289,7 +289,7 @@ a prediction; the second is the same rounding, so neither can the
 second. The comparisons align by method and compare after the narrowing
 rather than pretending the differences are not there.
 
-## Five backends, two stagings
+## Six architectures, two stagings
 
 The staging follows whatever the model's own structure makes bisectable.
 
@@ -304,7 +304,8 @@ handful of modules, so they are staged by module — `stage:cell`,
 `stage:col1`, `stage:row1`, `stage:col2`, `stage:reps`, `stage:logits`
 for TabFM; `stage:col`, `stage:reps`, `stage:logits` for TabICL;
 `stage:quantile`, `stage:embedded`, `stage:encoded`, `stage:logits` for
-Mitra — plus the final prediction. Both sides dump the same tensors: Python via forward hooks,
+Mitra; `stage:cells`, `stage:col0`, `stage:row0`, `stage:reps`,
+`stage:logits` for Kumo Tabular — plus the final prediction. Both sides dump the same tensors: Python via forward hooks,
 R via the `TABFOUND_DUMP_DIR` hook built into the model.
 
 Both also get a *layer-level* check that needs no checkpoint at all
@@ -712,8 +713,11 @@ dominate, with the v2.6 and v3 bare-network trees at 7 MB each and TabFM's
 per-stage activations at 11 MB. It is
 `.Rbuildignore`d, so it never ships in the package tarball. If you would
 rather not track it in git, delete it and regenerate with
-`--regenerate`. The small `transforms/` (16 KB), `ensemble/` (130 KB) and
-`layers/` (84 KB) references are worth keeping either way — they ship
+`--regenerate`. Kumo's are small by comparison: `reference/kumo/` keeps
+only the first column and row block per fixture (`--stages minimal`,
+6 MB) and `reference/kumo_e2e/` is 0.7 MB. The small `transforms/`
+(24 KB), `ensemble/` (2.2 MB, 1.8 MB of it Kumo's eight members on ten
+tables) and `layers/` (0.7 MB) references are worth keeping either way — they ship
 with the package and are what let `test-prep-transforms.R`,
 `test-prep-sklearn.R`, `test-prep-ensemble.R`, `test-py-random.R` and
 `test-nn-layers.R` run without any checkpoint at all. `transforms/` is
@@ -789,6 +793,25 @@ regression:
   the logits by 3.7e-3 when it is not. That last number is why the check
   exists: the mask is not bookkeeping, and a wrapper that builds one
   while the network ignores it looks correct in every stage-level check.
+
+**Kumo Tabular** (27 M parameters for small, 328 tensors) against
+`structured-data-models` 0.2.1, 24/24 network checks in tolerance on the
+small checkpoints, plus weight-free and end-to-end grading:
+
+- All checkpoint tensors map onto the R module tree by **identity**, for
+  all three sizes (medium and large by key list and shape).
+- Every network stage agrees to ~7e-6 of its scale; probabilities to
+  2.2e-6, the 999-quantile grid to 3.8e-6. Medium's grouped-query
+  attention and row projection are graded on a tiny random network.
+- The recipe's random draws -- class shifts, signs, column shuffles and
+  ECOC codebooks -- are **replayed exactly** from libtorch's generator, so
+  every member's inputs match `sdm`'s own (bit-identical, or one float32
+  ulp) and every codebook is identical.
+- End to end, probabilities agree to 2.5e-6 and quantile grids to 1.3e-5
+  of `sd(y)`, including a 15-class table run through error-correcting
+  output codes (1.0e-7), an all-constant table, an empty query and an
+  absent class. The KV cache and the row, column and
+  `save_peak_memory_factor` chunking stay within the same bounds.
 
 Headline for the TabPFN backend, against `tabpfn` 8.2.0:
 
@@ -887,7 +910,10 @@ two searches occasionally take different final steps and stop within
 `xatol` (1.48e-8) of each other. And Mitra's random sign flips cannot be
 reproduced at all, because the reference draws them from NumPy's
 *global* generator and never seeds it; they differ between two of its
-own runs.
+own runs. Kumo Tabular's recipe draws are libtorch's own generator, which
+R torch and CPython torch share, so on Apple arm64 they are exact; on an
+Intel build whose libtorch takes `bernoulli_` from MKL the random signs
+are unverified.
 
 The shared preprocessing steps are additionally pinned against sklearn
 and TabPFN's own step classes in `tests/testthat/test-prep-transforms.R`,

@@ -10,7 +10,8 @@ distribution. On small and medium tables (up to a few thousand rows), these
 models are often competitive with a tuned gradient-boosted tree, with no
 tuning at all.
 
-`tabfound` runs several published models (TabPFN, TabICL, TabFM, Mitra)
+`tabfound` runs several published models (TabPFN, TabICL, TabFM, Mitra,
+Kumo Tabular)
 behind one interface: a formula, a data frame, and `predict()`. Everything
 runs in R on [`torch`](https://torch.mlverse.org/), and Python is never
 needed to fit or predict. Beyond prediction, the package uses the models'
@@ -58,8 +59,8 @@ downloaded once. Then they load by name, offline. You can pass a family
 name (`"tabpfn-v2.5"`, `"tabicl"`, `"mitra"`) and the task decides which
 checkpoint is used. A local directory path works wherever a name does.
 
-**One-time Python step.** TabPFN and TabICL publish their weights in a
-PyTorch format that R cannot read. `download_model()` converts them once,
+**One-time Python step.** TabPFN, TabICL and Kumo Tabular publish their
+weights in a PyTorch format that R cannot read. `download_model()` converts them once,
 and for that step it needs a Python interpreter with `torch` and
 `safetensors` installed. Point `options(tabfound.python = )` at one if it
 is not found. TabFM and Mitra need no conversion. After this step, Python
@@ -84,7 +85,8 @@ matter:
 | TabPFN v3.5 | `"tabpfn-v3.5"` | 876 MB, both tasks | research only | Newest. Handles free-text and date columns natively. |
 | TabICL v2 | `"tabicl"` | ~110 MB per task | see repo | Regression returns a full quantile grid. **Not recommended for imputation.** |
 | TabFM 1.0 | `"tabfm-1.0.0"` | ~6.6 GB per task | non-commercial | Large (1.6 B parameters) and slow on CPU. Regression is point prediction only. |
-| Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | The only permissive licence. Best suited to small tables. Regression is point prediction only. |
+| Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | Permissive licence. Best suited to small tables. Regression is point prediction only. |
+| Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | Permissive licence. NVIDIA's model in three sizes; `"kumo-tabular"` is large, which is slow on CPU. Handles `NA` natively. Regression returns a full quantile grid. 8-member ensemble by default. |
 
 All the models are inference-only. Each one reproduces its Python
 reference's own preprocessing and ensembling, and gets the same predictions
@@ -100,8 +102,8 @@ you:
   *told* which columns are categorical. A five-level factor is not treated
   as the numbers 1 to 5.
 - **Missing values (`NA`)** are fine in predictors. Each model handles them
-  the way its reference does: TabPFN models missingness explicitly, while
-  the others mean-impute first. `Inf` is an error. Recode it to `NA` or to
+  the way its reference does: TabPFN and Kumo Tabular model missingness
+  explicitly, while the others mean-impute first. `Inf` is an error. Recode it to `NA` or to
   a finite value.
 - **Dates and free text.** On TabPFN v3.5, dates are expanded into calendar
   features (year, day of year, cyclical month and weekday, …), and
@@ -213,7 +215,8 @@ or `...` in `tabfound()`:
 
 - `kv_cache = TRUE` processes the training rows once per `predict()` call
   instead of once per batch. It is often about twice as fast.
-- `row_chunk_size`, `col_chunk_size` (TabPFN v3/v3.5, TabICL, TabFM) and
+- `row_chunk_size`, `col_chunk_size` (TabPFN v3/v3.5, TabICL, TabFM,
+  Kumo Tabular) and
   `save_peak_memory_factor` (most models) trade speed for lower peak
   memory.
 - `device = "cuda"` or `"mps"` runs on a GPU.
@@ -269,8 +272,9 @@ citation("tabfound")
 ```
 
 Please also cite the model you use. `citation("tabfound")` includes the
-references for TabPFN and TabICL. For TabFM and Mitra, see the model card on
-Hugging Face.
+references for TabPFN and TabICL, and NVIDIA's announcement of Kumo Tabular
+(there is no paper yet). For TabFM and Mitra, see the model card on Hugging
+Face.
 
 ## License
 

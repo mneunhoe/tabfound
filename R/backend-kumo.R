@@ -373,10 +373,10 @@ kumo_model <- torch::nn_module(
     out
   },
 
-  #' Everything the context rows contribute to a prediction
-  #'
-  #' @param x `[..., Rt, C]`, the context rows only.
-  #' @return A [kumo_kv_cache()].
+  # Everything the context rows contribute to a prediction.
+  #
+  # @param x `[..., Rt, C]`, the context rows only.
+  # @return A [kumo_kv_cache()].
   build_kv_cache = function(x, y, categorical_mask, row_chunk_size = NULL,
                             save_peak_memory_factor = NULL,
                             col_chunk_size = NULL) {
@@ -394,7 +394,7 @@ kumo_model <- torch::nn_module(
                     p$mask$reshape(c(-1L, x$size(x$dim())))[1, ]$cpu()))
   },
 
-  #' @keywords internal
+  # Predict query rows against a [kumo_kv_cache()].
   forward_cached = function(x, kv_cache, row_chunk_size = NULL,
                             save_peak_memory_factor = NULL,
                             col_chunk_size = NULL) {
