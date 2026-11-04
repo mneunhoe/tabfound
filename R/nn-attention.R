@@ -42,6 +42,15 @@
 #'   `h %/% (Hq / Hkv)`. Passed to the fused kernel, which is what the
 #'   reference calls -- expanding the heads first gives the same answer
 #'   but not the same rounding.
+#' @section Apple MPS:
+#' On the `mps` device the fused kernel returns wrong values for
+#' non-contiguous inputs when the query is shorter than the keys and the
+#' head size is 64 or more -- off by whole units, not by rounding, while
+#' contiguous copies of the same tensors are right. Kumo Tabular medium
+#' and large hit it in their readout step (4 query tokens, head size 64;
+#' small's head size is 32), which moved their predictions far from the
+#' CPU ones. So on `mps` the inputs are made contiguous first; other
+#' devices are passed through untouched.
 #' @section Options:
 #' `tabfound.sdpa` is `"auto"` (default: the fused kernel when torch has
 #' it), `"torch"` (require it, error if absent) or `"r"` (always the
@@ -66,6 +75,11 @@ sdpa <- function(query, key, value, attn_mask = NULL, dropout_p = 0,
       value <- value$repeat_interleave(rep, dim = -3L)
     }
     return(.sdpa_fallback(query, key, value, attn_mask, is_causal, scale))
+  }
+  if (identical(query$device$type, "mps")) {
+    query <- query$contiguous()
+    key <- key$contiguous()
+    value <- value$contiguous()
   }
   args <- list(query = query, key = key, value = value,
                attn_mask = attn_mask, dropout_p = dropout_p,

@@ -1,5 +1,12 @@
 # tabfound (development version)
 
+* Fixed wrong predictions from Kumo Tabular medium and large on Apple's
+  `mps` device. libtorch's fused attention kernel on MPS returns wrong
+  values for non-contiguous inputs when the query is shorter than the keys
+  and the head size is 64 or more; medium and large's readout step is that
+  case (small's head size is 32, so it was unaffected). `sdpa()` now makes
+  its inputs contiguous on `mps`, and all three sizes match the CPU to
+  float32 rounding. Other devices are unchanged.
 * Fixed regression `predict()` returning too many values when the test
   rows span more than one `predict_chunk_size` chunk: the per-chunk means
   (or medians) were joined with `rbind()`, which recycled the last chunk,

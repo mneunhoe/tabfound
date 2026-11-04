@@ -304,3 +304,44 @@ test_that("a whole attention block gives the same answer either way", {
   # so this is an agreement test, not an identity one.
   expect_equal(as.array(a), as.array(b), tolerance = 1e-5)
 })
+
+
+test_that("sdpa() on MPS is right for strided inputs with a short query", {
+  # libtorch's fused MPS kernel goes wrong -- by whole units -- on
+  # non-contiguous inputs when the query is shorter than the keys and the
+  # head size is 64 or more. Kumo medium/large's readout step is exactly
+  # that: 4 query tokens sliced out of a row, head size 64.
+  skip_if_not_installed("torch")
+  skip_if_not(torch::backends_mps_is_available(), "no MPS device")
+  torch::torch_manual_seed(3L)
+  for (d in c(32L, 64L, 128L)) {
+    full <- torch::torch_randn(50L, 44L, 4L, d)         # [B, S, H, d]
+    q <- full$narrow(2L, 1L, 4L)$transpose(2L, 3L)       # strided, 4 queries
+    k <- full$transpose(2L, 3L)
+    v <- torch::torch_randn(50L, 44L, 4L, d)$transpose(2L, 3L)
+    want <- withr::with_options(list(tabfound.sdpa = "r"), sdpa(q, k, v))
+    got <- sdpa(q$to(device = "mps"), k$to(device = "mps"), v$to(device = "mps"))
+    expect_lt(as.numeric((got$cpu() - want)$abs()$max()), 1e-5,
+              label = paste("head size", d))
+  }
+})
+
+test_that("Kumo medium and large give the CPU answer on MPS", {
+  skip_if_not_installed("torch")
+  skip_if_not(torch::backends_mps_is_available(), "no MPS device")
+  for (size in c("medium", "large")) {
+    cfg <- .shipped_architecture(paste0("kumo-tabular-", size, "-regressor"))$config
+    torch::torch_manual_seed(1L)
+    net <- kumo_model(cfg); net$eval()
+    torch::torch_manual_seed(2L)
+    x <- torch::torch_randn(1L, 120L, 12L); y <- torch::torch_randn(1L, 80L)
+    run <- function(dev) {
+      net$to(device = dev)
+      torch::with_no_grad(net(x$to(device = dev), y$to(device = dev),
+                              rep(FALSE, 12L)))$cpu()
+    }
+    a <- run("cpu"); b <- run("mps")
+    expect_lt(as.numeric((a - b)$abs()$max()) / as.numeric(a$abs()$max()), 1e-4,
+              label = size)
+  }
+})
