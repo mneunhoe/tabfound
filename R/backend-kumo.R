@@ -859,35 +859,74 @@ kumo_describe <- function(config, task) {
 
 #' Kumo Tabular's peak-memory shapes
 #'
-#' The same three-stage shape as TabICL -- a column stage kept linear in
-#' rows by inducing points, a row stage over a short sequence, an
-#' in-context stage quadratic in rows -- so it goes through the shared
-#' formula with one token per column (no grouping into fewer tokens) and
-#' the readout tokens as the row stage's extra slots.
+#' The same three stages as TabICL -- a column stage kept linear in rows
+#' by inducing points, a row stage over the `C + K` tokens of a row, an
+#' in-context stage over rows -- under the same stage names, so the shared
+#' assembly ([.peak_from_terms()]) and the calibration harness read them
+#' unchanged. One token per column (no grouping), and the in-context
+#' width is `icl_channels`, which on medium is not `K * D`.
 #'
-#' The constants in `inst/memory/coefs/kumo.json` are TabICL's, borrowed
-#' until `inst/memory/calibrate.R kumo` has been run; the preflight says
-#' so when it prints.
+#' Where Kumo differs from the shared formula is what row chunking keeps:
+#'
+#' * Unchunked, one forward holds every row: `n_context` plus one
+#'   `predict_chunk_size` of query rows.
+#' * With `row_chunk_size` below that, the context is encoded on its own
+#'   and the query rows stream against it. The row tensor
+#'   `[n_context, C + K, D]` is not chunked -- only each block's work on
+#'   it is -- so it is a whole-table `res` term, as is the in-context
+#'   stack's `[n_context, E]`. The inducing step still reads every
+#'   context row for each column slice (the pre-pass), and the context's
+#'   cache -- per ICL layer the keys and values of every context row --
+#'   lives until the query rows are through, so one member's cache is
+#'   persistent even with `kv_cache = FALSE`.
+#' * `col_chunk_size` slices the column axis of every column block,
+#'   chunked or not.
+#'
+#' Columns are capped at the recipe's 500; categorical count columns,
+#' which can add up to one per categorical, are not known here.
 #'
 #' @inheritParams tabicl_peak_terms
 #' @keywords internal
 kumo_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   n_est <- max(1, as.numeric(opts$n_estimators %||% 1))
-  .icl_family_terms(
-    n_context    = n_context,
-    n_query      = .resident_query(n_query, opts),
-    n_features   = n_features,
-    embed_dim    = as.numeric(config$cell_channels),
-    group_size   = 1,
-    n_cls        = as.numeric(config$num_readout_tokens %||% 4),
-    col_heads    = as.numeric(config$num_embedding_heads %||% 4),
-    row_heads    = as.numeric(config$num_embedding_heads %||% 4),
-    icl_heads    = as.numeric(config$num_icl_heads %||% 8),
-    col_inducing = as.numeric(config$num_inducing_points %||% 128),
-    icl_blocks   = as.numeric(config$num_icl_layers %||% 12),
-    kv_cache     = isTRUE(opts$kv_cache),
-    n_estimators = n_est
+  D  <- as.numeric(config$cell_channels)
+  E  <- as.numeric(config$icl_channels %||% (4 * D))
+  K  <- as.numeric(config$num_readout_tokens %||% 4)
+  L  <- as.numeric(config$num_embedding_layers %||% 4)
+  Li <- as.numeric(config$num_icl_layers %||% 12)
+  M  <- as.numeric(config$num_inducing_points %||% 128)
+  He <- as.numeric(config$num_icl_heads %||% 8)
+  kvh <- config$num_icl_key_value_heads_for_query
+  kvh <- if (is.null(kvh) || is.list(kvh) || !length(kvh)) He else as.numeric(kvh)
+
+  tok <- max(1, min(n_features, 500))
+  hc  <- tok + K
+  n_q <- .resident_query(n_query, opts)
+  n   <- n_context + n_q
+  # Kumo has no checkpoint default for either knob: absent is off.
+  rows <- .stage_row_chunk(opts, list(inference_row_chunk_size = Inf))
+  cc   <- min(tok, .stage_col_chunk(opts, config))
+  chunked <- is.finite(rows) && rows < n
+  rc <- if (chunked) rows else n
+
+  # Per member: the inducing summaries' keys and values per column block,
+  # the context means, and the context rows' keys and values per ICL
+  # layer, cut to the heads the query rows use.
+  cache <- L * tok * M * D * 2 + tok + Li * 2 * n_context * E * kvh / He
+
+  stages <- list(
+    list(name = "column summaries", act = 0, res = 0, att = 0,
+         prepass = if (chunked) n_context * cc * D else 0),
+    list(name = "column embedding", act = rc * cc * D,
+         res = if (chunked) n_context * hc * D else 0, att = 0),
+    list(name = "row interaction", act = rc * hc * D,
+         res = if (chunked) n_context * hc * D else 0, att = 0),
+    list(name = "in-context learning", act = rc * E,
+         res = if (chunked) n_context * E else 0, att = 0, copies = "icl")
   )
+  persistent <- if (isTRUE(opts$kv_cache)) n_est * cache
+                else if (chunked) cache else 0
+  list(stages = stages, persistent = persistent, n_estimators = n_est)
 }
 
 

@@ -15,15 +15,32 @@ already be the resident chunk (see \code{\link[=.resident_query]{.resident_query
 \item{config}{The model config.}
 }
 \description{
-The same three-stage shape as TabICL -- a column stage kept linear in
-rows by inducing points, a row stage over a short sequence, an
-in-context stage quadratic in rows -- so it goes through the shared
-formula with one token per column (no grouping into fewer tokens) and
-the readout tokens as the row stage's extra slots.
+The same three stages as TabICL -- a column stage kept linear in rows
+by inducing points, a row stage over the \code{C + K} tokens of a row, an
+in-context stage over rows -- under the same stage names, so the shared
+assembly (\code{\link[=.peak_from_terms]{.peak_from_terms()}}) and the calibration harness read them
+unchanged. One token per column (no grouping), and the in-context
+width is \code{icl_channels}, which on medium is not \code{K * D}.
 }
 \details{
-The constants in \code{inst/memory/coefs/kumo.json} are TabICL's, borrowed
-until \verb{inst/memory/calibrate.R kumo} has been run; the preflight says
-so when it prints.
+Where Kumo differs from the shared formula is what row chunking keeps:
+\itemize{
+\item Unchunked, one forward holds every row: \code{n_context} plus one
+\code{predict_chunk_size} of query rows.
+\item With \code{row_chunk_size} below that, the context is encoded on its own
+and the query rows stream against it. The row tensor
+\verb{[n_context, C + K, D]} is not chunked -- only each block's work on
+it is -- so it is a whole-table \code{res} term, as is the in-context
+stack's \verb{[n_context, E]}. The inducing step still reads every
+context row for each column slice (the pre-pass), and the context's
+cache -- per ICL layer the keys and values of every context row --
+lives until the query rows are through, so one member's cache is
+persistent even with \code{kv_cache = FALSE}.
+\item \code{col_chunk_size} slices the column axis of every column block,
+chunked or not.
+}
+
+Columns are capped at the recipe's 500; categorical count columns,
+which can add up to one per categorical, are not known here.
 }
 \keyword{internal}

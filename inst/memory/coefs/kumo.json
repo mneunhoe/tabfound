@@ -1,24 +1,24 @@
 {
   "backend": "kumo",
-  "source": "borrowed",
-  "measured_on": null,
-  "notes": "TabICL's fitted constants (inst/memory/coefs/tabicl.json, measured 2026-08-12), borrowed unchanged: kumo_peak_terms() uses the same three-stage formula, but nothing here has been measured on a Kumo model. weights_fallback_bytes is the small classifier's converted size. Replace with `Rscript inst/memory/calibrate.R kumo --write` once small and medium are converted locally.",
+  "source": "measured",
+  "measured_on": "2026-11-04",
+  "notes": "Fitted by inst/memory/calibrate.R against 26 measured points on Darwin arm64 (rss-sampling), model kumo-tabular-small-classifier. Constants are for the peak_terms() formulas as they stand; changing either invalidates the other. safety_factor is whatever it takes for no measured point to sit above its own estimate. The ensemble slope is from the sweep at 3200 x 32 (measurements/ensemble-kumo.json), where the activation rather than the process is what grows; a sweep at 800 x 32 implied 0.597 but over-stated a real 8-member run at 5000 x 50 (29.3 GB) by 2x. Its cap is raised from 2.13 to 2.7 so the 800 x 32 sweep's 32-member point (9.8 GB) is still covered.",
   "devices": {
     "cpu": {
       "float32": {
-        "intercept_bytes": 594378752,
-        "act_copies": 141.45002574422,
+        "intercept_bytes": 2133144064,
+        "act_copies": 89.456921334414,
         "att_copies": 0,
-        "res_copies": 146.876610907195,
-        "prepass_copies": 117.641172493494,
-        "icl_copies": 173.722450596331,
-        "floor_bytes": 0,
+        "res_copies": 31.9206157481716,
+        "prepass_copies": 70.2659178913821,
+        "icl_copies": 80,
+        "floor_bytes": 4362518528,
         "prep_state_factor": 1,
-        "spmf_floor": 1.44638651143512,
-        "ensemble_log2_factor": 0.677361843293362,
-        "ensemble_cap": 4.58959064449292,
+        "spmf_floor": 0.539446428377529,
+        "ensemble_log2_factor": 0.267,
+        "ensemble_cap": 2.7,
         "ensemble_source": "measured",
-        "safety_factor": 1.67918346561786,
+        "safety_factor": 1.35285771044617,
         "weights_fallback_bytes": 109871224
       }
     }

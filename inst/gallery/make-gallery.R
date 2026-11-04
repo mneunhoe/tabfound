@@ -4,7 +4,7 @@
 #
 # Produces one diagram per backend for `vignettes/architecture-gallery.qmd`.
 # The vignette ships the results rather than building them, because
-# instantiating all six networks at their published widths costs a few
+# instantiating all eight networks at their published widths costs a few
 # hundred million parameters and a couple of minutes -- too much to pay
 # on every `R CMD build`. Run this when a description changes.
 #
@@ -21,7 +21,11 @@
 #      `TABFOUND_GALLERY_TABICL`, holding `config.json`;
 #   2. the local model store, if `download_model(<id>)` has been run;
 #   3. the publisher's `config.json` on the Hub, for the two models that
-#      ship one (TabFM and Mitra) -- a few hundred bytes, not the weights.
+#      ship one (TabFM and Mitra) -- a few hundred bytes, not the weights;
+#   4. the config in the package's own architecture table
+#      (`inst/memory/architectures.json`), for models whose publisher
+#      ships no config but whose converter derives one from the shapes
+#      (Kumo Tabular).
 #
 # A model that none of the three finds is skipped with a message naming
 # what would fetch it. The vignette says which diagrams it has.
@@ -58,7 +62,15 @@ GALLERY <- list(
        repo = "google/tabfm-1.0.0-pytorch", path = "classification/config.json"),
   list(key = "mitra",    backend = "mitra",    task = "classification",
        id = "mitra-classifier",       env = "TABFOUND_GALLERY_MITRA",
-       repo = "autogluon/mitra-classifier", path = "config.json")
+       repo = "autogluon/mitra-classifier", path = "config.json"),
+  # Kumo Tabular publishes bare state dicts; its configs come from the
+  # converter, and the architecture table carries all six. Small is the
+  # default size; medium is drawn too, for the projection between the
+  # row and in-context stages and the grouped-query attention.
+  list(key = "kumo",        backend = "kumo", task = "classification",
+       id = "kumo-tabular-small-classifier",  env = "TABFOUND_GALLERY_KUMO"),
+  list(key = "kumo-medium", backend = "kumo", task = "classification",
+       id = "kumo-tabular-medium-classifier", env = "TABFOUND_GALLERY_KUMO_MEDIUM")
 )
 
 # Extra renderings the vignette uses to show the options off.
@@ -85,6 +97,12 @@ config_path <- function(spec) {
     got <- tryCatch(hfhub::hub_download(spec$repo, spec$path),
                     error = function(e) NULL)
     if (!is.null(got)) return(got)
+  }
+  shipped <- tabfound:::.shipped_architecture(spec$id)$config
+  if (!is.null(shipped)) {
+    path <- tempfile(fileext = ".json")
+    jsonlite::write_json(shipped, path, auto_unbox = TRUE, null = "null")
+    return(path)
   }
   NULL
 }

@@ -62,6 +62,31 @@ mem_config_tabfm <- function() {
   )
 }
 
+# Kumo Tabular's three sizes, as the converter writes them. Medium is
+# the one with a row projection (K * D = 1024 against E = 512) and
+# grouped-query attention (2 of 8 heads for the query rows).
+mem_config_kumo <- function(size = "small") {
+  dims <- switch(size,
+    small  = list(cell_channels = 128, num_embedding_layers = 4,
+                  num_inducing_points = 128, icl_channels = 512,
+                  num_icl_layers = 12, num_icl_heads = 8,
+                  num_icl_key_value_heads_for_query = NULL),
+    medium = list(cell_channels = 256, num_embedding_layers = 6,
+                  num_inducing_points = 256, icl_channels = 512,
+                  num_icl_layers = 24, num_icl_heads = 8,
+                  num_icl_key_value_heads_for_query = 2),
+    large  = list(cell_channels = 256, num_embedding_layers = 6,
+                  num_inducing_points = 256, icl_channels = 1024,
+                  num_icl_layers = 24, num_icl_heads = 16,
+                  num_icl_key_value_heads_for_query = 2)
+  )
+  c(list(arch = "kumo_tabular", head = "classifier", size = size,
+         num_embedding_heads = 4, group_size = 3, num_frequencies = 32,
+         num_readout_tokens = 4, gate_hidden = 64, num_classes = 10,
+         num_quantiles = 0),
+    dims)
+}
+
 mem_config_mitra <- function() {
   list(task = "CLASSIFICATION", dim = 512, dim_output = 10,
        n_layers = 12, n_heads = 4)

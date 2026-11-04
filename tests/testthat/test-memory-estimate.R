@@ -486,6 +486,104 @@ test_that("a comfortable run is not given advice it does not need", {
 
 
 # ---------------------------------------------------------------------------
+# Kumo Tabular
+# ---------------------------------------------------------------------------
+
+kumo_terms <- function(size = "small", n_context = 20000, n_query = 500,
+                       n_features = 100, ...) {
+  opts <- utils::modifyList(
+    list(n_estimators = 1, kv_cache = FALSE, predict_chunk_size = 1024,
+         row_chunk_size = NULL, col_chunk_size = NULL), list(...))
+  for (nm in names(list(...))) if (is.null(list(...)[[nm]])) opts[nm] <- list(NULL)
+  st <- kumo_peak_terms(n_context, n_query, n_features, opts,
+                        mem_config_kumo(size))
+  st$by <- stats::setNames(st$stages, vapply(st$stages, `[[`, "", "name"))
+  st
+}
+
+test_that("Kumo row chunking bounds the blocks and keeps the row tensor", {
+  off <- kumo_terms()
+  on  <- kumo_terms(row_chunk_size = 1024L)
+  # Unchunked: every row in one pass, nothing outside a loop, no cache.
+  expect_equal(off$by[["row interaction"]]$act, 20500 * 104 * 128)
+  expect_equal(off$by[["row interaction"]]$res, 0)
+  expect_equal(off$by[["column summaries"]]$prepass, 0)
+  expect_equal(off$persistent, 0)
+  # Chunked: the blocks see a chunk of rows; the row tensor itself and the
+  # in-context stack's input are not chunked, the inducing step reads
+  # every context row, and one member's cache outlives the context pass.
+  expect_equal(on$by[["row interaction"]]$act, 1024 * 104 * 128)
+  expect_equal(on$by[["row interaction"]]$res, 20000 * 104 * 128)
+  expect_equal(on$by[["in-context learning"]]$act, 1024 * 512)
+  expect_equal(on$by[["in-context learning"]]$res, 20000 * 512)
+  expect_equal(on$by[["column summaries"]]$prepass, 20000 * 100 * 128)
+  expect_gt(on$persistent, 12 * 2 * 20000 * 512)
+  # A chunk at or above the row count is the unchunked pass.
+  expect_identical(kumo_terms(row_chunk_size = 1e6L)$stages, off$stages)
+})
+
+test_that("Kumo's column chunk bounds the column blocks with or without rows", {
+  off <- kumo_terms(col_chunk_size = 8L)
+  expect_equal(off$by[["column embedding"]]$act, 20500 * 8 * 128)
+  expect_equal(off$by[["row interaction"]]$act, 20500 * 104 * 128)
+  on <- kumo_terms(row_chunk_size = 1024L, col_chunk_size = 8L)
+  expect_equal(on$by[["column summaries"]]$prepass, 20000 * 8 * 128)
+})
+
+test_that("Kumo's caches use the in-context width and the query heads", {
+  # Medium projects 1024 readout numbers to E = 512, and its query rows
+  # read 2 of the 8 key/value heads: the cache is a quarter of the full
+  # projections.
+  small <- kumo_terms("small", kv_cache = TRUE)
+  med   <- kumo_terms("medium", kv_cache = TRUE)
+  expect_equal(med$by[["in-context learning"]]$act, 20500 * 512)
+  expect_equal(small$persistent - 12 * 2 * 20000 * 512,
+               4 * 100 * 128 * 128 * 2 + 100)
+  expect_equal(med$persistent - 24 * 2 * 20000 * 512 / 4,
+               6 * 100 * 256 * 256 * 2 + 100)
+  # One cache per member, all alive through `predict()`.
+  expect_equal(kumo_terms(kv_cache = TRUE, n_estimators = 8)$persistent,
+               8 * small$persistent)
+  # Columns past the recipe's cap never reach the network.
+  expect_identical(kumo_terms(n_features = 2000)$stages,
+                   kumo_terms(n_features = 500)$stages)
+})
+
+test_that("Kumo's advice names a smaller size, then its own knobs", {
+  big <- peak(mem_config_kumo("large"), 50000, 1000, 100, available = 8e9)
+  expect_false(big$verdict == "ok")
+  size_at <- grep("Kumo Tabular medium or small", big$suggestions)
+  ctx_at <- grep("Reduce .*n_context", big$suggestions)
+  expect_length(size_at, 1L)
+  expect_true(size_at < ctx_at)
+  expect_true(any(grepl("Set .*row_chunk_size", big$suggestions)))
+  expect_true(any(grepl("save_peak_memory_factor", big$suggestions)))
+
+  med <- peak(mem_config_kumo("medium"), 50000, 1000, 100, available = 8e9)
+  expect_true(any(grepl("Kumo Tabular small", med$suggestions)))
+  # Small is already the smallest; with row chunking on there is no
+  # chunking advice left to give but a smaller chunk.
+  sm <- peak(mem_config_kumo("small"), 50000, 1000, 100, available = 8e9,
+             row_chunk_size = 1024L)
+  expect_false(any(grepl("Kumo Tabular", sm$suggestions)))
+  expect_false(any(grepl("Set .*row_chunk_size", sm$suggestions)))
+})
+
+test_that("suggest_chunk_sizes searches Kumo's chunks", {
+  # Not "has no stage chunking": Kumo is on the list, and a run that does
+  # not fit unchunked gets a chunk size that does.
+  plain <- peak(mem_config_kumo("small"), 6000, 1000, 50, available = 40e9)
+  expect_false(plain$verdict %in% c("ok", "tight"))
+  got <- suggest_chunk_sizes(mem_config_kumo("small"), n_context = 6000,
+                             n_features = 50, available = 40e9,
+                             verdict = "tight")
+  expect_null(got$note)
+  expect_true(got$feasible)
+  expect_false(is.na(got$row_chunk_size))
+})
+
+
+# ---------------------------------------------------------------------------
 # Envelopes
 # ---------------------------------------------------------------------------
 

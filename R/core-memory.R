@@ -1117,7 +1117,8 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
     verdict            = verdict,
     calibration        = co$source,
     suggestions        = .memory_suggestions(verdict, tgt$backend$name, opts,
-                                             weights, persistent, transient)
+                                             weights, persistent, transient,
+                                             config = tgt$config)
   )
   class(out) <- "tabfound_memory_estimate"
   out
@@ -1175,11 +1176,21 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
 # or to chunk a run whose weights are the problem, is noise.
 # @keywords internal
 .memory_suggestions <- function(verdict, backend, opts, weights,
-                                persistent, transient) {
+                                persistent, transient, config = NULL) {
   if (identical(verdict, "ok") || identical(verdict, "unknown")) {
     return(character())
   }
   s <- character()
+
+  # Kumo ships three sizes of one architecture, and a smaller one keeps
+  # the whole context: suggested ahead of cutting rows.
+  if (identical(backend, "kumo") &&
+      (config$size %||% "") %in% c("medium", "large")) {
+    smaller <- if (identical(config$size, "large")) "medium or small" else "small"
+    s <- c(s, "Use Kumo Tabular {smaller} ({.val kumo-tabular-small}): \
+                the same architecture at a narrower width, before \
+                reducing {.arg n_context}.")
+  }
 
   if (transient >= max(weights, persistent)) {
     s <- c(s, "Reduce {.arg n_context}: the transient peak grows with \\
@@ -1219,7 +1230,15 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                     decides how the peak grows.")
       }
     }
-    if (backend %in% c("tabpfn26", "tabpfn3", "tabpfn35") &&
+    # Kumo's row chunking is off by default. On, the context is encoded
+    # by itself a chunk of rows at a time and the query rows stream
+    # against its cache.
+    if (identical(backend, "kumo") && is.null(opts$row_chunk_size)) {
+      s <- c(s, "Set {.arg row_chunk_size} (try {.val 1024}): the context \
+                  is then encoded on its own and each block works on one \
+                  chunk of rows at a time.")
+    }
+    if (backend %in% c("tabpfn26", "tabpfn3", "tabpfn35", "kumo") &&
         is.null(opts$save_peak_memory_factor)) {
       s <- c(s, "Set {.arg save_peak_memory_factor} (try {.val 4}): it \\
                   splits each sublayer's work, for the same answer.")
@@ -1473,7 +1492,8 @@ suggest_chunk_sizes <- function(model, n_context, n_query = 1000, n_features,
 
   # `NA` is "the checkpoint's own", which is where the search starts.
   top <- est(NA_integer_)
-  if (!isTRUE(top$backend %in% c("tabpfn3", "tabpfn35", "tabicl", "tabfm"))) {
+  if (!isTRUE(top$backend %in% c("tabpfn3", "tabpfn35", "tabicl", "tabfm",
+                                       "kumo"))) {
     return(list(row_chunk_size = NA_integer_, col_chunk_size = NA_integer_,
                 peak_bytes = top$total_peak_bytes, verdict = top$verdict,
                 feasible = top$verdict %in% accept,
