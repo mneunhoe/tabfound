@@ -289,22 +289,28 @@ tabfound_file <- function(...) {
 }
 
 
-#' Apply a function to row-chunks of a matrix and rbind the results
+#' Apply a function to row-chunks of a matrix and stack the results
 #'
 #' In-context models re-encode the whole training context for every
 #' forward pass, so test rows are processed in bounded batches rather
 #' than all at once.
 #'
+#' Matrices are stacked by row; vectors (a regressor's mean or median) are
+#' concatenated. `rbind()` on vectors would lay each chunk out as a *row*
+#' and recycle the short last one to the full chunk width -- 3,000 rows in
+#' chunks of 1,024 came back as 3,072 numbers -- so the result is checked
+#' to have exactly one entry per input row.
+#'
 #' @param X Matrix of test rows.
 #' @param chunk_size Max rows per call.
 #' @param fn Function taking a row-subset matrix and returning a matrix
-#'   with one row per input row.
+#'   with one row per input row, or a vector with one element per row.
 #' @keywords internal
 chunk_apply <- function(X, chunk_size, fn) {
   n <- nrow(X)
   if (n <= chunk_size) return(fn(X))
   starts <- seq(1L, n, by = as.integer(chunk_size))
-  do.call(rbind, lapply(seq_along(starts), function(k) {
+  parts <- lapply(seq_along(starts), function(k) {
     # A chunk's transients are dead the moment it returns, but they are
     # torch allocations, which R's collector cannot see and will not free
     # before the next chunk has allocated its own. This is the same
@@ -314,7 +320,16 @@ chunk_apply <- function(X, chunk_size, fn) {
     s <- starts[[k]]
     e <- min(s + as.integer(chunk_size) - 1L, n)
     fn(X[s:e, , drop = FALSE])
-  }))
+  })
+  stacked <- all(vapply(parts, function(p) !is.null(dim(p)), logical(1)))
+  out <- if (stacked) do.call(rbind, parts) else do.call(c, parts)
+  got <- if (stacked) nrow(out) else length(out)
+  if (!identical(as.integer(got), as.integer(n))) {
+    cli::cli_abort(
+      "Chunked prediction returned {got} result{?s} for {n} row{?s}."
+    )
+  }
+  out
 }
 
 #' A place to keep one KV cache per ensemble member, for one `predict()`
