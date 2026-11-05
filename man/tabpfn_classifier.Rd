@@ -14,7 +14,9 @@ tabpfn_classifier(
   kv_cache = FALSE,
   save_peak_memory_factor = NULL,
   row_chunk_size = NA_integer_,
-  col_chunk_size = NA_integer_
+  col_chunk_size = NA_integer_,
+  ensemble_configs = NULL,
+  member_weights = NULL
 )
 }
 \arguments{
@@ -75,6 +77,17 @@ Unlike \code{save_peak_memory_factor} this is not bit-identical: it
 changes the batch shapes the attention kernel sees, and on the
 package's large fixture it moves the logits by 1.4e-5 of their own
 scale -- less than the reference's own chunked pass moves them.}
+
+\item{ensemble_configs}{The ensemble as a list of member configs, in
+place of \code{ensemble_configs_dir}: what
+\code{\link[=generate_ensemble_configs_native]{generate_ensemble_configs_native()}} returns, or any subset of it.
+Pass one or the other, not both.}
+
+\item{member_weights}{Optional non-negative weight per member, in the
+order of the configs. The ensemble's probabilities become the
+weighted mean of the members' instead of the plain one; weights are
+normalised, and a member weighted zero is never run. \code{NULL} (the
+default) is the reference's unweighted mean, unchanged.}
 }
 \description{
 Build the TabPFN classifier predictor

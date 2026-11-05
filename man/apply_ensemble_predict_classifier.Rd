@@ -20,7 +20,9 @@ apply_ensemble_predict_classifier(
   save_peak_memory_factor = NULL,
   row_chunk_size = NA_integer_,
   col_chunk_size = NA_integer_,
-  pipelines = NULL
+  pipelines = NULL,
+  member_weights = NULL,
+  return_members = FALSE
 )
 }
 \arguments{
@@ -37,9 +39,18 @@ apply_ensemble_predict_classifier(
 \code{load_ensemble_configs_from_dump()}.}
 
 \item{n_classes}{Integer number of original classes.}
+
+\item{member_weights}{Optional weight per member; \code{NULL} averages them
+uniformly, which is the reference's combine and stays bit-identical
+to it.}
+
+\item{return_members}{Return each member's raw logits as well: before
+the temperature, with the class permutation undone.}
 }
 \value{
-Numeric matrix \verb{(n_test, n_classes)} of averaged probabilities.
+Numeric matrix \verb{(n_test, n_classes)} of averaged probabilities;
+with \code{return_members}, a list of that (\verb{$probs}) and the members'
+logits (\verb{$members}, a list of \verb{(n_test, n_classes)} matrices).
 }
 \description{
 Run a full ensemble prediction (classifier), averaging probs across members.

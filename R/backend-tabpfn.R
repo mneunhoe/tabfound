@@ -130,6 +130,77 @@ tabpfn_task_of <- function(config) {
 }
 
 
+# The ensemble a predictor runs, from whichever of the two sources the
+# caller used, with its weights. Members weighted zero are dropped here,
+# once, so neither their pipelines nor their caches are ever built.
+# `weights` stays NULL for an unweighted ensemble: that is what keeps the
+# combine on the uniform path, bit for bit.
+# @keywords internal
+.resolve_ensemble <- function(ensemble_configs_dir, ensemble_configs,
+                              member_weights) {
+  if (!is.null(ensemble_configs_dir) && !is.null(ensemble_configs)) {
+    cli::cli_abort("Pass {.arg ensemble_configs_dir} or \\
+                    {.arg ensemble_configs}, not both.")
+  }
+  configs <- if (!is.null(ensemble_configs_dir)) {
+    load_ensemble_configs_from_dump(ensemble_configs_dir)
+  } else {
+    ensemble_configs
+  }
+  if (!is.null(configs) && (!is.list(configs) || !length(configs))) {
+    cli::cli_abort("{.arg ensemble_configs} must be a non-empty list of \\
+                    member configs, as {.fn generate_ensemble_configs_native} \\
+                    returns.")
+  }
+  if (is.null(member_weights)) return(list(configs = configs, weights = NULL))
+  if (is.null(configs)) {
+    cli::cli_abort("{.arg member_weights} needs an ensemble: pass \\
+                    {.arg ensemble_configs} or {.arg ensemble_configs_dir}.")
+  }
+  w <- as.numeric(member_weights)
+  if (length(w) != length(configs) || anyNA(w) || any(!is.finite(w)) ||
+      any(w < 0) || sum(w) <= 0) {
+    cli::cli_abort(c(
+      "{.arg member_weights} must be {length(configs)} finite, \\
+       non-negative number{?s} with a positive sum, one per member.",
+      x = "Got {length(w)}."
+    ))
+  }
+  keep <- w > 0
+  list(configs = configs[keep], weights = w[keep])
+}
+
+# @keywords internal
+.require_ensemble_for_members <- function(configs) {
+  if (!is.null(configs)) return(invisible(TRUE))
+  cli::cli_abort(c(
+    "{.fn predict_members} needs an ensemble.",
+    i = "Build the model with {.arg ensemble_configs} or \\
+         {.arg ensemble_configs_dir}; a single forward pass has no members."
+  ))
+}
+
+# `chunk_apply()` for a function that returns one matrix per member:
+# the chunks are stacked member by member.
+# @keywords internal
+.members_over_chunks <- function(X, chunk_size, fn) {
+  n <- nrow(X)
+  if (n <= chunk_size) return(fn(X))
+  starts <- seq(1L, n, by = as.integer(chunk_size))
+  parts <- lapply(seq_along(starts), function(k) {
+    # See `chunk_apply()`: the previous chunk's torch allocations are
+    # invisible to R's collector.
+    if (k > 1L) collect_between_chunks()
+    s <- starts[[k]]
+    e <- min(s + as.integer(chunk_size) - 1L, n)
+    fn(X[s:e, , drop = FALSE])
+  })
+  lapply(seq_along(parts[[1L]]), function(m) {
+    do.call(rbind, lapply(parts, `[[`, m))
+  })
+}
+
+
 # The pre-generated column embedding table, or NULL for a network that
 # does not use one. v3 replaced it with RoPE over the feature axis, and
 # loading a 2000 x 48 buffer it will never read would be both wasteful and
@@ -208,6 +279,15 @@ tabpfn_task_of <- function(config) {
 #'   changes the batch shapes the attention kernel sees, and on the
 #'   package's large fixture it moves the logits by 1.4e-5 of their own
 #'   scale -- less than the reference's own chunked pass moves them.
+#' @param ensemble_configs The ensemble as a list of member configs, in
+#'   place of `ensemble_configs_dir`: what
+#'   [generate_ensemble_configs_native()] returns, or any subset of it.
+#'   Pass one or the other, not both.
+#' @param member_weights Optional non-negative weight per member, in the
+#'   order of the configs. The ensemble's probabilities become the
+#'   weighted mean of the members' instead of the plain one; weights are
+#'   normalised, and a member weighted zero is never run. `NULL` (the
+#'   default) is the reference's unweighted mean, unchanged.
 #' @keywords internal
 tabpfn_classifier <- function(ctx,
                               ensemble_configs_dir = NULL,
@@ -218,15 +298,19 @@ tabpfn_classifier <- function(ctx,
                               kv_cache = FALSE,
                               save_peak_memory_factor = NULL,
                               row_chunk_size = NA_integer_,
-                              col_chunk_size = NA_integer_) {
+                              col_chunk_size = NA_integer_,
+                              ensemble_configs = NULL,
+                              member_weights = NULL) {
   .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
                             row_chunk_size, col_chunk_size)
   net     <- ctx$net
   dev     <- ctx$device
   col_emb <- .column_embeddings_for(net, dev)
 
-  ensemble_configs <- if (!is.null(ensemble_configs_dir))
-    load_ensemble_configs_from_dump(ensemble_configs_dir) else NULL
+  ens <- .resolve_ensemble(ensemble_configs_dir, ensemble_configs,
+                           member_weights)
+  ensemble_configs <- ens$configs
+  member_weights   <- ens$weights
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) {
@@ -272,7 +356,8 @@ tabpfn_classifier <- function(ctx,
     as.matrix(torch::nnf_softmax(logits, dim = -1L)$cpu())
   }
 
-  .ensemble_chunk <- function(state, X_test_chunk, cache, pipelines) {
+  .ensemble_chunk <- function(state, X_test_chunk, cache, pipelines,
+                              return_members = FALSE) {
     apply_ensemble_predict_classifier(
       net = net, col_emb = col_emb,
       X_train = state$X_train, X_test = as.matrix(X_test_chunk),
@@ -282,7 +367,8 @@ tabpfn_classifier <- function(ctx,
       categorical_features = state$categorical_features %||% integer(),
       kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
-      pipelines = pipelines
+      pipelines = pipelines, member_weights = member_weights,
+      return_members = return_members
     )
   }
 
@@ -341,7 +427,27 @@ tabpfn_classifier <- function(ctx,
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
+  # Each member's raw logits, untempered and in the original class order,
+  # so a caller can weight and temper them however it likes. See
+  # [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    .require_ensemble_for_members(ensemble_configs)
+    X_te <- as.matrix(newdata)
+    pipelines <- .build_pipelines(state)
+    caches <- .build_caches(state, pipelines)
+    members <- .members_over_chunks(X_te, predict_chunk_size, function(chunk) {
+      .ensemble_chunk(state, chunk, caches, pipelines,
+                      return_members = TRUE)$members
+    })
+    members <- lapply(members, function(m) {
+      colnames(m) <- as.character(state$class_levels); m
+    })
+    list(logits = members, softmax_temperature = softmax_temperature,
+         member_weights = member_weights)
+  }
+
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = function(state) {
          .build_caches(state, .build_pipelines(state), force = TRUE)
        },
@@ -366,7 +472,9 @@ tabpfn_regressor <- function(ctx,
                              kv_cache = FALSE,
                              save_peak_memory_factor = NULL,
                              row_chunk_size = NA_integer_,
-                             col_chunk_size = NA_integer_) {
+                             col_chunk_size = NA_integer_,
+                             ensemble_configs = NULL,
+                             member_weights = NULL) {
   .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
                             row_chunk_size, col_chunk_size)
   net     <- ctx$net
@@ -374,8 +482,10 @@ tabpfn_regressor <- function(ctx,
   col_emb <- .column_embeddings_for(net, dev)
   borders <- .regression_borders_of(net)
 
-  ensemble_configs <- if (!is.null(ensemble_configs_dir))
-    load_ensemble_configs_from_dump(ensemble_configs_dir) else NULL
+  ens <- .resolve_ensemble(ensemble_configs_dir, ensemble_configs,
+                           member_weights)
+  ensemble_configs <- ens$configs
+  member_weights   <- ens$weights
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) {
@@ -423,7 +533,7 @@ tabpfn_regressor <- function(ctx,
   }
 
   .ensemble_chunk <- function(state, X_test_chunk, quantiles, cache,
-                              pipelines) {
+                              pipelines, return_members = FALSE) {
     apply_ensemble_predict_regressor(
       net, col_emb, state$X_train, X_test_chunk, state$y_train,
       configs = ensemble_configs, borders = borders,
@@ -432,7 +542,8 @@ tabpfn_regressor <- function(ctx,
       categorical_features = state$categorical_features %||% integer(),
       kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
-      pipelines = pipelines
+      pipelines = pipelines, member_weights = member_weights,
+      return_members = return_members
     )
   }
 
@@ -552,7 +663,26 @@ tabpfn_regressor <- function(ctx,
       state$y_std + state$y_mean
   }
 
+  # Each member's bucket probabilities, tempered and translated onto the
+  # shared grid -- the exact objects the ensemble averages -- with that
+  # grid's borders on the raw y scale. See [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    .require_ensemble_for_members(ensemble_configs)
+    X_te <- as.matrix(newdata)
+    pipelines <- .build_pipelines(state)
+    caches <- .build_caches(state, pipelines)
+    members <- .members_over_chunks(X_te, predict_chunk_size, function(chunk) {
+      .ensemble_chunk(state, chunk, quantiles = 0.5, caches, pipelines,
+                      return_members = TRUE)$members
+    })
+    list(probs = members,
+         borders = as.numeric(borders$cpu()) * state$y_std + state$y_mean,
+         softmax_temperature = softmax_temperature,
+         member_weights = member_weights)
+  }
+
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = function(state) {
          .build_caches(state, .build_pipelines(state), force = TRUE)
        },

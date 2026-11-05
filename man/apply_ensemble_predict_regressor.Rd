@@ -21,7 +21,9 @@ apply_ensemble_predict_regressor(
   save_peak_memory_factor = NULL,
   row_chunk_size = NA_integer_,
   col_chunk_size = NA_integer_,
-  pipelines = NULL
+  pipelines = NULL,
+  member_weights = NULL,
+  return_members = FALSE
 )
 }
 \arguments{
@@ -40,6 +42,13 @@ have \code{target_transform = NULL}.}
 model's \code{criterion$borders}, which live in the \strong{z-normalized
 target space} (after Python's \code{(y - mean) / std} step). The
 function un-standardizes at the end.}
+
+\item{member_weights}{Optional weight per member; \code{NULL} averages them
+uniformly, which is the reference's combine and stays bit-identical
+to it.}
+
+\item{return_members}{Also return each member's translated bucket
+probabilities, as \verb{$members} (a list of \verb{(n_test, n_bins)} matrices).}
 }
 \value{
 List with \code{mean}, \code{quantiles}, etc. on the RAW y scale.
