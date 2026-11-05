@@ -34,7 +34,37 @@ suppressMessages(library(tabfound))
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+# `--matrix` draws every model in every style, detail and theme, and
+# every pair of models side by side in both themes, for a web gallery
+# that lets the reader pick the view:
+#
+#   Rscript inst/gallery/make-gallery.R --matrix <outdir>
+#
+# It writes `<key>/<style>-<detail>-<theme>.svg`,
+# `compare/<a>_vs_<b>-<theme>.svg` and a `manifest.json` that lists
+# what was drawn, so a page can offer only the views that exist.
+#
+# `--background-light=<colour>` and `--background-dark=<colour>` give each
+# theme's figures a background, so they sit on the page they are shown
+# on rather than in a box of their own.
+#
+# `--highlight=<colour>,<colour>,...` gives every view the same
+# highlights, up to four. The side-by-side figures take the first three.
+#
+# `--styles=<style>,<style>,...` draws only those styles, in that order;
+# all five by default.
 args <- commandArgs(trailingOnly = TRUE)
+matrix_mode <- "--matrix" %in% args
+bg_args <- grep("^--background-(light|dark)=", args, value = TRUE)
+MATRIX_BACKGROUNDS <- c(light = NA_character_, dark = NA_character_)
+MATRIX_BACKGROUNDS[sub("^--background-(light|dark)=.*", "\\1", bg_args)] <-
+  sub("^--background-(light|dark)=", "", bg_args)
+hl_args <- grep("^--highlight=", args, value = TRUE)
+MATRIX_HIGHLIGHT <- if (length(hl_args)) {
+  strsplit(sub("^--highlight=", "", hl_args[[1]]), ",", fixed = TRUE)[[1]]
+}
+style_args <- grep("^--styles=", args, value = TRUE)
+args <- setdiff(args, c("--matrix", bg_args, hl_args, style_args))
 outdir <- if (length(args)) args[[1]] else "vignettes/figures"
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 
@@ -70,8 +100,31 @@ GALLERY <- list(
   list(key = "kumo",        backend = "kumo", task = "classification",
        id = "kumo-tabular-small-classifier",  env = "TABFOUND_GALLERY_KUMO"),
   list(key = "kumo-medium", backend = "kumo", task = "classification",
-       id = "kumo-tabular-medium-classifier", env = "TABFOUND_GALLERY_KUMO_MEDIUM")
+       id = "kumo-tabular-medium-classifier", env = "TABFOUND_GALLERY_KUMO_MEDIUM"),
+  # Large only in the matrix: the vignette describes it in words.
+  list(key = "kumo-large",  backend = "kumo", task = "classification",
+       id = "kumo-tabular-large-classifier",  env = "TABFOUND_GALLERY_KUMO_LARGE",
+       matrix_only = TRUE)
 )
+
+MATRIX_STYLES  <- c("cards", "tufte", "glyphs", "icicle", "schematic")
+if (length(style_args)) {
+  wanted <- strsplit(sub("^--styles=", "", style_args[[1]]), ",", fixed = TRUE)[[1]]
+  unknown <- setdiff(wanted, MATRIX_STYLES)
+  if (length(unknown)) {
+    stop("unknown style(s): ", paste(unknown, collapse = ", "),
+         "; the styles are ", paste(MATRIX_STYLES, collapse = ", "))
+  }
+  MATRIX_STYLES <- wanted
+}
+MATRIX_DETAILS <- c("overview", "full")
+MATRIX_THEMES  <- c("light", "dark")
+
+# The background for a theme's figures, or NULL for the theme's own.
+matrix_background <- function(theme) {
+  bg <- MATRIX_BACKGROUNDS[[theme]]
+  if (is.na(bg)) NULL else bg
+}
 
 # Extra renderings the vignette uses to show the options off: the
 # sublayers opened up, the dark theme, TabICL in every other style, and
@@ -137,12 +190,63 @@ skip_note <- function(spec) {
 }
 
 # ---------------------------------------------------------------------------
+# Matrix
+# ---------------------------------------------------------------------------
+
+svg_size <- function(file) {
+  head <- paste(readLines(file, n = 3, warn = FALSE), collapse = " ")
+  dims <- regmatches(head, regexec('width="([0-9.]+)" height="([0-9.]+)"', head))[[1]]
+  list(width = as.numeric(dims[2]), height = as.numeric(dims[3]))
+}
+
+same_file <- function(a, b) {
+  identical(readBin(a, "raw", file.size(a)), readBin(b, "raw", file.size(b)))
+}
+
+# Every style in every detail and theme. A style that draws the same
+# figure at both details (icicle sums sublayers either way) is kept at
+# "overview" only, so the page does not offer a choice that changes
+# nothing.
+render_matrix <- function(arch, key) {
+  dir.create(file.path(outdir, key), showWarnings = FALSE)
+  views <- list()
+  for (style in MATRIX_STYLES) {
+    details <- character()
+    for (detail in MATRIX_DETAILS) {
+      files <- file.path(outdir, key,
+                         sprintf("%s-%s-%s.svg", style, detail, MATRIX_THEMES))
+      for (i in seq_along(MATRIX_THEMES)) {
+        suppressMessages(plot_architecture(
+          arch, files[[i]], style = style, detail = detail,
+          theme = MATRIX_THEMES[[i]],
+          background = matrix_background(MATRIX_THEMES[[i]]),
+          highlight = MATRIX_HIGHLIGHT
+        ))
+      }
+      first <- file.path(outdir, key, sprintf("%s-overview-light.svg", style))
+      if (detail != "overview" && same_file(files[[1]], first)) {
+        unlink(files)
+        next
+      }
+      details[[detail]] <- detail
+    }
+    views[[style]] <- lapply(unname(details), function(d) {
+      c(list(detail = d),
+        svg_size(file.path(outdir, key, sprintf("%s-%s-light.svg", style, d))))
+    })
+  }
+  views
+}
+
+# ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
 
 built <- list()
 archs <- list()
+manifest_models <- list()
 for (spec in GALLERY) {
+  if (isTRUE(spec$matrix_only) && !matrix_mode) next
   path <- config_path(spec)
   if (is.null(path)) {
     message("skipping ", spec$key, ": ", skip_note(spec))
@@ -163,15 +267,24 @@ for (spec in GALLERY) {
   )
 
   arch <- tabfound_architecture(model)
-  plot_architecture(arch, file.path(outdir, paste0(spec$key, ".svg")),
-                    style = "cards")
-
-  for (ex in Filter(function(e) identical(e$key, spec$key), EXTRAS)) {
-    plot_architecture(
-      arch, file.path(outdir, paste0(spec$key, ex$suffix, ".svg")),
-      style = ex$style %||% "cards", detail = ex$detail %||% "overview",
-      theme = ex$theme %||% "light"
+  if (matrix_mode) {
+    manifest_models[[length(manifest_models) + 1]] <- list(
+      key = spec$key, id = spec$id, backend = spec$backend,
+      title = arch$title, subtitle = arch$subtitle,
+      params = arch$n_params, stages = length(arch$stages),
+      views = render_matrix(arch, spec$key)
     )
+  } else {
+    plot_architecture(arch, file.path(outdir, paste0(spec$key, ".svg")),
+                      style = "cards")
+
+    for (ex in Filter(function(e) identical(e$key, spec$key), EXTRAS)) {
+      plot_architecture(
+        arch, file.path(outdir, paste0(spec$key, ex$suffix, ".svg")),
+        style = ex$style %||% "cards", detail = ex$detail %||% "overview",
+        theme = ex$theme %||% "light"
+      )
+    }
   }
   # Descriptions are small -- the network is not kept -- so the diffs
   # can be drawn once every model has been built.
@@ -183,6 +296,38 @@ for (spec in GALLERY) {
   )
   rm(net, model, arch)
   gc(verbose = FALSE)
+}
+
+# In the matrix every pair is drawn, once, in gallery order: a page that
+# offers B against A shows A against B.
+if (matrix_mode) {
+  dir.create(file.path(outdir, "compare"), showWarnings = FALSE)
+  pairs <- utils::combn(names(archs), 2, simplify = FALSE)
+  compare <- lapply(pairs, function(pair) {
+    files <- file.path(outdir, "compare",
+                       sprintf("%s_vs_%s-%s.svg", pair[1], pair[2], MATRIX_THEMES))
+    for (i in seq_along(MATRIX_THEMES)) {
+      suppressMessages(plot_architecture_diff(
+        archs[[pair[1]]], archs[[pair[2]]], files[[i]],
+        theme = MATRIX_THEMES[[i]],
+        background = matrix_background(MATRIX_THEMES[[i]]),
+        highlight = utils::head(MATRIX_HIGHLIGHT, 3)
+      ))
+    }
+    c(list(a = pair[1], b = pair[2]), svg_size(files[[1]]))
+  })
+  jsonlite::write_json(
+    list(
+      tabfound = as.character(utils::packageVersion("tabfound")),
+      styles = MATRIX_STYLES, themes = MATRIX_THEMES,
+      backgrounds = as.list(MATRIX_BACKGROUNDS),
+      highlight = if (length(MATRIX_HIGHLIGHT)) I(MATRIX_HIGHLIGHT),
+      models = manifest_models, compare = compare
+    ),
+    file.path(outdir, "manifest.json"),
+    auto_unbox = TRUE, pretty = TRUE, digits = NA, na = "null"
+  )
+  DIFFS <- list()
 }
 
 for (pair in DIFFS) {
