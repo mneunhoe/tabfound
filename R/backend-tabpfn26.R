@@ -1018,7 +1018,7 @@ tabpfn26_describe <- function(config, task) {
       "Layers"              = L,
       "Embedding width"     = E,
       "Attention heads"     = sprintf("%d x %d", H, as.integer(E / H)),
-      "MLP width"           = ff,
+      "Feed-forward"        = arch_ff_fact(ff, E),
       "Features per group"  = grp,
       "Thinking rows"       = thk,
       "Attention per layer" = "2 (features, cells)",

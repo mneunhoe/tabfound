@@ -14,7 +14,8 @@ arch_stage(
   group = NULL,
   repeats = 1L,
   prefix = character(),
-  children = list()
+  children = list(),
+  collapses = FALSE
 )
 }
 \arguments{
@@ -43,6 +44,11 @@ check that every parameter is accounted for.}
 \item{children}{Optional list of \code{arch_stage()}s, drawn when
 \code{detail = "full"}. Their \code{prefix} entries point at the \emph{first}
 member of a repeated stack, so their counts are per block.}
+
+\item{collapses}{\code{TRUE} on the stage after which the table has no
+feature axis left: each row is one vector from here on. At most one
+stage per architecture sets it; models that keep their cells to the
+end set none.}
 }
 \value{
 A \code{tabfound_arch_stage}.

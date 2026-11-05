@@ -8,6 +8,7 @@ plot_architecture(
   object,
   file = NULL,
   format = NULL,
+  style = getOption("tabfound.arch_style", "cards"),
   detail = c("overview", "full"),
   theme = c("light", "dark"),
   scale = 1,
@@ -28,8 +29,14 @@ description can be inspected and then drawn.}
 \item{format}{\code{"svg"}, \code{"png"} or \code{"pdf"}. Inferred from \code{file} when
 not given.}
 
+\item{style}{How to draw it: \code{"cards"} (the default), \code{"tufte"},
+\code{"glyphs"} or \code{"icicle"}.
+See the Styles section. Set \code{options(tabfound.arch_style = )} to
+change the default for a session.}
+
 \item{detail}{\code{"overview"} draws each repeated stack as one block;
-\code{"full"} expands it into its sublayers.}
+\code{"full"} expands it into its sublayers. In \code{"tufte"}, the sublayers
+are indented rows with a hollow dot each.}
 
 \item{theme}{\code{"light"} or \code{"dark"}.}
 
@@ -37,10 +44,12 @@ not given.}
 (\code{png}), where it raises the resolution; SVG and PDF are vector and
 scale on their own.}
 
-\item{show_shapes, show_params}{Draw the right-margin tensor-shape and
-parameter-count annotations.}
+\item{show_shapes, show_params}{Draw the tensor shapes and the
+parameter counts. In \code{"tufte"}, \code{show_params = FALSE} drops the dot
+plot and its axis.}
 
-\item{show_facts}{Draw the fact sheet under the diagram.}
+\item{show_facts}{Draw the fact sheet under the diagram. The key is
+drawn either way.}
 }
 \value{
 Invisibly: the output path when \code{file} is given, otherwise the
@@ -60,7 +69,61 @@ Everything drawn comes from the model itself -- the stage list from
 the backend's own description of its network, the parameter counts
 read off the loaded weights -- so the picture cannot disagree with the
 checkpoint it was made from.
+
+Every diagram ends in a key that defines each symbol in its shapes,
+each abbreviation in its text and the notation its style uses, so a
+figure shared on its own still reads. The key is always drawn.
 }
+\section{Styles}{
+
+The same description can be drawn more than one way:
+\itemize{
+\item \code{"cards"} (the default) stacks one card per stage, coloured by what
+the stage does, in the manner of Sebastian Raschka's LLM
+architecture gallery.
+\item \code{"tufte"} sets the stages as rows of a table, with each stage's
+parameter count as a dot on a log scale from 100 to 1 B that every
+diagram shares, so two models can be compared by eye. It follows
+Tufte's (2001) rules -- little non-data ink, labels placed directly
+beside what they name, a range-frame axis -- and Cleveland and
+McGill's (1984) finding that position on a common scale is read
+more accurately than length or area. Phases are coloured with
+viridis in stage order, in serif type.
+\item \code{"glyphs"} draws each stage as a small table -- training rows above,
+test rows below, columns across -- with the part its attention runs
+over picked out: a column for attention across rows, a row for
+attention across columns or features, dots for inducing points.
+Once a stage merges a row's columns into one vector, later glyphs
+are a single wide column. Colours are the Okabe-Ito palette (Okabe
+and Ito, 2008), shifted just enough to keep 3:1 contrast against
+the table in each theme. \code{detail = "full"} lists the sublayers as
+text.
+\item \code{"icicle"} shows where the parameters are as lengths: three bands on
+one linear scale -- phases, stages, and each stage's sublayers
+summed over all its blocks -- after Kruskal and Landwehr's (1983)
+icicle plot. Blocks too narrow to name are listed underneath with
+their counts. Colours are the Okabe-Ito palette. It draws no shapes
+and always shows the sublayers, so \code{detail}, \code{show_shapes} and
+\code{show_params} do not apply.
+}
+
+Okabe, M., & Ito, K. (2008). \emph{Color Universal Design (CUD): How to
+make figures and presentations that are friendly to colorblind
+people}. J*Fly. \url{https://jfly.uni-koeln.de/color/}
+
+Kruskal, J. B., & Landwehr, J. M. (1983). Icicle plots: Better displays
+for hierarchical clustering. \emph{The American Statistician}, 37(2),
+162--168.
+
+Tufte, E. R. (2001). \emph{The Visual Display of Quantitative Information}
+(2nd ed.). Graphics Press.
+
+Cleveland, W. S., & McGill, R. (1984). Graphical perception: Theory,
+experimentation, and application to the development of graphical
+methods. \emph{Journal of the American Statistical Association}, 79(387),
+531--554.
+}
+
 \examples{
 \dontrun{
 clf <- tabular_classifier("path/to/tabpfn-v2.5-clf")
@@ -68,9 +131,12 @@ plot_architecture(clf)                                # current device
 plot_architecture(clf, "tabpfn.svg")
 plot_architecture(clf, "tabpfn.pdf", detail = "full")
 plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
+plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
+plot_architecture(clf, "tabpfn-glyphs.svg", style = "glyphs")
+plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 }
 }
 \seealso{
 \code{\link[=tabfound_architecture]{tabfound_architecture()}} for the description behind the
-picture.
+picture; \code{\link[=plot_architecture_diff]{plot_architecture_diff()}} to compare two models.
 }

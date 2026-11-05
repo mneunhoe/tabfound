@@ -10,51 +10,62 @@
 # Coordinates are CSS pixels with the origin at the top left and y
 # increasing downwards, i.e. SVG's own system. The grid renderer flips
 # the y axis once, in the viewport, rather than per item.
+#
+# A *style* is a scene builder: the same description drawn a different
+# way. The builders are registered in `arch_styles()`, and each lives in
+# its own `arch-style-*.R` file; what they share -- the primitives, the
+# text metrics, wrapping and colour -- is here.
 
 # ---------------------------------------------------------------------------
-# Theme
+# Styles
 # ---------------------------------------------------------------------------
 
-# Three hues carry identity -- embedding, attention, feed-forward -- and
-# everything else is neutral. That is not minimalism for its own sake:
-# only the first three slots of the reference categorical palette clear
-# the colour-vision-deficiency floors when every pair can appear
-# together, which is the case in a diagram where blocks are read against
-# each other rather than in sequence. Every block is also labelled in
-# words and listed in the legend, so colour never carries meaning alone.
+# The registry. A function rather than a list constant because the
+# builders live in files that collate after this one, so a list built at
+# load time would find them undefined. Every builder takes
+# `(arch, detail, theme, show_shapes, show_params, show_facts)`, with
+# `detail` and `theme` already matched, and ignores what it cannot draw.
 # @keywords internal
-arch_theme <- function(theme = c("light", "dark")) {
-  theme <- match.arg(theme)
-  if (identical(theme, "light")) {
-    list(
-      name    = "light",
-      surface = "#fcfcfb",
-      panel   = "#f0efec",
-      ink     = "#0b0b0b",
-      ink2    = "#52514e",
-      ink3    = "#7d7b74",
-      rule    = "#dbd9d3",
-      tint    = 0.13,
-      hue = c(input = "#7d7b74", embed = "#2a78d6", attention = "#eb6834",
-              ffn = "#1baf7a", norm = "#a3a199", decode = "#52514e",
-              output = "#7d7b74")
-    )
-  } else {
-    list(
-      name    = "dark",
-      surface = "#1a1a19",
-      panel   = "#252523",
-      ink     = "#ffffff",
-      ink2    = "#c3c2b7",
-      ink3    = "#8d8b82",
-      rule    = "#3a3a37",
-      tint    = 0.22,
-      hue = c(input = "#8d8b82", embed = "#3987e5", attention = "#d95926",
-              ffn = "#199e70", norm = "#6b6a63", decode = "#c3c2b7",
-              output = "#8d8b82")
-    )
-  }
+arch_styles <- function() {
+  list(cards = arch_scene_cards, tufte = arch_scene_tufte,
+       glyphs = arch_scene_glyphs, icicle = arch_scene_icicle)
 }
+
+# @keywords internal
+arch_match_style <- function(style) {
+  styles <- names(arch_styles())
+  if (!is.character(style) || length(style) != 1L || !style %in% styles) {
+    cli::cli_abort(c(
+      "{.arg style} must be one of {.or {.val {styles}}}.",
+      x = "Got {.val {style}}."
+    ))
+  }
+  style
+}
+
+#' Lay a described architecture out into a renderer-independent scene
+#'
+#' @param arch A `tabfound_arch` from [tabfound_architecture()].
+#' @param style A style registered in `arch_styles()`.
+#' @param detail `"overview"` or `"full"`.
+#' @param theme `"light"` or `"dark"`.
+#' @param show_shapes,show_params Draw the right-margin annotations.
+#' @param show_facts Draw the fact sheet at the foot of the diagram.
+#' @return A list with `width`, `height`, `bg` and `items`.
+#' @keywords internal
+arch_scene <- function(arch, style = "cards", detail = c("overview", "full"),
+                       theme = c("light", "dark"),
+                       show_shapes = TRUE, show_params = TRUE,
+                       show_facts = TRUE) {
+  build <- arch_styles()[[arch_match_style(style)]]
+  build(arch, detail = match.arg(detail), theme = match.arg(theme),
+        show_shapes = show_shapes, show_params = show_params,
+        show_facts = show_facts)
+}
+
+# ---------------------------------------------------------------------------
+# Colour
+# ---------------------------------------------------------------------------
 
 # Mix two hex colours. Used only to derive a block's fill from its accent
 # hue, which is a lightness step within one hue -- not a second
@@ -66,8 +77,46 @@ arch_mix <- function(a, b, w) {
   grDevices::rgb(t(round(ca * w + cb * (1 - w))), maxColorValue = 255)
 }
 
+# WCAG relative luminance and contrast ratio, for choosing text that
+# stays readable on a coloured fill.
 # @keywords internal
-arch_kind_fill <- function(th, kind) arch_mix(th$hue[[kind]], th$surface, th$tint)
+arch_luminance <- function(hex) {
+  v <- grDevices::col2rgb(hex)[, 1] / 255
+  v <- ifelse(v <= 0.03928, v / 12.92, ((v + 0.055) / 1.055)^2.4)
+  sum(c(0.2126, 0.7152, 0.0722) * v)
+}
+
+# @keywords internal
+arch_contrast <- function(a, b) {
+  l <- sort(c(arch_luminance(a), arch_luminance(b)), decreasing = TRUE)
+  (l[1] + 0.05) / (l[2] + 0.05)
+}
+
+# Whichever of `dark` and `light` reads better on `fill`.
+# @keywords internal
+arch_text_on <- function(fill, dark = "#111111", light = "#ffffff") {
+  if (arch_contrast(fill, dark) >= arch_contrast(fill, light)) dark else light
+}
+
+# Viridis without the dependency. The anchors are
+# `viridisLite::viridis(17)`, interpolated in Lab, which stays within a
+# small colour difference of the real map everywhere. Not
+# `hcl.colors("viridis")`: that is a different curve, and the contrast
+# limits the styles pick `begin` and `end` from were checked against the
+# real one.
+ARCH_VIRIDIS <- c(
+  "#440154", "#48186A", "#472D7B", "#424086", "#3B528B", "#33638D",
+  "#2C728E", "#26828E", "#21908C", "#1F9F88", "#27AD81", "#3EBC74",
+  "#5DC863", "#82D34D", "#AADC32", "#D5E21A", "#FDE725"
+)
+
+# @keywords internal
+arch_viridis <- function(n, begin = 0, end = 1) {
+  if (n < 1L) return(character())
+  ramp <- grDevices::colorRamp(ARCH_VIRIDIS, space = "Lab")
+  at <- if (n == 1L) begin else seq(begin, end, length.out = n)
+  grDevices::rgb(ramp(at), maxColorValue = 255)
+}
 
 # ---------------------------------------------------------------------------
 # Scene primitives
@@ -82,12 +131,20 @@ sc_rect <- function(x, y, w, h, fill = NA, stroke = NA, lwd = 1, r = 0,
 
 # `y` is the vertical centre of the text, not its baseline: centring is
 # what every caller here wants, and it is the one convention both
-# renderers can honour exactly.
+# renderers can honour exactly. `family` is `"sans"`, `"serif"` or
+# `"mono"`; `mono = TRUE` is the older spelling of `family = "mono"`.
 # @keywords internal
 sc_text <- function(x, y, text, size = 12, col = "#000000", anchor = "start",
-                    bold = FALSE, italic = FALSE, mono = FALSE) {
+                    bold = FALSE, italic = FALSE, mono = FALSE,
+                    family = if (mono) "mono" else "sans") {
   list(type = "text", x = x, y = y, text = text, size = size, col = col,
-       anchor = anchor, bold = bold, italic = italic, mono = mono)
+       anchor = anchor, bold = bold, italic = italic,
+       family = arch_match_family(family))
+}
+
+# @keywords internal
+arch_match_family <- function(family) {
+  match.arg(family, c("sans", "serif", "mono"))
 }
 
 # @keywords internal
@@ -117,394 +174,193 @@ sc_arrow <- function(x, y1, y2, col) {
 # need an open device. A per-character average is enough here, because it
 # is used only to decide when to ellipsize inside a fixed-width box. The
 # factors are measured off a rendered diagram in the sans stack the SVG
-# asks for, rounded up so the estimate errs towards truncating.
+# asks for, rounded up so the estimate errs towards truncating. The serif
+# factors take the wider of Palatino and its Georgia fallback, measured
+# over the gallery's labels, plus the same 5% margin; italic sans is
+# close enough to upright that it shares the regular factor.
 # @keywords internal
-ARCH_CHAR_W <- c(regular = 0.485, bold = 0.515, mono = 0.60)
+ARCH_CHAR_W <- c(regular = 0.485, bold = 0.515, mono = 0.60,
+                 serif = 0.48, serif_bold = 0.555, serif_italic = 0.49)
 
 # @keywords internal
-arch_char_w <- function(bold, mono) {
-  ARCH_CHAR_W[[if (mono) "mono" else if (bold) "bold" else "regular"]]
+arch_char_w <- function(bold, mono = FALSE, family = if (mono) "mono" else "sans",
+                        italic = FALSE) {
+  key <- switch(arch_match_family(family),
+    mono  = "mono",
+    sans  = if (bold) "bold" else "regular",
+    serif = if (bold) "serif_bold" else if (italic) "serif_italic" else "serif"
+  )
+  ARCH_CHAR_W[[key]]
 }
 
 # @keywords internal
-arch_text_width <- function(text, size, bold = FALSE, mono = FALSE) {
-  nchar(text, type = "chars") * size * arch_char_w(bold, mono)
+arch_text_width <- function(text, size, bold = FALSE, mono = FALSE,
+                            family = if (mono) "mono" else "sans",
+                            italic = FALSE) {
+  nchar(text, type = "chars") * size * arch_char_w(bold, family = family,
+                                                    italic = italic)
 }
 
 # @keywords internal
-arch_fit_text <- function(text, max_px, size, bold = FALSE, mono = FALSE) {
+arch_fit_text <- function(text, max_px, size, bold = FALSE, mono = FALSE,
+                          family = if (mono) "mono" else "sans",
+                          italic = FALSE) {
   if (is.null(text) || !nzchar(text)) return(text)
-  if (arch_text_width(text, size, bold, mono) <= max_px) return(text)
+  cw <- arch_char_w(bold, family = family, italic = italic)
+  if (nchar(text, type = "chars") * size * cw <= max_px) return(text)
   # Three dots rather than U+2026: the PDF device's font encodings have no
   # ellipsis glyph and warn when asked for one, and nothing is gained by
   # making the two outputs differ over it.
-  keep <- max(1L, floor(max_px / (size * arch_char_w(bold, mono))) - 3L)
+  keep <- max(1L, floor(max_px / (size * cw)) - 3L)
   paste0(substr(text, 1L, keep), "...")
 }
 
+# Greedy word wrap into lines no wider than `max_px`. A word too long for
+# a line on its own is cut with `arch_fit_text()`. With `max_lines`, the
+# text that does not fit is dropped and the last line ends in "...", so
+# a caller that must not lose text leaves it at `Inf`.
+# @keywords internal
+arch_wrap_text <- function(text, max_px, size, family = "sans", bold = FALSE,
+                           italic = FALSE, max_lines = Inf) {
+  if (is.null(text) || !nzchar(text)) return(character())
+  fits <- function(s) {
+    arch_text_width(s, size, bold, family = family, italic = italic) <= max_px
+  }
+  words <- strsplit(trimws(text), "\\s+")[[1L]]
+  lines <- character()
+  cur <- ""
+  for (w in words) {
+    cand <- if (nzchar(cur)) paste(cur, w) else w
+    if (fits(cand)) {
+      cur <- cand
+      next
+    }
+    if (nzchar(cur)) lines <- c(lines, cur)
+    cur <- if (fits(w)) w else
+      arch_fit_text(w, max_px, size, bold, family = family, italic = italic)
+  }
+  lines <- c(lines, cur)
+  if (length(lines) > max_lines) {
+    last <- paste0(lines[max_lines], "...")
+    if (!fits(last)) {
+      last <- arch_fit_text(paste0(lines[max_lines], " ..."), max_px, size,
+                            bold, family = family, italic = italic)
+    }
+    lines <- c(lines[seq_len(max_lines - 1L)], last)
+  }
+  lines
+}
+
 # ---------------------------------------------------------------------------
-# Geometry
+# Shared parts for the styles that are not cards
 # ---------------------------------------------------------------------------
 
+# The fact sheet as a booktabs table: a rule above, a rule below, no
+# fill and no rules between rows. Two columns past five facts. `label_x`
+# right-aligns a "Facts" label in the margin when given. Returns the
+# items and the y the table ends at.
 # @keywords internal
-arch_geom <- function() {
-  list(
-    pad      = 30,      # canvas margin
-    gutter_l = 152,     # phase brackets and their labels
-    gutter_r = 190,     # shapes and parameter counts
-    gap      = 16,      # between a column and the block column
-    box_w    = 472,
-    box_h    = 46,      # a block with a label only
-    box_h2   = 60,      # a block with a label and a detail line
-    arrow    = 24,      # vertical space between blocks
-    deck     = 5,       # offset per card in a repeated block's deck
-    child_h  = 32,
-    child_gap = 7,
-    pad_in   = 13       # padding inside an expanded container
-  )
-}
-
-# @keywords internal
-arch_canvas_width <- function(g) {
-  g$pad + g$gutter_l + g$gap + g$box_w + g$gap + g$gutter_r + g$pad
-}
-
-# ---------------------------------------------------------------------------
-# Scene construction
-# ---------------------------------------------------------------------------
-
-# Space above the children inside an expanded block: the stage's own
-# label, plus its detail line when it has one.
-# @keywords internal
-arch_header_height <- function(s) if (is.null(s$detail)) 25 else 43
-
-# Height a stage's block occupies, including its deck offsets or its
-# expanded children.
-# @keywords internal
-arch_stage_height <- function(s, detail, g) {
-  expanded <- identical(detail, "full") && length(s$children) > 0L
-  if (expanded) {
-    n <- length(s$children)
-    return(2 * g$pad_in + arch_header_height(s) +
-             n * g$child_h + (n - 1L) * g$child_gap)
-  }
-  base <- if (is.null(s$detail)) g$box_h else g$box_h2
-  base + if (s$repeats > 1L) 2 * g$deck else 0
-}
-
-#' Lay a described architecture out into a renderer-independent scene
-#'
-#' @param arch A `tabfound_arch` from [tabfound_architecture()].
-#' @param detail `"overview"` or `"full"`.
-#' @param theme `"light"` or `"dark"`.
-#' @param show_shapes,show_params Draw the right-margin annotations.
-#' @param show_facts Draw the fact sheet at the foot of the diagram.
-#' @return A list with `width`, `height`, `bg` and `items`.
-#' @keywords internal
-arch_scene <- function(arch, detail = c("overview", "full"),
-                       theme = c("light", "dark"),
-                       show_shapes = TRUE, show_params = TRUE,
-                       show_facts = TRUE) {
-  detail <- match.arg(detail)
-  th <- arch_theme(theme)
-  g  <- arch_geom()
-
-  W  <- arch_canvas_width(g)
-  x_box   <- g$pad + g$gutter_l + g$gap
-  x_right <- x_box + g$box_w + g$gap
-  x_mid   <- x_box + g$box_w / 2
-
-  it <- list()
-  push <- function(...) it[[length(it) + 1L]] <<- list(...)[[1L]]
-  push_all <- function(lst) for (e in lst) push(e)
-
-  # --- header ---------------------------------------------------------
-  y <- g$pad + 12
-  push(sc_text(g$pad, y, arch$title, size = 19, col = th$ink, bold = TRUE))
-  if (!is.null(arch$subtitle) && nzchar(arch$subtitle)) {
-    y <- y + 22
-    push(sc_text(g$pad, y, arch$subtitle, size = 11.5, col = th$ink2))
-  }
-  y <- y + 20
-  push(sc_line(g$pad, y, W - g$pad, y, col = th$rule, lwd = 1))
-  y <- y + 26
-
-  # --- blocks ---------------------------------------------------------
-  spans <- list()   # phase brackets, resolved once all tops are known
-  for (i in seq_along(arch$stages)) {
-    s <- arch$stages[[i]]
-    h <- arch_stage_height(s, detail, g)
-    push_all(arch_block_items(s, x_box, y, h, g, th, detail))
-
-    if (show_shapes || show_params) {
-      push_all(arch_margin_items(s, x_right, y, h, g, th,
-                                 show_shapes, show_params))
-    }
-    if (!is.null(s$group)) {
-      spans[[length(spans) + 1L]] <- list(group = s$group, top = y,
-                                          bottom = y + h)
-    }
-    if (i < length(arch$stages)) {
-      push_all(sc_arrow(x_mid, y + h, y + h + g$arrow, th$ink3))
-    }
-    y <- y + h + g$arrow
-  }
-  y <- y - g$arrow
-
-  push_all(arch_bracket_items(spans, x_box, g, th))
-
-  # --- legend ---------------------------------------------------------
-  y <- y + 30
-  legend <- arch_legend_items(arch, g$pad, y, W - 2 * g$pad, th)
-  push_all(legend$items)
-  y <- legend$y
-
-  # --- fact sheet -----------------------------------------------------
-  if (show_facts && length(arch$facts)) {
-    y <- y + 18
-    facts <- arch_facts_items(arch, g$pad, y, W - 2 * g$pad, th)
-    push_all(facts$items)
-    y <- facts$y
-  }
-
-  list(width = W, height = ceiling(y + g$pad), bg = th$surface, items = it,
-       theme = th)
-}
-
-# One block: the deck of cards behind it when it repeats, the card
-# itself, its accent edge, its text, and its children when expanded.
-# @keywords internal
-arch_block_items <- function(s, x, y, h, g, th, detail) {
-  out <- list()
-  accent <- th$hue[[s$kind]]
-  fill   <- arch_kind_fill(th, s$kind)
-  expanded <- identical(detail, "full") && length(s$children) > 0L
-  stacked  <- s$repeats > 1L && !expanded
-
-  # Card height excludes the deck offsets, which sit below and right.
-  card_h <- if (expanded) h else h - if (stacked) 2 * g$deck else 0
-
-  if (stacked) {
-    for (k in 2:1) {
-      out[[length(out) + 1L]] <- sc_rect(
-        x + k * g$deck, y + k * g$deck, g$box_w, card_h,
-        fill = arch_mix(fill, th$surface, 0.45), stroke = th$rule, lwd = 1, r = 5
-      )
-    }
-  }
-
-  out[[length(out) + 1L]] <- sc_rect(x, y, g$box_w, card_h, fill = fill,
-                                     stroke = accent, lwd = 1.3, r = 5)
-  # Accent edge. Drawn as a narrow rect rather than a thick stroke so it
-  # keeps its width when the diagram is scaled.
-  out[[length(out) + 1L]] <- sc_rect(x, y + 1, 5, card_h - 2, fill = accent,
-                                     stroke = NA, r = 2)
-
-  # Right-hand tags -- the attention axis and the repeat count -- claim
-  # their width first, so the label and detail lines are truncated to
-  # what is actually left rather than run underneath them.
-  tags <- c(
-    if (!is.null(s$axis)) paste0("over ", s$axis),
-    if (s$repeats > 1L) paste0("× ", s$repeats)
-  )
-  tag_w <- if (!length(tags)) 0 else
-    max(vapply(tags, arch_text_width, numeric(1), size = 11, bold = TRUE)) + 16
-
-  tx <- x + 17
-  text_w <- g$box_w - 34 - tag_w
-  if (expanded) {
-    out[[length(out) + 1L]] <- sc_text(tx, y + g$pad_in + 6,
-      arch_fit_text(s$label, text_w, 13, bold = TRUE), size = 13,
-      col = th$ink, bold = TRUE)
-    if (!is.null(s$detail)) {
-      out[[length(out) + 1L]] <- sc_text(tx, y + g$pad_in + 25,
-        arch_fit_text(s$detail, g$box_w - 34, 10.5), size = 10.5,
-        col = th$ink2)
-    }
-    cy <- y + g$pad_in + arch_header_height(s)
-    for (ch in s$children) {
-      out <- c(out, arch_child_items(ch, x + g$pad_in, cy,
-                                     g$box_w - 2 * g$pad_in, g, th))
-      cy <- cy + g$child_h + g$child_gap
-    }
-  } else {
-    cy <- y + card_h / 2
-    if (is.null(s$detail)) {
-      out[[length(out) + 1L]] <- sc_text(tx, cy,
-        arch_fit_text(s$label, text_w, 13, bold = TRUE), size = 13,
-        col = th$ink, bold = TRUE)
-    } else {
-      out[[length(out) + 1L]] <- sc_text(tx, cy - 9,
-        arch_fit_text(s$label, text_w, 13, bold = TRUE), size = 13,
-        col = th$ink, bold = TRUE)
-      out[[length(out) + 1L]] <- sc_text(tx, cy + 10,
-        arch_fit_text(s$detail, text_w, 10.5), size = 10.5, col = th$ink2)
-    }
-  }
-
-  if (length(tags)) {
-    rx <- x + g$box_w - 17
-    ry <- if (expanded) y + g$pad_in + 6 else y + card_h / 2
-    if (length(tags) == 1L) {
-      out[[length(out) + 1L]] <- sc_text(rx, ry, tags[1], size = 11,
-        col = th$ink2, anchor = "end", bold = is.null(s$axis))
-    } else {
-      out[[length(out) + 1L]] <- sc_text(rx, ry - 9, tags[1], size = 10,
-        col = th$ink3, anchor = "end")
-      out[[length(out) + 1L]] <- sc_text(rx, ry + 10, tags[2], size = 11.5,
-        col = th$ink2, anchor = "end", bold = TRUE)
-    }
-  }
-  out
-}
-
-# A sublayer inside an expanded block.
-# @keywords internal
-arch_child_items <- function(ch, x, y, w, g, th) {
-  accent <- th$hue[[ch$kind]]
-  out <- list(
-    sc_rect(x, y, w, g$child_h, fill = arch_kind_fill(th, ch$kind),
-            stroke = arch_mix(accent, th$surface, 0.45), lwd = 1, r = 4),
-    sc_rect(x, y + 1, 4, g$child_h - 2, fill = accent, stroke = NA, r = 2)
-  )
-  cy <- y + g$child_h / 2
-  right <- c(if (!is.null(ch$axis)) paste0("over ", ch$axis),
-             if (ch$repeats > 1L) paste0("× ", ch$repeats))
-  right <- if (length(right)) paste(right, collapse = " · ") else NULL
-  rw <- if (is.null(right)) 0 else arch_text_width(right, 9.5) + 14
-  out[[length(out) + 1L]] <- sc_text(
-    x + 13, cy, arch_fit_text(ch$label, w - 26 - rw, 11.5), size = 11.5,
-    col = th$ink)
-  if (!is.null(right)) {
-    out[[length(out) + 1L]] <- sc_text(x + w - 11, cy, right, size = 9.5,
-                                       col = th$ink3, anchor = "end")
-  }
-  out
-}
-
-# The right margin: symbolic output shape above, parameter count below.
-# @keywords internal
-arch_margin_items <- function(s, x, y, h, g, th, show_shapes, show_params) {
-  lines <- c(
-    if (show_shapes && !is.null(s$shape)) s$shape,
-    if (show_params && !is.na(s$params) && s$params > 0)
-      paste0(arch_format_count(s$params), " params")
-  )
-  if (!length(lines)) return(list())
-  cy <- y + (h - if (s$repeats > 1L) 2 * g$deck else 0) / 2
-  if (length(lines) == 1L) {
-    return(list(sc_text(x, cy, lines[1], size = 10.5, col = th$ink2,
-                        mono = !is.null(s$shape))))
-  }
-  list(
-    sc_text(x, cy - 9, lines[1], size = 10.5, col = th$ink2, mono = TRUE),
-    sc_text(x, cy + 10, lines[2], size = 10, col = th$ink3)
-  )
-}
-
-# Phase brackets in the left margin: a rule spanning the stages that
-# share a `group`, with the group's name beside it.
-# @keywords internal
-arch_bracket_items <- function(spans, x_box, g, th) {
-  if (!length(spans)) return(list())
-  out <- list()
-  i <- 1L
-  while (i <= length(spans)) {
-    j <- i
-    while (j < length(spans) && identical(spans[[j + 1L]]$group, spans[[i]]$group)) {
-      j <- j + 1L
-    }
-    top <- spans[[i]]$top
-    bot <- spans[[j]]$bottom
-    bx <- x_box - 11
-    out <- c(out, list(
-      sc_line(bx, top, bx, bot, col = th$rule, lwd = 2),
-      sc_line(bx, top, bx + 5, top, col = th$rule, lwd = 2),
-      sc_line(bx, bot, bx + 5, bot, col = th$rule, lwd = 2)
-    ))
-    label <- arch_fit_text(spans[[i]]$group, g$gutter_l - 4, 10.5)
-    out[[length(out) + 1L]] <- sc_text(bx - 9, (top + bot) / 2, label,
-                                       size = 10.5, col = th$ink3,
-                                       anchor = "end")
-    i <- j + 1L
-  }
-  out
-}
-
-# @keywords internal
-arch_legend_items <- function(arch, x, y, w, th) {
-  kinds <- unique(vapply(arch$stages, `[[`, character(1), "kind"))
-  for (s in arch$stages) {
-    for (ch in s$children) kinds <- union(kinds, ch$kind)
-  }
-  kinds <- names(ARCH_KINDS)[names(ARCH_KINDS) %in% kinds]
-
-  out <- list()
-  cx <- x
-  cy <- y + 7
-  for (k in kinds) {
-    lab <- ARCH_KINDS[[k]]
-    need <- 15 + arch_text_width(lab, 10.5) + 20
-    if (cx + need > x + w) { cx <- x; cy <- cy + 20 }
-    out <- c(out, list(
-      sc_rect(cx, cy - 5, 11, 11, fill = arch_kind_fill(th, k),
-              stroke = th$hue[[k]], lwd = 1.1, r = 2),
-      sc_rect(cx, cy - 4, 3, 9, fill = th$hue[[k]], stroke = NA, r = 1),
-      sc_text(cx + 17, cy, lab, size = 10.5, col = th$ink2)
-    ))
-    cx <- cx + need
-  }
-  list(items = out, y = cy + 10)
-}
-
-# Only the symbols that actually appear in a shape annotation. A legend
-# for letters the diagram never uses is noise, and the backends declare
-# a superset so a shape can be reworded without touching the legend.
-# @keywords internal
-arch_used_symbols <- function(arch) {
-  if (!length(arch$symbols)) return(arch$symbols)
-  shapes <- paste(unlist(lapply(arch$stages, function(s)
-    c(s$shape, unlist(lapply(s$children, `[[`, "shape"))))), collapse = " ")
-  keep <- vapply(names(arch$symbols),
-                 function(nm) grepl(paste0("\\b", nm, "\\b"), shapes),
-                 logical(1))
-  arch$symbols[keep]
-}
-
-# @keywords internal
-arch_facts_items <- function(arch, x, y, w, th) {
-  facts <- arch$facts
+arch_fact_table_items <- function(facts, x, y, w, th, family = "serif",
+                                  size = 11.5, label_x = NULL) {
   n <- length(facts)
+  if (!n) return(list(items = list(), y = y))
+  out <- list()
+  add <- function(e) out[[length(out) + 1L]] <<- e
+  line <- 19
   ncol <- if (n > 5L) 2L else 1L
   nrow <- ceiling(n / ncol)
-  line <- 19
-  sym <- arch_used_symbols(arch)
-  sym <- if (length(sym))
-    paste(paste0(names(sym), " = ", unname(sym)), collapse = "   ·   ")
-    else NULL
-  h <- 16 + 20 + nrow * line + if (is.null(sym)) 4 else 24
+  gap <- 18
+  colw <- (w - (ncol - 1L) * gap) / ncol
 
-  out <- list(sc_rect(x, y, w, h, fill = th$panel, stroke = NA, r = 6))
-  out[[length(out) + 1L]] <- sc_text(x + 16, y + 19, "Fact sheet", size = 10.5,
-                                     col = th$ink3, bold = TRUE)
-  colw <- (w - 32) / ncol
-  for (i in seq_len(n)) {
-    col <- (i - 1L) %/% nrow
-    row <- (i - 1L) %% nrow
-    fx <- x + 16 + col * colw
-    fy <- y + 40 + row * line
-    out[[length(out) + 1L]] <- sc_text(
-      fx, fy, arch_fit_text(names(facts)[i], colw * 0.52, 10.5), size = 10.5,
-      col = th$ink2)
-    out[[length(out) + 1L]] <- sc_text(
-      fx + colw - 16, fy,
-      arch_fit_text(as.character(facts[[i]]), colw * 0.46, 10.5, bold = TRUE),
-      size = 10.5, col = th$ink, anchor = "end", bold = TRUE)
+  add(sc_line(x, y, x + w, y, col = th$ink2, lwd = 0.8))
+  if (!is.null(label_x)) {
+    add(sc_text(label_x, y + 14, "Facts", size = size, col = th$ink2,
+                italic = TRUE, anchor = "end", family = family))
   }
-  if (!is.null(sym)) {
-    out[[length(out) + 1L]] <- sc_text(
-      x + 16, y + h - 13, arch_fit_text(sym, w - 32, 9.5), size = 9.5,
-      col = th$ink3, italic = TRUE)
+  for (k in seq_len(n)) {
+    fx <- x + ((k - 1L) %/% nrow) * (colw + gap)
+    fy <- y + 14 + ((k - 1L) %% nrow) * line
+    name <- names(facts)[k]
+    name_w <- arch_text_width(name, size, family = family)
+    add(sc_text(fx, fy, name, size = size, col = th$ink2, family = family))
+    value <- arch_fit_text(as.character(facts[[k]]), colw - name_w - 12, size,
+                           family = family)
+    add(sc_text(fx + colw, fy, value, size = size, col = th$ink,
+                anchor = "end", family = family))
   }
-  list(items = out, y = y + h)
+  y <- y + 14 + nrow * line - 6
+  add(sc_line(x, y, x + w, y, col = th$ink2, lwd = 0.8))
+  list(items = out, y = y)
+}
+
+# "100", "1k", ..., "1B": short labels for powers of ten.
+# @keywords internal
+arch_decade_label <- function(d) {
+  units <- c("", "k", "M", "B", "T")
+  i <- pmin(d %/% 3, length(units) - 1L)
+  paste0(10^(d - 3 * i), units[i + 1L])
+}
+
+# A range-frame log axis: the line runs from the smallest value to the
+# largest, not across the whole plot, and ticks sit only on the decades
+# the values span. `px` maps a value to x.
+# @keywords internal
+arch_log_axis_items <- function(values, px, y, th, family = "serif") {
+  values <- values[is.finite(values) & values > 0]
+  if (!length(values)) return(list())
+  out <- list(sc_line(px(min(values)), y, px(max(values)), y, col = th$ink3,
+                      lwd = 0.8))
+  decades <- arch_axis_decades(values)
+  at <- 10^decades
+  labels <- arch_decade_label(decades)
+  # Every decade gets a tick; when decades are too narrow for their
+  # labels to sit apart, only every second (or third) is labelled.
+  if (length(at) > 1L) {
+    step <- ceiling(34 / (px(at[2]) - px(at[1])))
+    labels[(seq_along(labels) - 1L) %% step != 0L] <- ""
+  }
+  # Values within one decade cross no tick; label the ends instead, so
+  # the axis still says what it measures.
+  if (!length(at)) {
+    at <- range(values)
+    labels <- vapply(at, function(v) gsub(" ", "", arch_format_count(v)),
+                     character(1))
+  }
+  for (k in seq_along(at)) {
+    xd <- px(at[k])
+    out[[length(out) + 1L]] <- sc_line(xd, y, xd, y + 4, col = th$ink3,
+                                       lwd = 0.8)
+    if (nzchar(labels[k])) {
+      out[[length(out) + 1L]] <- sc_text(xd, y + 14, labels[k], size = 10,
+                                         col = th$ink3, anchor = "middle",
+                                         family = family)
+    }
+  }
+  out
+}
+
+# The decades inside the range of `values`: a tick outside the range
+# frame would dangle past the end of its line.
+# @keywords internal
+arch_axis_decades <- function(values) {
+  lo <- ceiling(log10(min(values)) - 1e-9)
+  hi <- floor(log10(max(values)) + 1e-9)
+  if (lo > hi) integer() else seq.int(lo, hi)
+}
+
+# A range-frame linear axis from 0 to `max`, ticked at `pretty()` values.
+# @keywords internal
+arch_linear_axis_items <- function(max, px, y, th, family = "sans") {
+  if (!is.finite(max) || max <= 0) return(list())
+  out <- list(sc_line(px(0), y, px(max), y, col = th$ink3, lwd = 0.8))
+  for (v in pretty(c(0, max), n = 5)) {
+    if (v > max) next
+    out <- c(out, list(
+      sc_line(px(v), y, px(v), y + 4, col = th$ink3, lwd = 0.8),
+      sc_text(px(v), y + 15,
+              if (v == 0) "0" else gsub(" ", "", arch_format_count(v)),
+              size = 10, col = th$ink3, anchor = "middle", family = family)
+    ))
+  }
+  out
 }

@@ -1,5 +1,35 @@
 # tabfound (development version)
 
+* Architecture diagrams come in four styles: `plot_architecture(style = )`
+  takes `"cards"` (the default, unchanged apart from the key below),
+  `"tufte"` (a table with a dot per stage on a log scale shared by every
+  diagram), `"glyphs"` (each stage as a small table showing the axis its
+  attention runs over) and `"icicle"` (where the parameters are, as
+  lengths). `options(tabfound.arch_style = )` sets the default.
+* New `plot_architecture_diff()` draws two models side by side, pairing
+  their stages by kind and attention axis and their facts by name. It
+  takes models, fits or `tabfound_arch` objects in any mix.
+* Every architecture diagram ends in a key that defines each symbol in
+  its shapes, each abbreviation in its text and the notation of its
+  style, so a figure shared on its own still reads. It replaces the fact
+  sheet's symbol line, which was cut off at the panel's width. SVG output
+  also carries the title and the key as `<title>` and `<desc>`.
+* Architecture descriptions:
+  * Fact names are shared across backends, so the same fact has the same
+    name everywhere: "Column-stage blocks", "Row-stage blocks" and "ICL
+    layers" replace "Column blocks", "Row blocks", "Aggregator blocks"
+    and "ICL blocks"; "Features per group" replaces "Feature group size"
+    and Kumo's "Cell group"; "Feed-forward" (as "2 x width (1024)")
+    replaces "MLP width"; "Embedding width" replaces Mitra's "Width" and
+    Kumo's "Cell width"; Kumo's "Heads" is split into "ICL heads" and
+    "Embedding heads". This changes `print()` output and the fact sheet.
+  * Stages gain `collapses`, marking the stage after which a model works
+    on one vector per row.
+  * Sublayers gain `params_all`, their count over every block of a stack,
+    which unlike per-block count times repeats is right for parts shared
+    by the whole stack (RoPE tables, output norms).
+  * The `n_test` symbol is defined for every backend, and Mitra defines
+    `n` and `p`; each description carries a `glossary`.
 * Fixed wrong predictions from Kumo Tabular medium and large on Apple's
   `mps` device. libtorch's fused attention kernel on MPS returns wrong
   values for non-contiguous inputs when the query is shorter than the keys

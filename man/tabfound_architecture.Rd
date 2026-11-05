@@ -26,7 +26,8 @@ include each repeated block's sublayers.}
 }
 \value{
 An object of class \code{tabfound_arch}: a list with \code{backend},
-\code{task}, \code{title}, \code{subtitle}, \code{facts}, \code{n_params} and \code{stages}.
+\code{task}, \code{title}, \code{subtitle}, \code{facts}, \code{symbols}, \code{glossary},
+\code{n_params} and \code{stages}.
 }
 \description{
 Turns a loaded tabular foundation model into a structured description
