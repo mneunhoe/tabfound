@@ -106,6 +106,10 @@
   * New `native_ensemble_presets()` returns the checkpoint's member menu,
     and `generate_ensemble_configs_native(presets = )` draws members from
     an edited one.
+* `fit()` now refuses a target with missing or non-finite values, saying
+  how many and at which rows. Before, every backend accepted one: a single
+  `NA` in a regression target made every prediction `NA`, and a classifier
+  fitted on an `NA` label, both without a warning (#25).
 * `categorical_features = integer()` now declares that no column is
   categorical, and turns inference off; only `NULL` infers. Before, the
   two were the same, so a count or time step with fewer than four values
