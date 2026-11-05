@@ -27,7 +27,8 @@
 # `detail` and `theme` already matched, and ignores what it cannot draw.
 # @keywords internal
 arch_styles <- function() {
-  list(cards = arch_scene_cards, tufte = arch_scene_tufte)
+  list(cards = arch_scene_cards, tufte = arch_scene_tufte,
+       icicle = arch_scene_icicle)
 }
 
 # @keywords internal
@@ -74,6 +75,27 @@ arch_mix <- function(a, b, w) {
   ca <- grDevices::col2rgb(a)[, 1]
   cb <- grDevices::col2rgb(b)[, 1]
   grDevices::rgb(t(round(ca * w + cb * (1 - w))), maxColorValue = 255)
+}
+
+# WCAG relative luminance and contrast ratio, for choosing text that
+# stays readable on a coloured fill.
+# @keywords internal
+arch_luminance <- function(hex) {
+  v <- grDevices::col2rgb(hex)[, 1] / 255
+  v <- ifelse(v <= 0.03928, v / 12.92, ((v + 0.055) / 1.055)^2.4)
+  sum(c(0.2126, 0.7152, 0.0722) * v)
+}
+
+# @keywords internal
+arch_contrast <- function(a, b) {
+  l <- sort(c(arch_luminance(a), arch_luminance(b)), decreasing = TRUE)
+  (l[1] + 0.05) / (l[2] + 0.05)
+}
+
+# Whichever of `dark` and `light` reads better on `fill`.
+# @keywords internal
+arch_text_on <- function(fill, dark = "#111111", light = "#ffffff") {
+  if (arch_contrast(fill, dark) >= arch_contrast(fill, light)) dark else light
 }
 
 # Viridis without the dependency. The anchors are
@@ -324,4 +346,21 @@ arch_axis_decades <- function(values) {
   lo <- ceiling(log10(min(values)) - 1e-9)
   hi <- floor(log10(max(values)) + 1e-9)
   if (lo > hi) integer() else seq.int(lo, hi)
+}
+
+# A range-frame linear axis from 0 to `max`, ticked at `pretty()` values.
+# @keywords internal
+arch_linear_axis_items <- function(max, px, y, th, family = "sans") {
+  if (!is.finite(max) || max <= 0) return(list())
+  out <- list(sc_line(px(0), y, px(max), y, col = th$ink3, lwd = 0.8))
+  for (v in pretty(c(0, max), n = 5)) {
+    if (v > max) next
+    out <- c(out, list(
+      sc_line(px(v), y, px(v), y + 4, col = th$ink3, lwd = 0.8),
+      sc_text(px(v), y + 15,
+              if (v == 0) "0" else gsub(" ", "", arch_format_count(v)),
+              size = 10, col = th$ink3, anchor = "middle", family = family)
+    ))
+  }
+  out
 }

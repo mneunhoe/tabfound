@@ -254,6 +254,17 @@ arch_format_from_file <- function(file) {
 #'   McGill's (1984) finding that position on a common scale is read
 #'   more accurately than length or area. Phases are coloured with
 #'   viridis in stage order, in serif type.
+#' * `"icicle"` shows where the parameters are as lengths: three bands on
+#'   one linear scale -- phases, stages, and each stage's sublayers
+#'   summed over all its blocks -- after Kruskal and Landwehr's (1983)
+#'   icicle plot. Blocks too narrow to name are listed underneath with
+#'   their counts. Colours are the Okabe-Ito palette. It draws no shapes
+#'   and always shows the sublayers, so `detail`, `show_shapes` and
+#'   `show_params` do not apply.
+#'
+#' Kruskal, J. B., & Landwehr, J. M. (1983). Icicle plots: Better displays
+#' for hierarchical clustering. *The American Statistician*, 37(2),
+#' 162--168.
 #'
 #' Tufte, E. R. (2001). *The Visual Display of Quantitative Information*
 #' (2nd ed.). Graphics Press.
@@ -271,7 +282,8 @@ arch_format_from_file <- function(file) {
 #'   (the default) the diagram is drawn on the current graphics device.
 #' @param format `"svg"`, `"png"` or `"pdf"`. Inferred from `file` when
 #'   not given.
-#' @param style How to draw it: `"cards"` (the default) or `"tufte"`.
+#' @param style How to draw it: `"cards"` (the default), `"tufte"` or
+#'   `"icicle"`.
 #'   See the Styles section. Set `options(tabfound.arch_style = )` to
 #'   change the default for a session.
 #' @param detail `"overview"` draws each repeated stack as one block;
@@ -296,6 +308,7 @@ arch_format_from_file <- function(file) {
 #' plot_architecture(clf, "tabpfn.pdf", detail = "full")
 #' plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
 #' plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
+#' plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 #' }
 #' @seealso [tabfound_architecture()] for the description behind the
 #'   picture.

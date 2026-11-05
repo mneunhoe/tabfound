@@ -153,14 +153,43 @@ arch_count_params <- function(index, prefix) {
   sum(index[arch_prefix_hits(names(index), prefix)])
 }
 
-# Fill in `params` throughout a stage tree.
+# Fill in `params` throughout a stage tree. A repeated stage's children
+# point at its first block, so their `params` are per block; each child
+# also gets `params_all`, its count over every block. That is not
+# `params * repeats`: a child can own parts that are not per block -- a
+# RoPE table or an output norm shared by the whole stack.
 # @keywords internal
-arch_fill_params <- function(stages, index) {
+arch_fill_params <- function(stages, index, repeats = 1L) {
   lapply(stages, function(s) {
     s$params <- arch_count_params(index, s$prefix)
-    if (length(s$children)) s$children <- arch_fill_params(s$children, index)
+    s$params_all <- if (repeats > 1L) {
+      arch_count_params_all_blocks(index, s$prefix)
+    } else {
+      s$params
+    }
+    if (length(s$children)) {
+      s$children <- arch_fill_params(s$children, index, s$repeats)
+    }
     s
   })
+}
+
+# Count a first-block prefix over every block: each `.0` segment matches
+# any block index, so "layers.0.attn" also claims "layers.11.attn".
+# @keywords internal
+arch_count_params_all_blocks <- function(index, prefix) {
+  if (is.null(index) || !length(prefix)) return(NA_real_)
+  nms <- names(index)
+  hit <- logical(length(nms))
+  for (p in prefix) {
+    # Prefix segments are module and parameter names -- letters, digits
+    # and underscores -- so only the dots between them need escaping.
+    seg <- strsplit(p, ".", fixed = TRUE)[[1L]]
+    seg[seg == "0"] <- "[0-9]+"
+    rx <- paste0("^", paste(seg, collapse = "\\."), "(\\.|$)")
+    hit <- hit | grepl(rx, nms)
+  }
+  sum(index[hit])
 }
 
 #' Parameters no stage claims, and parameters claimed twice

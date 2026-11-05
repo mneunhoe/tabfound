@@ -41,11 +41,12 @@ arch_shape_symbols <- function(arch) {
   setdiff(arch_tokens(arch_shapes(arch)), ARCH_SHAPE_WORDS)
 }
 
-# Every piece of description text a diagram may draw.
+# Every piece of description text a diagram may draw. A style that does
+# not draw detail lines or shapes says so, and their words drop out.
 # @keywords internal
-arch_drawn_text <- function(arch) {
+arch_drawn_text <- function(arch, details = TRUE, shapes = TRUE) {
   stage_text <- function(s) {
-    c(s$label, s$detail, s$group, s$shape,
+    c(s$label, if (details) s$detail, s$group, if (shapes) s$shape,
       unlist(lapply(s$children, stage_text)))
   }
   c(arch$title, arch$subtitle, names(arch$facts),
@@ -58,12 +59,12 @@ arch_drawn_text <- function(arch) {
 # backends declare a superset so a shape can be reworded without
 # touching the key. Details count too: "Linear(2 -> E)" uses `E`.
 # @keywords internal
-arch_used_symbols <- function(arch, shapes = TRUE) {
+arch_used_symbols <- function(arch, shapes = TRUE, details = TRUE) {
   sym <- arch$symbols
   if (!length(sym)) return(sym)
   prose <- unlist(lapply(arch$stages, function(s)
-    c(s$label, s$detail, unlist(lapply(s$children, function(ch)
-      c(ch$label, ch$detail))))))
+    c(s$label, if (details) s$detail, unlist(lapply(s$children, function(ch)
+      c(ch$label, if (details) ch$detail))))))
   used <- union(if (shapes) arch_shape_symbols(arch), arch_tokens(prose))
   sym[names(sym) %in% used]
 }
@@ -75,9 +76,11 @@ arch_term_pattern <- function(term) paste0("\\b", term, "s?\\b")
 # plural, in the diagram's text or in `extra` (the style's own notes and
 # legend).
 # @keywords internal
-arch_used_terms <- function(arch, extra = character()) {
+arch_used_terms <- function(arch, extra = character(), details = TRUE,
+                            shapes = TRUE) {
   gl <- arch$glossary %||% ARCH_GLOSSARY
-  txt <- paste(c(arch_drawn_text(arch), extra), collapse = "\n")
+  txt <- paste(c(arch_drawn_text(arch, details, shapes), extra),
+               collapse = "\n")
   hit <- vapply(names(gl), function(t) grepl(arch_term_pattern(t), txt,
                                              perl = TRUE), logical(1))
   gl[hit]
@@ -107,14 +110,18 @@ arch_note <- function(text, swatch = NULL) list(text = text, swatch = swatch)
 # The three groups of a single model's key. `notes` is the style's list
 # of `arch_note()`s; `extra` is any other text the style draws (its
 # legend), which is scanned for abbreviations along with the notes.
+# `show_details = FALSE` is for a style that draws no detail lines.
 # @keywords internal
 arch_key_groups <- function(arch, notes = list(), show_shapes = TRUE,
-                            extra = character()) {
+                            extra = character(), show_details = TRUE) {
   note_text <- vapply(notes, `[[`, character(1), "text")
   list(
-    list(head = "SYMBOLS IN SHAPES", items = arch_used_symbols(arch, show_shapes),
+    list(head = "SYMBOLS IN SHAPES",
+         items = arch_used_symbols(arch, show_shapes, show_details),
          mono = TRUE),
-    list(head = "ABBREVIATIONS", items = arch_used_terms(arch, c(note_text, extra))),
+    list(head = "ABBREVIATIONS",
+         items = arch_used_terms(arch, c(note_text, extra), show_details,
+                                 show_shapes)),
     list(head = "HOW TO READ", notes = notes)
   )
 }

@@ -226,6 +226,7 @@ arch_scene_tufte <- function(arch, detail, theme, show_shapes, show_params,
 
   list(width = W, height = ceiling(y + g$pad), bg = th$surface, items = it,
        theme = th, title = arch$title,
+       key = groups_key,
        desc = paste(c(arch$subtitle, arch_key_text(groups_key)),
                     collapse = ". "))
 }

@@ -268,14 +268,9 @@ test_that("a backend's glossary entries win over the shared ones", {
 
 
 test_that("the key is drawn whole on every style, theme and setting", {
-  scene_text <- function(sc) {
-    vapply(Filter(function(e) e$type == "text", sc$items), `[[`,
-           character(1), "text")
-  }
   for (nm in names(arch_test_variants())) {
     arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
-    sym <- arch_used_symbols(arch)
-    expect_true(length(sym) > 0L, info = nm)
+    gl <- arch$glossary
     for (style in names(arch_styles())) {
       for (theme in c("light", "dark")) {
         for (detail in c("overview", "full")) {
@@ -283,20 +278,41 @@ test_that("the key is drawn whole on every style, theme and setting", {
             info <- paste(nm, style, theme, detail, facts)
             sc <- arch_scene(arch, style = style, detail = detail,
                              theme = theme, show_facts = facts)
-            txt <- scene_text(sc)
+            items <- Filter(function(e) e$type == "text", sc$items)
+            txt <- vapply(items, `[[`, character(1), "text")
             at <- match("Key", txt)
             expect_false(is.na(at), info = info)
+            body <- txt[seq_len(at - 1L)]
             key <- txt[seq(at, length(txt))]
-            # Never truncated.
+
+            # What the diagram draws above the key must be in it: every
+            # glossary term in its text, every symbol in its shapes.
+            terms <- names(gl)[vapply(names(gl), function(t)
+              any(grepl(arch_term_pattern(t), body, perl = TRUE)), logical(1))]
+            listed <- unlist(lapply(sc$key, function(g) names(g$items)))
+            expect_true(all(terms %in% listed),
+                        info = paste(info, setdiff(terms, listed)))
+            mono <- vapply(items[seq_len(at - 1L)], `[[`, character(1),
+                           "family") == "mono"
+            shape_syms <- setdiff(arch_tokens(body[mono]), ARCH_SHAPE_WORDS)
+            expect_true(all(shape_syms %in% listed),
+                        info = paste(info, setdiff(shape_syms, listed)))
+
+            # And the key draws each entry whole: never truncated, and
+            # wrapped lines are consecutive items, so joining them
+            # restores every meaning.
             expect_false(any(grepl("...", key, fixed = TRUE)), info = info)
-            # Every symbol and term, with its whole meaning: wrapped
-            # lines are consecutive items, so joining them restores it.
             joined <- paste(key, collapse = " ")
-            terms <- c(sym, arch_used_terms(arch, unname(ARCH_KINDS)))
-            for (t in names(terms)) {
-              expect_true(t %in% key, info = paste(info, t))
-              expect_true(grepl(terms[[t]], joined, fixed = TRUE),
-                          info = paste(info, t))
+            for (g in sc$key) {
+              for (t in names(g$items)) {
+                expect_true(t %in% key, info = paste(info, t))
+                expect_true(grepl(g$items[[t]], joined, fixed = TRUE),
+                            info = paste(info, t))
+              }
+              for (nt in g$notes) {
+                expect_true(grepl(nt$text, joined, fixed = TRUE),
+                            info = paste(info, nt$text))
+              }
             }
             svg <- arch_render_svg(sc)
             expect_identical(sum(startsWith(svg, "  <title>")), 1L, info = info)
@@ -456,4 +472,108 @@ test_that("tufte colours each phase in stage order from the viridis slice", {
     expect_identical(vapply(rules, `[[`, character(1), "col"),
                      arch_viridis(length(groups), th$viridis[1], th$viridis[2]))
   }
+})
+
+
+# ---------------------------------------------------------------------------
+# icicle
+# ---------------------------------------------------------------------------
+
+test_that("sublayers counted over all blocks never claim more than their stage", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    for (s in arch$stages) {
+      if (!length(s$children)) next
+      all_blocks <- sum(vapply(s$children, function(ch)
+        if (is.na(ch$params_all)) 0 else ch$params_all, numeric(1)))
+      expect_lte(all_blocks, s$params, label = paste(nm, s$id))
+    }
+  }
+  # A shared table is counted once, a per-block one in every block.
+  idx <- c("s.blocks.0.attn.w" = 2, "s.blocks.1.attn.w" = 2,
+           "s.blocks.11.attn.w" = 2, "s.rope" = 5, "s.blocks.0.attnx" = 7)
+  expect_identical(arch_count_params_all_blocks(idx, "s.blocks.0.attn"), 6)
+  expect_identical(arch_count_params_all_blocks(idx, "s.rope"), 5)
+})
+
+
+icicle_bands <- function(sc) {
+  g <- arch_icicle_geom()
+  rects <- Filter(function(e) e$type == "rect" &&
+                    isTRUE(all.equal(e$h, g$band_h)), sc$items)
+  ys <- sort(unique(vapply(rects, `[[`, numeric(1), "y")))
+  lapply(stats::setNames(ys, c("phase", "stage", "sublayer")[seq_along(ys)]),
+         function(y) Filter(function(e) isTRUE(all.equal(e$y, y)), rects))
+}
+
+test_that("icicle bands share one linear scale and nest exactly", {
+  g <- arch_icicle_geom()
+  x0 <- g$pad + g$gutter
+  wid <- g$width - g$pad - x0
+  # A cell's slot runs from its x to the next cell's; the drawn rect is
+  # a little narrower, to leave a gap, and never under 0.8 px.
+  starts <- function(band) sort(vapply(band, `[[`, numeric(1), "x"))
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    bands <- icicle_bands(arch_scene(arch, style = "icicle"))
+    params <- vapply(arch$stages, `[[`, numeric(1), "params")
+    params <- params[!is.na(params) & params > 0]
+
+    st <- starts(bands$stage)
+    slots <- diff(c(st, x0 + wid))
+    expect_equal(st[1], x0, info = nm)
+    expect_equal(slots / wid, params / sum(params), tolerance = 1e-9,
+                 info = nm)
+    # Every stage boundary is also a sublayer boundary, and the sublayer
+    # band spans the same width: each stage's sublayers fill it exactly.
+    sub <- starts(bands$sublayer)
+    expect_equal(sub[1], x0, info = nm)
+    expect_true(all(vapply(st, function(x) any(abs(sub - x) < 1e-6),
+                           logical(1))), info = nm)
+    expect_lte(max(sub), x0 + wid)
+    # Phases start on stage boundaries.
+    ph <- starts(bands$phase)
+    expect_true(all(vapply(ph, function(x) any(abs(st - x) < 1e-6),
+                           logical(1))), info = nm)
+  }
+})
+
+
+test_that("every icicle block with parameters is labelled or listed", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    sc <- arch_scene(arch, style = "icicle")
+    txt <- vapply(Filter(function(e) e$type == "text", sc$items), `[[`,
+                  character(1), "text")
+    # The "too narrow" list wraps at spaces; joining restores it.
+    joined <- paste(txt, collapse = " ")
+    for (s in arch$stages) {
+      if (is.na(s$params) || s$params <= 0) next
+      expect_true(s$label %in% txt ||
+                    grepl(paste0(s$label, " ("), joined, fixed = TRUE),
+                  info = paste(nm, s$label))
+    }
+    phases <- unique(unlist(lapply(arch$stages, function(s)
+      if (!is.na(s$params) && s$params > 0) s$group)))
+    for (p in phases) {
+      expect_true(p %in% txt || grepl(paste0(p, " ("), joined, fixed = TRUE),
+                  info = paste(nm, p))
+    }
+  }
+})
+
+
+test_that("icicle label text keeps 4.5:1 contrast on every fill", {
+  for (theme in c("light", "dark")) {
+    th <- arch_icicle_theme(theme)
+    fills <- c(th$phase, th$other, th$kind,
+               vapply(th$kind, arch_mix, character(1), th$surface, 0.75))
+    for (f in fills) {
+      expect_gte(arch_contrast(f, arch_text_on(f)), 4.5,
+                 label = paste(theme, f))
+    }
+  }
+  expect_equal(arch_contrast("#000000", "#ffffff"), 21)
+  expect_identical(arch_text_on("#ffffff"), "#111111")
+  expect_identical(arch_text_on("#0072B2"), "#ffffff")
 })

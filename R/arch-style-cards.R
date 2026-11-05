@@ -182,6 +182,7 @@ arch_scene_cards <- function(arch, detail, theme, show_shapes, show_params,
 
   list(width = W, height = ceiling(y + g$pad), bg = th$surface, items = it,
        theme = th, title = arch$title,
+       key = groups,
        desc = paste(c(arch$subtitle, arch_key_text(groups)), collapse = ". "))
 }
 

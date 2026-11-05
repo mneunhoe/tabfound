@@ -29,7 +29,8 @@ description can be inspected and then drawn.}
 \item{format}{\code{"svg"}, \code{"png"} or \code{"pdf"}. Inferred from \code{file} when
 not given.}
 
-\item{style}{How to draw it: \code{"cards"} (the default) or \code{"tufte"}.
+\item{style}{How to draw it: \code{"cards"} (the default), \code{"tufte"} or
+\code{"icicle"}.
 See the Styles section. Set \code{options(tabfound.arch_style = )} to
 change the default for a session.}
 
@@ -88,7 +89,18 @@ beside what they name, a range-frame axis -- and Cleveland and
 McGill's (1984) finding that position on a common scale is read
 more accurately than length or area. Phases are coloured with
 viridis in stage order, in serif type.
+\item \code{"icicle"} shows where the parameters are as lengths: three bands on
+one linear scale -- phases, stages, and each stage's sublayers
+summed over all its blocks -- after Kruskal and Landwehr's (1983)
+icicle plot. Blocks too narrow to name are listed underneath with
+their counts. Colours are the Okabe-Ito palette. It draws no shapes
+and always shows the sublayers, so \code{detail}, \code{show_shapes} and
+\code{show_params} do not apply.
 }
+
+Kruskal, J. B., & Landwehr, J. M. (1983). Icicle plots: Better displays
+for hierarchical clustering. \emph{The American Statistician}, 37(2),
+162--168.
 
 Tufte, E. R. (2001). \emph{The Visual Display of Quantitative Information}
 (2nd ed.). Graphics Press.
@@ -107,6 +119,7 @@ plot_architecture(clf, "tabpfn.svg")
 plot_architecture(clf, "tabpfn.pdf", detail = "full")
 plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
 plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
+plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 }
 }
 \seealso{
