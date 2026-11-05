@@ -78,7 +78,7 @@
   <rect x="40" y="422" width="330" height="40" rx="6" fill="#eaf5f1"/>
   <rect x="40" y="422" width="3" height="40" rx="1.5" fill="#007a5e"/>
   <text x="52" y="435" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12px" font-weight="600" fill="#151515">Target encoder (per row)</text>
-  <text x="360" y="435" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" text-anchor="end" fill="#151515">6.7 k</text>
+  <text x="360" y="435" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" text-anchor="end" fill="#151515">5.6 k</text>
   <rect x="520" y="422" width="330" height="40" rx="6" fill="#fbf1e3"/>
   <rect x="520" y="422" width="3" height="40" rx="1.5" fill="#9e5f00"/>
   <text x="532" y="435" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12px" font-weight="600" fill="#151515">Target encoder (per row)</text>
@@ -108,7 +108,7 @@
   <rect x="40" y="566" width="330" height="40" rx="6" fill="#eaf5f1"/>
   <rect x="40" y="566" width="3" height="40" rx="1.5" fill="#007a5e"/>
   <text x="52" y="579" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12px" font-weight="600" fill="#151515">Decoder MLP</text>
-  <text x="360" y="579" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" text-anchor="end" fill="#151515">535.6 k</text>
+  <text x="360" y="579" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" text-anchor="end" fill="#151515">536.6 k</text>
   <text x="360" y="595" dy="0.35em" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5px" text-anchor="end" fill="#5a5a55">(n_test, 10)</text>
   <rect x="520" y="566" width="330" height="40" rx="6" fill="#fbf1e3"/>
   <rect x="520" y="566" width="3" height="40" rx="1.5" fill="#9e5f00"/>

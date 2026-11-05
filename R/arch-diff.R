@@ -244,6 +244,11 @@ arch_diff_scene <- function(A, B, theme = "light") {
     if (length(facts)) list(arch_note(paste(
       "facts: shared (the same value), different, or one side (reported",
       "by one model only, shown as --)"))),
+    # Both models' interleaving notes, once each.
+    local({
+      alt <- c(arch_interleave_notes(A), arch_interleave_notes(B))
+      alt[!duplicated(vapply(alt, `[[`, character(1), "text"))]
+    }),
     list(arch_note(paste(
       "on each card: \u00d7 N stacked blocks and the axis its attention runs",
       "over, then its output shape; top right, its exact parameter count")))

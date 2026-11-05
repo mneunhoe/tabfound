@@ -967,9 +967,10 @@ tabpfn26_describe <- function(config, task) {
       prefix = "target_embedder"),
     arch_stage(
       "pos", "Feature positional embedding", kind = "embed", group = "Embed",
-      # The subspace is 48-dimensional whatever the model width is; only
-      # the projection out of it scales with E.
-      detail = sprintf("subspace: fixed 48-d per column, Linear(48 -> %d)", E),
+      # The subspace is a quarter of the model width (48 at the published
+      # width of 192), as the network builds it.
+      detail = sprintf("subspace: fixed %d-d per column, Linear(%d -> %d)",
+                       E %/% 4L, E %/% 4L, E),
       prefix = "feature_positional_embedding_embeddings"),
     arch_stage(
       "think", "Thinking rows", kind = "embed", group = "Embed",

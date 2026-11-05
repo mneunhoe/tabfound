@@ -201,6 +201,7 @@ arch_cards_notes <- function(arch, detail, show_shapes, show_params) {
     if (repeats) list(arch_note(if (identical(detail, "full"))
       "\u00d7 N: the block is stacked N times; its sublayers are drawn once"
       else "\u00d7 N: the block is stacked N times; the card is drawn once, as a deck")),
+    arch_interleave_notes(arch),
     if (length(axes)) list(arch_note(
       "over rows / columns / features: the axis this block's attention runs across")),
     list(arch_note("card colour: what kind of stage it is (see the legend above)")),
@@ -245,7 +246,7 @@ arch_block_items <- function(s, x, y, h, g, th, detail) {
   # what is actually left rather than run underneath them.
   tags <- c(
     if (!is.null(s$axis)) paste0("over ", s$axis),
-    if (s$repeats > 1L) paste0("\u00d7 ", s$repeats)
+    arch_repeat_tag(s)
   )
   tag_w <- if (!length(tags)) 0 else
     max(vapply(tags, arch_text_width, numeric(1), size = 11, bold = TRUE)) + 16

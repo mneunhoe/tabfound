@@ -343,8 +343,8 @@ as.data.frame(arch)                   # one row per stage
 as.data.frame(arch, detail = "full")  # sublayers too
 ```
 
-For the v3 classifier above, dropping the `parent`, `detail`, `shape`
-and `collapses` columns to fit the page:
+For the v3 classifier above, dropping the `parent`, `detail`, `shape`,
+`collapses` and `interleave` columns to fit the page:
 
 ```
 #>    stage                         label      kind    axis repeats   params
