@@ -30,7 +30,7 @@ description can be inspected and then drawn.}
 not given.}
 
 \item{style}{How to draw it: \code{"cards"} (the default), \code{"tufte"},
-\code{"glyphs"} or \code{"icicle"}.
+\code{"glyphs"}, \code{"icicle"} or \code{"schematic"}.
 See the Styles section. Set \code{options(tabfound.arch_style = )} to
 change the default for a session.}
 
@@ -98,6 +98,13 @@ are a single wide column. Colours are the Okabe-Ito palette (Okabe
 and Ito, 2008), shifted just enough to keep 3:1 contrast against
 the table in each theme. \code{detail = "full"} lists the sublayers as
 text.
+\item \code{"schematic"} shows how each block runs, in the convention of the
+papers (Vaswani et al., 2017) and Sebastian Raschka's LLM
+Architecture Gallery: the data flows upwards, every repeated block
+is opened into its steps in the order they run, residual
+connections are drawn, attention steps say where their keys come
+from, and facts point at the part they describe. Each backend has
+its own accent colour.
 \item \code{"icicle"} shows where the parameters are as lengths: three bands on
 one linear scale -- phases, stages, and each stage's sublayers
 summed over all its blocks -- after Kruskal and Landwehr's (1983)
@@ -106,6 +113,13 @@ their counts. Colours are the Okabe-Ito palette. It draws no shapes
 and always shows the sublayers, so \code{detail}, \code{show_shapes} and
 \code{show_params} do not apply.
 }
+
+Raschka, S. LLM Architecture Gallery.
+\url{https://sebastianraschka.com/llm-architecture-gallery/}
+
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L.,
+Gomez, A. N., Kaiser, L., & Polosukhin, I. (2017). Attention is all
+you need. \emph{Advances in Neural Information Processing Systems}, 30.
 
 Okabe, M., & Ito, K. (2008). \emph{Color Universal Design (CUD): How to
 make figures and presentations that are friendly to colorblind
@@ -134,6 +148,7 @@ plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
 plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
 plot_architecture(clf, "tabpfn-glyphs.svg", style = "glyphs")
 plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
+plot_architecture(clf, "tabpfn-schematic.svg", style = "schematic")
 }
 }
 \seealso{

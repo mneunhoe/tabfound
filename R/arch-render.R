@@ -263,6 +263,13 @@ arch_format_from_file <- function(file) {
 #'   and Ito, 2008), shifted just enough to keep 3:1 contrast against
 #'   the table in each theme. `detail = "full"` lists the sublayers as
 #'   text.
+#' * `"schematic"` shows how each block runs, in the convention of the
+#'   papers (Vaswani et al., 2017) and Sebastian Raschka's LLM
+#'   Architecture Gallery: the data flows upwards, every repeated block
+#'   is opened into its steps in the order they run, residual
+#'   connections are drawn, attention steps say where their keys come
+#'   from, and facts point at the part they describe. Each backend has
+#'   its own accent colour.
 #' * `"icicle"` shows where the parameters are as lengths: three bands on
 #'   one linear scale -- phases, stages, and each stage's sublayers
 #'   summed over all its blocks -- after Kruskal and Landwehr's (1983)
@@ -270,6 +277,13 @@ arch_format_from_file <- function(file) {
 #'   their counts. Colours are the Okabe-Ito palette. It draws no shapes
 #'   and always shows the sublayers, so `detail`, `show_shapes` and
 #'   `show_params` do not apply.
+#'
+#' Raschka, S. LLM Architecture Gallery.
+#' <https://sebastianraschka.com/llm-architecture-gallery/>
+#'
+#' Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L.,
+#' Gomez, A. N., Kaiser, L., & Polosukhin, I. (2017). Attention is all
+#' you need. *Advances in Neural Information Processing Systems*, 30.
 #'
 #' Okabe, M., & Ito, K. (2008). *Color Universal Design (CUD): How to
 #' make figures and presentations that are friendly to colorblind
@@ -296,7 +310,7 @@ arch_format_from_file <- function(file) {
 #' @param format `"svg"`, `"png"` or `"pdf"`. Inferred from `file` when
 #'   not given.
 #' @param style How to draw it: `"cards"` (the default), `"tufte"`,
-#'   `"glyphs"` or `"icicle"`.
+#'   `"glyphs"`, `"icicle"` or `"schematic"`.
 #'   See the Styles section. Set `options(tabfound.arch_style = )` to
 #'   change the default for a session.
 #' @param detail `"overview"` draws each repeated stack as one block;
@@ -323,6 +337,7 @@ arch_format_from_file <- function(file) {
 #' plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
 #' plot_architecture(clf, "tabpfn-glyphs.svg", style = "glyphs")
 #' plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
+#' plot_architecture(clf, "tabpfn-schematic.svg", style = "schematic")
 #' }
 #' @seealso [tabfound_architecture()] for the description behind the
 #'   picture; [plot_architecture_diff()] to compare two models.

@@ -28,7 +28,8 @@
 # @keywords internal
 arch_styles <- function() {
   list(cards = arch_scene_cards, tufte = arch_scene_tufte,
-       glyphs = arch_scene_glyphs, icicle = arch_scene_icicle)
+       glyphs = arch_scene_glyphs, icicle = arch_scene_icicle,
+       schematic = arch_scene_schematic)
 }
 
 # @keywords internal

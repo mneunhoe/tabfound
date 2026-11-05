@@ -1,5 +1,14 @@
 # tabfound (development version)
 
+* New architecture style, `plot_architecture(style = "schematic")`: how
+  each block runs, in the convention of the papers and Sebastian Raschka's
+  LLM Architecture Gallery. The data flows upwards; every repeated block
+  is opened into its steps in the order they run, with residual
+  connections drawn where each network adds them; attention steps say
+  where their keys come from and how they differ from plain attention;
+  inputs such as RoPE tables, inducing points and QK-norm feed their step
+  from the side; and facts point at the part they describe. Each backend
+  has its own accent colour, kept readable in both themes.
 * Architecture descriptions record how each block computes, not only
   what it contains: `arch_residual()` groups the steps each residual
   connection skips (pre-norm, post-norm or sandwich, as each network
