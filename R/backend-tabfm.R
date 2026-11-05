@@ -923,6 +923,11 @@ tabfm_subfolder_for <- function(task) {
 #'   architecture lets a training row see a test row -- to within float32
 #'   rounding. See [tabfm_kv_cache()].
 #' @param trace_dir Optional directory for the parity harness.
+#' @param member_weights Optional non-negative weight per member, in the
+#'   order the ensemble generates them (`n_estimators` of them). The
+#'   members' contributions are combined with a weighted mean instead of
+#'   the plain one, and a member weighted zero is never run. `NULL` (the
+#'   default) is the reference's combine, unchanged.
 #' @keywords internal
 tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
                              feat_shuffle_method = "random",
@@ -939,12 +944,13 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
                              n_svd_features = 0,
                              predict_chunk_size = 512L, kv_cache = FALSE,
                              row_chunk_size = NULL, col_chunk_size = NULL,
-                             trace_dir = NULL) {
+                             trace_dir = NULL, member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
   opts <- .tabfm_opts(n_estimators, norm_methods, feat_shuffle_method,
                       class_shift, outlier_threshold, max_num_features,
                       max_num_rows, random_state, quantile_subsample,
                       n_feature_crosses, n_svd_features)
+  member_weights <- .check_member_weights(member_weights, opts$n_estimators)
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
@@ -962,12 +968,14 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
     c(prep, list(class_levels = levels_, n_train = nrow(X)))
   }
 
-  .chunk <- function(state, X_test_chunk, caches) {
+  .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
     members <- tabfm_ensemble_iter(state$gen, X_test)
+    .check_member_weights(member_weights, members$n)
     n_cls <- length(state$class_levels)
     acc <- NULL
-    for (i in seq_len(members$n)) {
+    raw <- list()
+    for (i in .members_to_run(members$n, member_weights)) {
       # Between members: a whole forward pass' worth of torch
       # allocations, which R's collector cannot see. The member's own
       # view is built here and dropped at the end of the iteration.
@@ -981,11 +989,14 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
       # original class k is `(k + shift) %% K`.
       logits <- logits[, ((seq_len(n_cls) - 1L + mem$shift) %% n_cls) + 1L,
                        drop = FALSE]
+      if (return_members) { raw[[length(raw) + 1L]] <- logits; next }
       contrib <- if (average_logits) logits else
         .softmax_rows(logits, softmax_temperature)
+      if (!is.null(member_weights)) contrib <- contrib * member_weights[[i]]
       acc <- if (is.null(acc)) contrib else acc + contrib
     }
-    avg <- acc / members$n
+    if (return_members) return(raw)
+    avg <- acc / (if (is.null(member_weights)) members$n else sum(member_weights))
     if (average_logits) .softmax_rows(avg, softmax_temperature) else avg
   }
 
@@ -999,6 +1010,21 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
     colnames(probs) <- as.character(state$class_levels)
     if (type == "prob") return(probs)
     state$class_levels[max.col(probs, ties.method = "first")]
+  }
+
+  # Each member's raw logits, untempered and with its class shift undone.
+  # See [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+    logits <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                   function(chunk) .chunk(state, chunk, caches,
+                                                          return_members = TRUE))
+    .classifier_members(logits, state$class_levels,
+                        .members_to_run(opts$n_estimators, member_weights),
+                        member_weights, softmax_temperature,
+                        if (average_logits) "softmax_of_mean_logits" else
+                          "mean_of_softmax")
   }
 
   # Building every member's cache is exactly what one forward pass over a
@@ -1016,6 +1042,7 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
   }
 
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = .build_all_caches)
 }
 
@@ -1042,12 +1069,13 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
                             n_svd_features = 0,
                             predict_chunk_size = 512L, kv_cache = FALSE,
                             row_chunk_size = NULL, col_chunk_size = NULL,
-                            trace_dir = NULL) {
+                            trace_dir = NULL, member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
   opts <- .tabfm_opts(n_estimators, norm_methods, feat_shuffle_method,
                       FALSE, outlier_threshold, max_num_features,
                       max_num_rows, random_state, quantile_subsample,
                       n_feature_crosses, n_svd_features)
+  member_weights <- .check_member_weights(member_weights, opts$n_estimators)
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
@@ -1059,20 +1087,29 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
     c(prep, list(scaler = scaler, n_train = nrow(X)))
   }
 
-  .chunk <- function(state, X_test_chunk, caches) {
+  .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
     members <- tabfm_ensemble_iter(state$gen, X_test)
+    .check_member_weights(member_weights, members$n)
     acc <- NULL
-    for (i in seq_len(members$n)) {
+    raw <- list()
+    for (i in .members_to_run(members$n, member_weights)) {
       if (i > 1L) collect_between_chunks()
       mem <- members$get(i)
       res <- .tabfm_member_out(net, dev, mem, nrow(X_test), mem$cat_mask,
                                caches, i, row_chunk_size, col_chunk_size)
       if (!is.null(trace_dir)) trace_tensor(trace_dir, "logits", res$out)
       preds <- as.numeric(res$block[, 1]$cpu())
+      if (return_members) {
+        raw[[length(raw) + 1L]] <- invert_target_scaler(preds, state$scaler)
+        next
+      }
+      if (!is.null(member_weights)) preds <- preds * member_weights[[i]]
       acc <- if (is.null(acc)) preds else acc + preds
     }
-    matrix(invert_target_scaler(acc / members$n, state$scaler), ncol = 1L)
+    if (return_members) return(raw)
+    n <- if (is.null(member_weights)) members$n else sum(member_weights)
+    matrix(invert_target_scaler(acc / n, state$scaler), ncol = 1L)
   }
 
   predict_fn <- function(state, newdata, type = "mean", ...) {
@@ -1082,6 +1119,20 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
       (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     as.numeric(chunk_apply(as.matrix(newdata), predict_chunk_size,
                            function(chunk) .chunk(state, chunk, caches)))
+  }
+
+  # Each member's point prediction on the raw y scale. See
+  # [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+    mean <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                 function(chunk) .chunk(state, chunk, caches,
+                                                        return_members = TRUE))
+    index <- .members_to_run(opts$n_estimators, member_weights)
+    list(mean = mean, member_index = index,
+         member_weights = if (is.null(member_weights)) NULL else member_weights[index],
+         combine = "mean")
   }
 
   # Building every member's cache is exactly what one forward pass over a
@@ -1099,6 +1150,7 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
   }
 
   list(fit = fit_fn, predict = predict_fn, types = "mean",
+       predict_members = predict_members_fn,
        build_cache = .build_all_caches)
 }
 

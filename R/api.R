@@ -690,32 +690,56 @@ predict_quantiles.tabfound_fit <- function(object, newdata,
 #' Per-member ensemble predictions
 #'
 #' The pieces an ensemble prediction is assembled from, before they are
-#' combined: one entry per member, in the order of the model's
-#' `ensemble_configs`. This is the hook for anything that reweights,
-#' selects or recalibrates an ensemble after the fact -- each member is
-#' run once, and every combination of them is then arithmetic on what
-#' this returns.
+#' combined: one entry per member, in the order the model's ensemble
+#' runs them. This is the hook for anything that reweights, selects or
+#' recalibrates an ensemble after the fact -- each member is run once,
+#' and every combination of them is then arithmetic on what this
+#' returns. Every backend supports it.
 #'
-#' * For a classifier, `$logits` holds each member's raw logits,
-#'   `(n_new, n_classes)`, *before* the softmax temperature and with the
-#'   member's class permutation undone. The model's own prediction is the
-#'   (weighted) mean of `softmax(logits / softmax_temperature)`.
-#' * For a regressor, `$probs` holds each member's bucket probabilities,
-#'   `(n_new, n_bins)`, after the temperature and translated onto the
-#'   shared grid whose raw-scale borders are `$borders`. The model's own
-#'   prediction takes the log of their (weighted) mean as logits for
-#'   [bar_logits_to_mean()] and [bar_logits_to_quantiles()].
+#' What a member is depends on the backend:
 #'
-#' Supported by the TabPFN backends (v2.5 to v3.5), and only for a model
-#' built with an ensemble (`ensemble_configs` or `ensemble_configs_dir`).
+#' * **TabPFN** (v2.5 to v3.5): one entry of `ensemble_configs` (or
+#'   `ensemble_configs_dir`). A model built without either is a single
+#'   forward pass and has no members.
+#' * **TabICL, TabFM, Mitra, Kumo**: one of the `n_estimators` members the
+#'   backend generates from its own settings and seed.
+#'
+#' The output names how the backend combines its members, in `$combine`:
+#'
+#' | `$combine` | the model's prediction is |
+#' |---|---|
+#' | `"mean_of_softmax"` | the (weighted) mean of `softmax(logits / softmax_temperature)` |
+#' | `"softmax_of_mean_logits"` | `softmax(mean(logits) / softmax_temperature)`, with a weighted mean under weights |
+#' | `"bar_mixture"` | the log of the (weighted) mean of `$probs`, as logits for [bar_logits_to_mean()] and [bar_logits_to_quantiles()] on `$borders` |
+#' | `"mean_of_grid_stats"` | each member's grid summarised by [quantile_grid_stat()], then the (weighted) mean of the summaries |
+#' | `"trimmed_mean_grid"` | the grids combined level by level by a mean that drops `floor(0.2 * n)` members from each tail, then summarised |
+#' | `"mean_grid"` | the grids combined level by level by a weighted mean (Kumo with weights), then summarised |
+#' | `"mean"` | the (weighted) mean of `$mean` |
+#'
+#' Classifier logits are raw: *before* any temperature, with the
+#' member's class permutation or shift undone, one column per class
+#' level. A class Kumo could not predict (absent from the training rows)
+#' has logit `-Inf`.
 #'
 #' @param object A fitted `tabfound_model`.
 #' @param newdata Test features, as for `predict()`.
 #' @param ... Unused.
-#' @return A list: `$logits` (classifier) or `$probs` and `$borders`
-#'   (regressor), plus `$softmax_temperature` and `$member_weights` (the
-#'   normalised weights the model itself combines with, `NULL` for
-#'   uniform).
+#' @return A list with one of:
+#'   * `$logits`: classifiers; a list of `(n_new, n_classes)` matrices.
+#'   * `$probs` and `$borders`: TabPFN regressors; bucket probabilities on
+#'     the shared grid (after the temperature) and its raw-scale borders.
+#'   * `$grids` and `$quantile_levels`: TabICL and Kumo regressors;
+#'     `(n_new, n_levels)` quantile grids on the raw y scale.
+#'   * `$mean`: TabFM and Mitra regressors; point predictions on the raw
+#'     y scale.
+#'
+#'   Plus:
+#'   * `$member_index`: which members these are, as positions in the
+#'     ensemble. Members weighted zero are not run, so not returned.
+#'   * `$member_weights`: the weights the model combines with, normalised
+#'     to sum to one, or `NULL` for uniform.
+#'   * `$combine`: as in the table above.
+#'   * `$softmax_temperature`: where the backend has one.
 #' @examples
 #' \dontrun{
 #' cfg <- generate_ensemble_configs_native(X, y, n_estimators = 8,
@@ -726,6 +750,13 @@ predict_quantiles.tabfound_fit <- function(object, newdata,
 #' p <- Reduce(`+`, lapply(m$logits, function(l) {
 #'   e <- exp(l / m$softmax_temperature); e / rowSums(e)
 #' })) / length(m$logits)                 # == predict(clf, X_new, type = "prob")
+#'
+#' # TabICL: pick members, then refit with weights
+#' icl <- fit(tabular_classifier("tabicl-v2-classifier", n_estimators = 16), X, y)
+#' m <- predict_members(icl, X_val)       # score each member on held-out rows
+#' w <- c(rep(1, 4), rep(0, 12))          # keep the first four, say
+#' icl_w <- fit(tabular_classifier("tabicl-v2-classifier", n_estimators = 16,
+#'                                 member_weights = w), X, y)
 #' }
 #' @export
 predict_members <- function(object, newdata, ...) UseMethod("predict_members")

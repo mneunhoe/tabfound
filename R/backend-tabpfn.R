@@ -180,26 +180,6 @@ tabpfn_task_of <- function(config) {
   ))
 }
 
-# `chunk_apply()` for a function that returns one matrix per member:
-# the chunks are stacked member by member.
-# @keywords internal
-.members_over_chunks <- function(X, chunk_size, fn) {
-  n <- nrow(X)
-  if (n <= chunk_size) return(fn(X))
-  starts <- seq(1L, n, by = as.integer(chunk_size))
-  parts <- lapply(seq_along(starts), function(k) {
-    # See `chunk_apply()`: the previous chunk's torch allocations are
-    # invisible to R's collector.
-    if (k > 1L) collect_between_chunks()
-    s <- starts[[k]]
-    e <- min(s + as.integer(chunk_size) - 1L, n)
-    fn(X[s:e, , drop = FALSE])
-  })
-  lapply(seq_along(parts[[1L]]), function(m) {
-    do.call(rbind, lapply(parts, `[[`, m))
-  })
-}
-
 
 # The pre-generated column embedding table, or NULL for a network that
 # does not use one. v3 replaced it with RoPE over the feature axis, and
@@ -439,11 +419,10 @@ tabpfn_classifier <- function(ctx,
       .ensemble_chunk(state, chunk, caches, pipelines,
                       return_members = TRUE)$members
     })
-    members <- lapply(members, function(m) {
-      colnames(m) <- as.character(state$class_levels); m
-    })
-    list(logits = members, softmax_temperature = softmax_temperature,
-         member_weights = member_weights)
+    # Zero-weight members were dropped with their configs, so every
+    # remaining one runs and `member_weights` is already aligned.
+    .classifier_members(members, state$class_levels, seq_along(members),
+                        member_weights, softmax_temperature, "mean_of_softmax")
   }
 
   list(fit = fit_fn, predict = predict_fn,
@@ -677,8 +656,10 @@ tabpfn_regressor <- function(ctx,
     })
     list(probs = members,
          borders = as.numeric(borders$cpu()) * state$y_std + state$y_mean,
+         member_index = seq_along(members),
+         member_weights = member_weights,
          softmax_temperature = softmax_temperature,
-         member_weights = member_weights)
+         combine = "bar_mixture")
   }
 
   list(fit = fit_fn, predict = predict_fn,

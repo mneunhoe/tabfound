@@ -714,10 +714,22 @@ kumo_recipe_unshift <- function(rec, logits, m) {
 #' per-coordinate trimmed mean, dropping `floor(trim * E)` members from
 #' each tail.
 #'
+#' With `weights`, both means become weighted means. Regression then
+#' drops the trimming: trimming discards members by rank, and a weighted
+#' version of it is not something the reference defines.
+#'
 #' @param outs List of float32 tensors `[n, K]` or `[n, Q]`.
+#' @param weights Optional weight per element of `outs`.
 #' @keywords internal
-kumo_recipe_reduce <- function(outs, classification, trim = 0.2) {
+kumo_recipe_reduce <- function(outs, classification, trim = 0.2,
+                               weights = NULL) {
   s <- torch::torch_stack(outs, dim = 1L)
+  if (!is.null(weights)) {
+    w <- torch::torch_tensor(weights / sum(weights), dtype = s$dtype,
+                             device = s$device)$view(c(-1L, 1L, 1L))
+    m <- (s * w)$sum(dim = 1L)
+    return(if (classification) torch::nnf_softmax(m, dim = -1L) else m)
+  }
   if (classification) {
     return(torch::nnf_softmax(s$mean(dim = 1L), dim = -1L))
   }

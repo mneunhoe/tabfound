@@ -14,34 +14,61 @@ predict_members(object, newdata, ...)
 \item{...}{Unused.}
 }
 \value{
-A list: \verb{$logits} (classifier) or \verb{$probs} and \verb{$borders}
-(regressor), plus \verb{$softmax_temperature} and \verb{$member_weights} (the
-normalised weights the model itself combines with, \code{NULL} for
-uniform).
+A list with one of:
+\itemize{
+\item \verb{$logits}: classifiers; a list of \verb{(n_new, n_classes)} matrices.
+\item \verb{$probs} and \verb{$borders}: TabPFN regressors; bucket probabilities on
+the shared grid (after the temperature) and its raw-scale borders.
+\item \verb{$grids} and \verb{$quantile_levels}: TabICL and Kumo regressors;
+\verb{(n_new, n_levels)} quantile grids on the raw y scale.
+\item \verb{$mean}: TabFM and Mitra regressors; point predictions on the raw
+y scale.
+}
+
+Plus:
+\itemize{
+\item \verb{$member_index}: which members these are, as positions in the
+ensemble. Members weighted zero are not run, so not returned.
+\item \verb{$member_weights}: the weights the model combines with, normalised
+to sum to one, or \code{NULL} for uniform.
+\item \verb{$combine}: as in the table above.
+\item \verb{$softmax_temperature}: where the backend has one.
+}
 }
 \description{
 The pieces an ensemble prediction is assembled from, before they are
-combined: one entry per member, in the order of the model's
-\code{ensemble_configs}. This is the hook for anything that reweights,
-selects or recalibrates an ensemble after the fact -- each member is
-run once, and every combination of them is then arithmetic on what
-this returns.
+combined: one entry per member, in the order the model's ensemble
+runs them. This is the hook for anything that reweights, selects or
+recalibrates an ensemble after the fact -- each member is run once,
+and every combination of them is then arithmetic on what this
+returns. Every backend supports it.
 }
 \details{
+What a member is depends on the backend:
 \itemize{
-\item For a classifier, \verb{$logits} holds each member's raw logits,
-\verb{(n_new, n_classes)}, \emph{before} the softmax temperature and with the
-member's class permutation undone. The model's own prediction is the
-(weighted) mean of \code{softmax(logits / softmax_temperature)}.
-\item For a regressor, \verb{$probs} holds each member's bucket probabilities,
-\verb{(n_new, n_bins)}, after the temperature and translated onto the
-shared grid whose raw-scale borders are \verb{$borders}. The model's own
-prediction takes the log of their (weighted) mean as logits for
-\code{\link[=bar_logits_to_mean]{bar_logits_to_mean()}} and \code{\link[=bar_logits_to_quantiles]{bar_logits_to_quantiles()}}.
+\item \strong{TabPFN} (v2.5 to v3.5): one entry of \code{ensemble_configs} (or
+\code{ensemble_configs_dir}). A model built without either is a single
+forward pass and has no members.
+\item \strong{TabICL, TabFM, Mitra, Kumo}: one of the \code{n_estimators} members the
+backend generates from its own settings and seed.
 }
 
-Supported by the TabPFN backends (v2.5 to v3.5), and only for a model
-built with an ensemble (\code{ensemble_configs} or \code{ensemble_configs_dir}).
+The output names how the backend combines its members, in \verb{$combine}:\tabular{ll}{
+   \verb{$combine} \tab the model's prediction is \cr
+   \code{"mean_of_softmax"} \tab the (weighted) mean of \code{softmax(logits / softmax_temperature)} \cr
+   \code{"softmax_of_mean_logits"} \tab \code{softmax(mean(logits) / softmax_temperature)}, with a weighted mean under weights \cr
+   \code{"bar_mixture"} \tab the log of the (weighted) mean of \verb{$probs}, as logits for \code{\link[=bar_logits_to_mean]{bar_logits_to_mean()}} and \code{\link[=bar_logits_to_quantiles]{bar_logits_to_quantiles()}} on \verb{$borders} \cr
+   \code{"mean_of_grid_stats"} \tab each member's grid summarised by \code{\link[=quantile_grid_stat]{quantile_grid_stat()}}, then the (weighted) mean of the summaries \cr
+   \code{"trimmed_mean_grid"} \tab the grids combined level by level by a mean that drops \code{floor(0.2 * n)} members from each tail, then summarised \cr
+   \code{"mean_grid"} \tab the grids combined level by level by a weighted mean (Kumo with weights), then summarised \cr
+   \code{"mean"} \tab the (weighted) mean of \verb{$mean} \cr
+}
+
+
+Classifier logits are raw: \emph{before} any temperature, with the
+member's class permutation or shift undone, one column per class
+level. A class Kumo could not predict (absent from the training rows)
+has logit \code{-Inf}.
 }
 \examples{
 \dontrun{
@@ -53,5 +80,12 @@ m <- predict_members(clf, X_new)
 p <- Reduce(`+`, lapply(m$logits, function(l) {
   e <- exp(l / m$softmax_temperature); e / rowSums(e)
 })) / length(m$logits)                 # == predict(clf, X_new, type = "prob")
+
+# TabICL: pick members, then refit with weights
+icl <- fit(tabular_classifier("tabicl-v2-classifier", n_estimators = 16), X, y)
+m <- predict_members(icl, X_val)       # score each member on held-out rows
+w <- c(rep(1, 4), rep(0, 12))          # keep the first four, say
+icl_w <- fit(tabular_classifier("tabicl-v2-classifier", n_estimators = 16,
+                                member_weights = w), X, y)
 }
 }

@@ -13,7 +13,8 @@ kumo_regressor(
   save_peak_memory_factor = NULL,
   row_chunk_size = NULL,
   col_chunk_size = NULL,
-  categorical_features = NULL
+  categorical_features = NULL,
+  member_weights = NULL
 )
 }
 \arguments{
@@ -46,6 +47,14 @@ query rows stream through against it.}
 \item{col_chunk_size}{Columns per pass through each column block.}
 
 \item{categorical_features}{1-based indices of categorical columns.}
+
+\item{member_weights}{Optional non-negative weight per member, in the
+order the recipe builds them (\code{n_estimators} of them). The members
+are combined with a weighted mean instead of the plain one, and a
+member weighted zero is never run. For the regressor this replaces
+the trimmed mean with a weighted mean: trimming drops members by
+rank, which has no weighted counterpart in the reference. \code{NULL} (the
+default) is the reference's combine, unchanged.}
 }
 \description{
 Reproduces \code{sdm.models.KumoTabular(task = "regression")}: each member

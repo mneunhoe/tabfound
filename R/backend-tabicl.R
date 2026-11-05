@@ -840,6 +840,11 @@ tabicl_task_of <- function(config) {
 #'   nothing the cache holds could have depended on one. The arithmetic
 #'   differs only by the float32 noise a change in batch shape already
 #'   produces -- see [tabicl_kv_cache()].
+#' @param member_weights Optional non-negative weight per member, in the
+#'   order the ensemble generates them (`n_estimators` of them). The
+#'   members' contributions are combined with a weighted mean instead of
+#'   the plain one, and a member weighted zero is never run. `NULL` (the
+#'   default) is the reference's combine, unchanged.
 #' @keywords internal
 tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                               feat_shuffle_method = "latin",
@@ -853,11 +858,13 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                               kv_cache = FALSE,
                               row_chunk_size = NULL,
                               save_peak_memory_factor = NULL,
-                              col_chunk_size = NULL) {
+                              col_chunk_size = NULL,
+                              member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
   opts <- .tabicl_opts(n_estimators, norm_methods, feat_shuffle_method,
                        class_shuffle_method, outlier_threshold, random_state,
                        quantile_subsample)
+  member_weights <- .check_member_weights(member_weights, opts$n_estimators)
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
@@ -876,12 +883,14 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     c(prep, list(class_levels = levels_, n_train = nrow(X)))
   }
 
-  .chunk <- function(state, X_test_chunk, caches) {
+  .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
     members <- tabicl_ensemble_iter(state$gen, X_test)
+    .check_member_weights(member_weights, members$n)
     n_cls <- length(state$class_levels)
     acc <- NULL
-    for (i in seq_len(members$n)) {
+    raw <- list()
+    for (i in .members_to_run(members$n, member_weights)) {
       # Between members: a whole forward pass' worth of torch
       # allocations, which R's collector cannot see. The member's own
       # view is built here and dropped at the end of the iteration.
@@ -896,11 +905,14 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
       # reindexing by the permutation itself puts things back -- no
       # inversion needed.
       logits <- logits[, mem$class_shuffle + 1L, drop = FALSE]
+      if (return_members) { raw[[length(raw) + 1L]] <- logits; next }
       contrib <- if (average_logits) logits else
         .softmax_rows(logits, softmax_temperature)
+      if (!is.null(member_weights)) contrib <- contrib * member_weights[[i]]
       acc <- if (is.null(acc)) contrib else acc + contrib
     }
-    avg <- acc / members$n
+    if (return_members) return(raw)
+    avg <- acc / (if (is.null(member_weights)) members$n else sum(member_weights))
     if (average_logits) avg <- .softmax_rows(avg, softmax_temperature)
     avg / rowSums(avg)
   }
@@ -915,6 +927,21 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     colnames(probs) <- as.character(state$class_levels)
     if (type == "prob") return(probs)
     state$class_levels[max.col(probs, ties.method = "first")]
+  }
+
+  # Each member's raw logits, untempered and back in the original class
+  # order. See [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+    logits <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                   function(chunk) .chunk(state, chunk, caches,
+                                                          return_members = TRUE))
+    .classifier_members(logits, state$class_levels,
+                        .members_to_run(opts$n_estimators, member_weights),
+                        member_weights, softmax_temperature,
+                        if (average_logits) "softmax_of_mean_logits" else
+                          "mean_of_softmax")
   }
 
   # Building every member's cache is exactly what one forward pass over a
@@ -932,6 +959,7 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
   }
 
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = .build_all_caches)
 }
 
@@ -968,7 +996,8 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                              kv_cache = FALSE,
                              row_chunk_size = NULL,
                              save_peak_memory_factor = NULL,
-                             col_chunk_size = NULL) {
+                             col_chunk_size = NULL,
+                             member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
   n_q <- as.integer(ctx$config$num_quantiles)
   # Level k of the grid is the (k / (n_q + 1))-th quantile.
@@ -976,6 +1005,7 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
   opts <- .tabicl_opts(n_estimators, norm_methods, feat_shuffle_method,
                        "none", outlier_threshold, random_state,
                        quantile_subsample)
+  member_weights <- .check_member_weights(member_weights, opts$n_estimators)
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
@@ -986,21 +1016,30 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     c(prep, list(scaler = scaler, n_train = nrow(X)))
   }
 
-  .chunk <- function(state, X_test_chunk, type, quantiles, caches) {
+  .chunk <- function(state, X_test_chunk, type, quantiles, caches,
+                     return_members = FALSE) {
     X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
     members <- tabicl_ensemble_iter(state$gen, X_test)
+    .check_member_weights(member_weights, members$n)
     acc <- NULL
-    for (i in seq_len(members$n)) {
+    raw <- list()
+    for (i in .members_to_run(members$n, member_weights)) {
       if (i > 1L) collect_between_chunks()
       blk <- .tabicl_member_out(net, dev, members$get(i), state$n_train, caches,
                                 i, row_chunk_size, save_peak_memory_factor,
                                 col_chunk_size)
       grid <- as.matrix(blk$cpu())
+      if (return_members) {
+        raw[[length(raw) + 1L]] <- invert_target_scaler(grid, state$scaler)
+        next
+      }
       stat <- quantile_dist_stat(grid, levels_, type, quantiles)
       stat <- invert_target_scaler(stat, state$scaler)
+      if (!is.null(member_weights)) stat <- stat * member_weights[[i]]
       acc <- if (is.null(acc)) stat else acc + stat
     }
-    acc / members$n
+    if (return_members) return(raw)
+    acc / (if (is.null(member_weights)) members$n else sum(member_weights))
   }
 
   predict_fn <- function(state, newdata, type = "mean",
@@ -1020,6 +1059,21 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     res
   }
 
+  # Each member's quantile grid on the raw y scale. The ensemble summarises
+  # each grid on its own and averages the summaries. See
+  # [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+    grids <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                  function(chunk) .chunk(state, chunk, "mean", 0.5,
+                                                         caches, return_members = TRUE))
+    index <- .members_to_run(opts$n_estimators, member_weights)
+    list(grids = grids, quantile_levels = levels_, member_index = index,
+         member_weights = if (is.null(member_weights)) NULL else member_weights[index],
+         combine = "mean_of_grid_stats")
+  }
+
   # Building every member's cache is exactly what one forward pass over a
   # single query row does, so ask for that rather than duplicating the
   # builders: the store comes back full.
@@ -1035,6 +1089,7 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
   }
 
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = .build_all_caches,
        types = c("mean", "median", "quantiles", "grid"),
        quantile_levels = levels_)

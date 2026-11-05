@@ -11,7 +11,8 @@ mitra_classifier(
   random_state = 42L,
   predict_chunk_size = 1024L,
   kv_cache = FALSE,
-  save_peak_memory_factor = NULL
+  save_peak_memory_factor = NULL,
+  member_weights = NULL
 )
 }
 \arguments{
@@ -45,6 +46,12 @@ overhead. This is the knob Mitra most needs: it is the one backend
 that attends across rows \emph{and} columns, so its activation carries
 every row at full embedding width on both axes and is the steepest
 in the package.}
+
+\item{member_weights}{Optional non-negative weight per member
+(\code{n_estimators} of them). The members' probabilities are combined
+with a weighted mean instead of the plain one, and a member weighted
+zero is never run. \code{NULL} (the default) is the reference's combine,
+unchanged.}
 }
 \description{
 Reproduces \code{MitraClassifier} minus fine-tuning: each member's

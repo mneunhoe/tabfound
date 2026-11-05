@@ -332,6 +332,73 @@ chunk_apply <- function(X, chunk_size, fn) {
   out
 }
 
+# `chunk_apply()` for a function that returns one result per ensemble
+# member: the chunks are stacked member by member, matrices by row and
+# vectors end to end.
+# @keywords internal
+.members_over_chunks <- function(X, chunk_size, fn) {
+  n <- nrow(X)
+  if (n <= chunk_size) return(fn(X))
+  starts <- seq(1L, n, by = as.integer(chunk_size))
+  parts <- lapply(seq_along(starts), function(k) {
+    # See `chunk_apply()`: the previous chunk's torch allocations are
+    # invisible to R's collector.
+    if (k > 1L) collect_between_chunks()
+    s <- starts[[k]]
+    e <- min(s + as.integer(chunk_size) - 1L, n)
+    fn(X[s:e, , drop = FALSE])
+  })
+  lapply(seq_along(parts[[1L]]), function(m) {
+    pieces <- lapply(parts, `[[`, m)
+    if (is.null(dim(pieces[[1L]]))) do.call(c, pieces) else do.call(rbind, pieces)
+  })
+}
+
+# Check `member_weights =` for a backend whose members are generated from
+# its own settings, so the ensemble size is known before `fit()`. Unlike
+# TabPFN's configs there is nothing to drop at construction: the weights
+# stay one per member, and a member weighted zero is skipped when the
+# ensemble runs. `NULL` stays `NULL`, which keeps every combine on its
+# unweighted path, bit for bit.
+# @keywords internal
+.check_member_weights <- function(member_weights, n_members) {
+  if (is.null(member_weights)) return(NULL)
+  w <- as.numeric(member_weights)
+  if (length(w) != n_members || anyNA(w) || any(!is.finite(w)) ||
+      any(w < 0) || sum(w) <= 0) {
+    cli::cli_abort(c(
+      "{.arg member_weights} must be {n_members} finite, non-negative \\
+       number{?s} with a positive sum, one per member.",
+      x = "Got {length(w)}."
+    ))
+  }
+  w
+}
+
+# The members an ensemble actually runs: all of them, or those with a
+# positive weight.
+# @keywords internal
+.members_to_run <- function(n, member_weights) {
+  if (is.null(member_weights)) seq_len(n) else which(member_weights > 0)
+}
+
+# What `predict_members()` returns for a classifier, whichever backend:
+# the members' logits with the class levels as column names, which
+# members they are, their weights, and how the backend combines them.
+# @keywords internal
+.classifier_members <- function(logits, class_levels, index, member_weights,
+                                softmax_temperature, combine) {
+  list(
+    logits = lapply(logits, function(m) {
+      colnames(m) <- as.character(class_levels); m
+    }),
+    member_index = index,
+    member_weights = if (is.null(member_weights)) NULL else member_weights[index],
+    softmax_temperature = softmax_temperature,
+    combine = combine
+  )
+}
+
 #' A place to keep one KV cache per ensemble member, for one `predict()`
 #'
 #' Every backend that ensembles conditions on the *same* training rows in
