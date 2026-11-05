@@ -50,6 +50,9 @@ suppressMessages(library(tabfound))
 #
 # `--highlight=<colour>,<colour>,...` gives every view the same
 # highlights, up to four. The side-by-side figures take the first three.
+#
+# `--styles=<style>,<style>,...` draws only those styles, in that order;
+# all five by default.
 args <- commandArgs(trailingOnly = TRUE)
 matrix_mode <- "--matrix" %in% args
 bg_args <- grep("^--background-(light|dark)=", args, value = TRUE)
@@ -60,7 +63,8 @@ hl_args <- grep("^--highlight=", args, value = TRUE)
 MATRIX_HIGHLIGHT <- if (length(hl_args)) {
   strsplit(sub("^--highlight=", "", hl_args[[1]]), ",", fixed = TRUE)[[1]]
 }
-args <- setdiff(args, c("--matrix", bg_args, hl_args))
+style_args <- grep("^--styles=", args, value = TRUE)
+args <- setdiff(args, c("--matrix", bg_args, hl_args, style_args))
 outdir <- if (length(args)) args[[1]] else "vignettes/figures"
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 
@@ -104,6 +108,15 @@ GALLERY <- list(
 )
 
 MATRIX_STYLES  <- c("cards", "tufte", "glyphs", "icicle", "schematic")
+if (length(style_args)) {
+  wanted <- strsplit(sub("^--styles=", "", style_args[[1]]), ",", fixed = TRUE)[[1]]
+  unknown <- setdiff(wanted, MATRIX_STYLES)
+  if (length(unknown)) {
+    stop("unknown style(s): ", paste(unknown, collapse = ", "),
+         "; the styles are ", paste(MATRIX_STYLES, collapse = ", "))
+  }
+  MATRIX_STYLES <- wanted
+}
 MATRIX_DETAILS <- c("overview", "full")
 MATRIX_THEMES  <- c("light", "dark")
 
