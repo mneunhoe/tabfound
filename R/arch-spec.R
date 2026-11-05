@@ -66,20 +66,32 @@ ARCH_AXES <- c("features", "columns", "rows", "cells", "inducing", "classes")
 #'   whose blocks take turns -- one of each per repeat -- rather than
 #'   running as one stack after another. They must have the same
 #'   `repeats`.
+#' @param role For a child: `"step"` (the default) for one step of the
+#'   block's forward pass, listed in the order the steps run; `"input"`
+#'   for a parameter table or module that another step consumes -- a
+#'   RoPE table, inducing points, CLS tokens -- named by `feeds`; or
+#'   `"final"` for a step that runs once after the whole stack rather
+#'   than in every block, such as a stack's output norm.
+#' @param feeds For `role = "input"`: the id of the step child it feeds.
 #' @return A `tabfound_arch_stage`.
 #' @keywords internal
 arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
                        shape = NULL, group = NULL, repeats = 1L,
                        prefix = character(), children = list(),
-                       collapses = FALSE, interleave = NULL) {
+                       collapses = FALSE, interleave = NULL,
+                       role = c("step", "input", "final"), feeds = NULL) {
   kind <- match.arg(kind, names(ARCH_KINDS))
+  role <- match.arg(role)
+  if (identical(role, "input") != !is.null(feeds)) {
+    cli::cli_abort("{.arg feeds} goes with {.code role = \"input\"}, and only with it.")
+  }
   if (!is.null(axis)) axis <- match.arg(axis, ARCH_AXES)
   structure(
     list(id = id, label = label, kind = kind, detail = detail, axis = axis,
          shape = shape, group = group, repeats = as.integer(repeats),
          prefix = as.character(prefix), children = children,
          collapses = isTRUE(collapses), interleave = interleave,
-         params = NA_real_),
+         role = role, feeds = feeds, params = NA_real_),
     class = "tabfound_arch_stage"
   )
 }
@@ -179,8 +191,10 @@ arch_fill_params <- function(stages, index, repeats = 1L) {
   })
 }
 
-# Count a first-block prefix over every block: each `.0` segment matches
-# any block index, so "layers.0.attn" also claims "layers.11.attn".
+# Count a first-block prefix over every block: its first `.0` segment --
+# the block index -- matches any index, so "layers.0.attn" also claims
+# "layers.11.attn". Later `0`s are the block's own layers ("mlp.0", the
+# first layer of a sequential) and stay as they are.
 # @keywords internal
 arch_count_params_all_blocks <- function(index, prefix) {
   if (is.null(index) || !length(prefix)) return(NA_real_)
@@ -190,7 +204,8 @@ arch_count_params_all_blocks <- function(index, prefix) {
     # Prefix segments are module and parameter names -- letters, digits
     # and underscores -- so only the dots between them need escaping.
     seg <- strsplit(p, ".", fixed = TRUE)[[1L]]
-    seg[seg == "0"] <- "[0-9]+"
+    first <- match("0", seg)
+    if (!is.na(first)) seg[first] <- "[0-9]+"
     rx <- paste0("^", paste(seg, collapse = "\\."), "(\\.|$)")
     hit <- hit | grepl(rx, nms)
   }

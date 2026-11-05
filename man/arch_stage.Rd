@@ -16,7 +16,9 @@ arch_stage(
   prefix = character(),
   children = list(),
   collapses = FALSE,
-  interleave = NULL
+  interleave = NULL,
+  role = c("step", "input", "final"),
+  feeds = NULL
 )
 }
 \arguments{
@@ -55,6 +57,15 @@ end set none.}
 whose blocks take turns -- one of each per repeat -- rather than
 running as one stack after another. They must have the same
 \code{repeats}.}
+
+\item{role}{For a child: \code{"step"} (the default) for one step of the
+block's forward pass, listed in the order the steps run; \code{"input"}
+for a parameter table or module that another step consumes -- a
+RoPE table, inducing points, CLS tokens -- named by \code{feeds}; or
+\code{"final"} for a step that runs once after the whole stack rather
+than in every block, such as a stack's output norm.}
+
+\item{feeds}{For \code{role = "input"}: the id of the step child it feeds.}
 }
 \value{
 A \code{tabfound_arch_stage}.

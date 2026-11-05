@@ -48,11 +48,16 @@ test_that("stage parameter counts add up to the network's own total", {
 test_that("every sublayer prefix names something that exists", {
   for (nm in names(arch_test_configs())) {
     cs <- arch_test_configs()[[nm]]
-    arch <- tabfound_architecture(arch_test_model(cs$config, nm, cs$task))
+    m <- arch_test_model(cs$config, nm, cs$task)
+    arch <- tabfound_architecture(m)
     for (s in arch$stages) {
       for (ch in s$children) {
-        if (!length(ch$prefix)) next
-        expect_gt(ch$params, 0)
+        # Parameters, or a module without any (an affine-free norm).
+        for (p in ch$prefix) {
+          exists <- !is.null(arch_module_at(m$model, p)) ||
+            arch_count_params(arch$param_index, p) > 0
+          expect_true(exists, info = paste(nm, s$id, p))
+        }
       }
     }
   }
