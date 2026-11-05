@@ -46,7 +46,7 @@
       repo = "Prior-Labs/tabpfn_2_5",
       file = "tabpfn-v2.5-classifier-v2.5_default.ckpt",
       convert = "tabpfn", head = "classifier", size_mb = 41,
-      license = "Prior Labs License (see the repo)",
+      license = "tabpfn-2.5-license-v1.1: non-commercial (see the repo)",
       description = "TabPFN v2.5 classifier"
     ),
     "tabpfn-v2.5-regressor" = list(
@@ -55,7 +55,7 @@
       repo = "Prior-Labs/tabpfn_2_5",
       file = "tabpfn-v2.5-regressor-v2.5_default.ckpt",
       convert = "tabpfn", head = "regressor", size_mb = 39,
-      license = "Prior Labs License (see the repo)",
+      license = "tabpfn-2.5-license-v1.1: non-commercial (see the repo)",
       description = "TabPFN v2.5 regressor"
     ),
     "tabpfn-v2.6-classifier" = list(
@@ -200,7 +200,7 @@
       repo = "jingang/TabICL",
       file = "tabicl-classifier-v2-20260212.ckpt",
       convert = "tabicl", size_mb = 106,
-      license = "see the repo",
+      license = "BSD-3-Clause",
       description = "TabICL v2 classifier"
     ),
     "tabicl-v2-regressor" = list(
@@ -208,7 +208,7 @@
       repo = "jingang/TabICL",
       file = "tabicl-regressor-v2-20260212.ckpt",
       convert = "tabicl", size_mb = 109,
-      license = "see the repo",
+      license = "BSD-3-Clause",
       description = "TabICL v2 regressor"
     ),
     "tabfm-1.0.0-classifier" = list(

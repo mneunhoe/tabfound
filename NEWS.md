@@ -106,6 +106,11 @@
   * New `native_ensemble_presets()` returns the checkpoint's member menu,
     and `generate_ensemble_configs_native(presets = )` draws members from
     an edited one.
+* `list_models()` and the download prompt now name TabPFN v2.5's licence,
+  `tabpfn-2.5-license-v1.1`, as non-commercial, like v2.6, v3 and v3.5's,
+  and TabICL's as BSD-3-Clause; both used to say only "see the repo". The
+  README's model table says the same, and links each model's weights on
+  Hugging Face.
 * Fixed TabPFN regression ensembles losing probability mass at bar
   resolution. Every member's bar distribution is translated onto the
   shared border grid, and that translation took differences of float32
