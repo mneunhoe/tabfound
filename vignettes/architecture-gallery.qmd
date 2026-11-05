@@ -373,6 +373,26 @@ and readout tokens, then one container repeated six times holding an
 induced-attention column block followed by a row block, then the row
 projection and the in-context stack."}
 
+### Your own colours
+
+Every style takes a `background` and a `highlight`, so a diagram can sit
+on a slide template or match a house style. The background carries the
+style's greys, rules and panels with it -- each kept as far from it as
+it was from the theme's own background, so the diagram reads the same --
+and a dark background switches to the dark theme. The highlight
+replaces what the style picks out: the schematic's accent, tufte's phase
+colours, the attention colour in cards and icicle, row attention in
+glyphs. Wherever it is drawn as text, or must stand out from a fill, it
+is darkened or lightened just as far as it needs to be to stay readable.
+
+```{r}
+#| eval: false
+plot_architecture(icl, "tabicl-brand.svg", style = "schematic",
+                  background = "#0b1f3a", highlight = "#f2a900")
+# plot_architecture_diff() takes the same two arguments; its highlight
+# is model A, and model B moves to whichever colour stays apart from it.
+```
+
 ## Comparing two models
 
 `plot_architecture_diff()` sets two models side by side, stage against

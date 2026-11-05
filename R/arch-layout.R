@@ -23,8 +23,10 @@
 # The registry. A function rather than a list constant because the
 # builders live in files that collate after this one, so a list built at
 # load time would find them undefined. Every builder takes
-# `(arch, detail, theme, show_shapes, show_params, show_facts)`, with
-# `detail` and `theme` already matched, and ignores what it cannot draw.
+# `(arch, detail, theme, show_shapes, show_params, show_facts, colours)`,
+# with `detail` and `theme` already matched and `colours` a list of
+# `background` and `highlight` (either NULL for the theme's own), and
+# ignores what it cannot draw.
 # @keywords internal
 arch_styles <- function() {
   list(cards = arch_scene_cards, tufte = arch_scene_tufte,
@@ -52,16 +54,24 @@ arch_match_style <- function(style) {
 #' @param theme `"light"` or `"dark"`.
 #' @param show_shapes,show_params Draw the right-margin annotations.
 #' @param show_facts Draw the fact sheet at the foot of the diagram.
+#' @param background,highlight Colours replacing the theme's background
+#'   and the style's highlight; see [plot_architecture()].
 #' @return A list with `width`, `height`, `bg` and `items`.
 #' @keywords internal
 arch_scene <- function(arch, style = "cards", detail = c("overview", "full"),
                        theme = c("light", "dark"),
                        show_shapes = TRUE, show_params = TRUE,
-                       show_facts = TRUE) {
+                       show_facts = TRUE, background = NULL,
+                       highlight = NULL) {
   build <- arch_styles()[[arch_match_style(style)]]
-  build(arch, detail = match.arg(detail), theme = match.arg(theme),
+  background <- arch_colour(background, "background")
+  highlight <- arch_colour(highlight, "highlight")
+  theme <- if (missing(theme) && !is.null(background)) arch_theme_for(background)
+           else match.arg(theme)
+  build(arch, detail = match.arg(detail), theme = theme,
         show_shapes = show_shapes, show_params = show_params,
-        show_facts = show_facts)
+        show_facts = show_facts,
+        colours = list(background = background, highlight = highlight))
 }
 
 # ---------------------------------------------------------------------------
@@ -97,6 +107,80 @@ arch_contrast <- function(a, b) {
 # @keywords internal
 arch_text_on <- function(fill, dark = "#111111", light = "#ffffff") {
   if (arch_contrast(fill, dark) >= arch_contrast(fill, light)) dark else light
+}
+
+# `col` mixed towards black or white, whichever reads better on `bg`,
+# just until it reaches `ratio` against it -- against every colour in
+# `bg`, when it is drawn on more than one.
+# @keywords internal
+arch_readable <- function(col, bg, ratio = 4.5) {
+  ok <- function(c) all(vapply(bg, function(b) arch_contrast(c, b),
+                               numeric(1)) >= ratio)
+  if (ok(col)) return(col)
+  light_bg <- mean(vapply(bg, arch_luminance, numeric(1))) > 0.18
+  toward <- if (light_bg) "#000000" else "#ffffff"
+  for (w in seq(0.98, 0, by = -0.02)) {
+    c2 <- arch_mix(col, toward, w)
+    if (ok(c2)) return(c2)
+  }
+  toward
+}
+
+# ---------------------------------------------------------------------------
+# Your own colours
+# ---------------------------------------------------------------------------
+
+# Any R colour -- a name, "#rrggbb", "#rrggbbaa" -- as "#rrggbb", or an
+# error naming the argument. Transparency is dropped: the diagrams are
+# drawn on an opaque surface.
+# @keywords internal
+arch_colour <- function(x, arg) {
+  if (is.null(x)) return(NULL)
+  rgb <- tryCatch(grDevices::col2rgb(x), error = function(e) NULL)
+  if (length(x) != 1L || is.null(rgb) || is.na(x)) {
+    cli::cli_abort("{.arg {arg}} must be one colour, such as {.val #1f4e79} or {.val navy}.",
+                   call = NULL)
+  }
+  # Lower case, as every colour the package writes is.
+  tolower(grDevices::rgb(t(rgb[, 1]), maxColorValue = 255))
+}
+
+# The theme a background calls for: light text on a dark one.
+# @keywords internal
+arch_theme_for <- function(background) {
+  if (arch_luminance(background) > 0.18) "light" else "dark"
+}
+
+# A shade of `bg`, moved towards black on a light background or white on
+# a dark one, until it stands `contrast` apart from it.
+# @keywords internal
+arch_shade <- function(bg, contrast) {
+  toward <- if (arch_luminance(bg) > 0.18) "#000000" else "#ffffff"
+  for (w in seq(0, 1, by = 0.005)) {
+    c2 <- arch_mix(toward, bg, w)
+    if (arch_contrast(c2, bg) >= contrast) return(c2)
+  }
+  toward
+}
+
+# Carry a theme over to another background. Every colour token except
+# those in `keep` -- the hues that carry meaning -- is re-made as a
+# shade of the new background with the contrast it had against the old
+# one, so text greys, rules, panels and boxes keep their places in the
+# hierarchy whatever the background is. Tokens that are not single
+# colours (palettes, numbers) are left alone.
+# @keywords internal
+arch_adapt_theme <- function(th, background, keep = character()) {
+  if (is.null(background)) return(th)
+  old <- th$surface
+  for (nm in setdiff(names(th), c("surface", "name", keep))) {
+    v <- th[[nm]]
+    if (!is.character(v) || length(v) != 1L ||
+        !grepl("^#[0-9A-Fa-f]{6}$", v)) next
+    th[[nm]] <- arch_shade(background, arch_contrast(v, old))
+  }
+  th$surface <- background
+  th
 }
 
 # Viridis without the dependency. The anchors are

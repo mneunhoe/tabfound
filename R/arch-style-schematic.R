@@ -51,19 +51,6 @@ ARCH_ACCENTS <- c(
   mitra = "#6a1b9a", kumo = "#7a5c00"
 )
 
-# `col` mixed towards black or white, whichever reads better on `bg`,
-# just until it reaches `ratio` against it.
-# @keywords internal
-arch_readable <- function(col, bg, ratio = 4.5) {
-  if (arch_contrast(col, bg) >= ratio) return(col)
-  toward <- if (arch_luminance(bg) > 0.18) "#000000" else "#ffffff"
-  for (w in seq(0.98, 0, by = -0.02)) {
-    c2 <- arch_mix(col, toward, w)
-    if (arch_contrast(c2, bg) >= ratio) return(c2)
-  }
-  toward
-}
-
 # @keywords internal
 arch_schematic_geom <- function() {
   list(
@@ -98,12 +85,15 @@ arch_attn_line <- function(a) {
 # The schematic scene builder, registered in `arch_styles()`.
 # @keywords internal
 arch_scene_schematic <- function(arch, detail, theme, show_shapes,
-                                 show_params, show_facts) {
-  th <- arch_schematic_theme(theme)
+                                 show_params, show_facts, colours = list()) {
+  th <- arch_adapt_theme(arch_schematic_theme(theme), colours$background)
+  if (!is.null(colours$background)) th$attn_ink <- arch_text_on(th$attn)
   g  <- arch_schematic_geom()
   W  <- g$width
-  accent0 <- ARCH_ACCENTS[[arch$backend]] %||% "#0b5fad"
-  accent <- arch_readable(if (identical(theme, "dark"))
+  # Your highlight is used as given; a backend's own accent is lifted for
+  # the dark theme. Either way it is kept readable.
+  accent0 <- colours$highlight %||% ARCH_ACCENTS[[arch$backend]] %||% "#0b5fad"
+  accent <- arch_readable(if (identical(theme, "dark") && is.null(colours$highlight))
                             arch_mix(accent0, "#ffffff", 0.6) else accent0,
                           th$surface)
   tint <- arch_mix(accent, th$outer, if (identical(theme, "dark")) 0.22 else 0.14)

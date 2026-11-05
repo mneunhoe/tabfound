@@ -10,7 +10,9 @@ plot_architecture_diff(
   file = NULL,
   format = NULL,
   theme = c("light", "dark"),
-  scale = 1
+  scale = 1,
+  background = NULL,
+  highlight = NULL
 )
 }
 \arguments{
@@ -29,6 +31,16 @@ not given.}
 \item{scale}{Multiplies the rendered size. Only affects raster output
 (\code{png}), where it raises the resolution; SVG and PDF are vector and
 scale on their own.}
+
+\item{background}{A colour for the background, to match a house style
+or a slide template: a name such as \code{"navy"} or a hex code. The
+style's greys, rules and panels are re-made as shades of it, each as
+far from it as it was from the theme's own background, so the
+diagram reads the same. A dark background picks \code{theme = "dark"}
+unless \code{theme} is given.}
+
+\item{highlight}{A colour for model A, which is teal by default.
+Model B takes amber or teal, whichever is further from it.}
 }
 \value{
 Invisibly: the output path when \code{file} is given, otherwise a

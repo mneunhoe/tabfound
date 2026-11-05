@@ -33,6 +33,22 @@ arch_glyphs_theme <- function(theme = c("light", "dark")) {
   }
 }
 
+# The theme with your own colours: the highlight is attention across
+# rows. Each highlight keeps 3:1 against both cell fills and the
+# background, as the theme's own do.
+# @keywords internal
+arch_glyphs_colours <- function(th, colours) {
+  hues <- c("rows", "cols", "induce", "out", "embed")
+  th <- arch_adapt_theme(th, colours$background, keep = hues)
+  if (!is.null(colours$highlight)) th$rows <- colours$highlight
+  if (!is.null(colours$background) || !is.null(colours$highlight)) {
+    for (h in hues) {
+      th[[h]] <- arch_readable(th[[h]], c(th$train, th$test, th$surface), 3)
+    }
+  }
+  th
+}
+
 # @keywords internal
 arch_glyphs_geom <- function() {
   list(
@@ -132,8 +148,8 @@ arch_glyphs_tags <- function(s) {
 # the glyph already shows every axis they attend over.
 # @keywords internal
 arch_scene_glyphs <- function(arch, detail, theme, show_shapes, show_params,
-                              show_facts) {
-  th <- arch_glyphs_theme(theme)
+                              show_facts, colours = list()) {
+  th <- arch_glyphs_colours(arch_glyphs_theme(theme), colours)
   g  <- arch_glyphs_geom()
   x_shape <- g$x_text + g$text_w + 20
   x_num <- x_shape + g$shape_w

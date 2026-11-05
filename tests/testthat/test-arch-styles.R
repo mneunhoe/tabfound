@@ -981,3 +981,105 @@ test_that("a zoom box shows the feed-forward's widths and steps", {
                            detail = "full"))
   expect_true("12 → 24 → 12, no bias" %in% pfn)
 })
+
+
+# ---------------------------------------------------------------------------
+# Your own colours
+# ---------------------------------------------------------------------------
+
+BRANDS <- list(cream = c("#f4f1ea", "#1f4e79"), navy = c("#0b1f3a", "#f2a900"),
+               white = c("#ffffff", "#e4002b"), charcoal = c("#2b2b2b", "#00a3a1"))
+
+test_that("leaving the colours out changes nothing", {
+  arch <- arch_test_arch("tabicl")
+  for (style in names(arch_styles())) {
+    expect_identical(arch_scene(arch, style = style),
+                     arch_scene(arch, style = style, background = NULL,
+                                highlight = NULL), info = style)
+  }
+})
+
+test_that("a background reaches every style and keeps the text readable", {
+  arch <- arch_test_arch("tabicl")
+  for (b in names(BRANDS)) {
+    bg <- BRANDS[[b]][1]
+    for (style in names(arch_styles())) {
+      sc <- arch_scene(arch, style = style, background = bg,
+                       highlight = BRANDS[[b]][2])
+      info <- paste(b, style)
+      expect_identical(sc$bg, bg, info = info)
+      expect_identical(sc$theme$surface, bg, info = info)
+      # The title and the key's body text stay readable on it.
+      expect_gte(arch_contrast(sc$theme$ink, bg), 4.5, label = info)
+      expect_gte(arch_contrast(sc$theme$ink2, bg), 4.5, label = info)
+      txt <- Filter(function(e) e$type == "text", sc$items)
+      expect_gte(arch_contrast(txt[[1]]$col, bg), 4.5, label = paste(info, "title"))
+    }
+    d <- arch_diff_scene(arch, arch_test_arch("mitra"),
+                         theme = arch_theme_for(bg),
+                         colours = list(background = bg, highlight = BRANDS[[b]][2]))
+    expect_identical(d$bg, bg, info = b)
+    for (h in c("a", "b", "diff", "same", "ink2", "ink3")) {
+      for (f in c("surface", "a_bg", "b_bg")) {
+        expect_gte(arch_contrast(d$theme[[h]], d$theme[[f]]), 4.5,
+                   label = paste(b, h, "on", f))
+      }
+    }
+  }
+})
+
+test_that("a theme carried to another background keeps its contrasts", {
+  for (theme in c("light", "dark")) {
+    th <- arch_theme(theme)
+    for (bg in c("#f4f1ea", "#ffffff", "#0b1f3a", "#2b2b2b")) {
+      new <- arch_adapt_theme(th, bg)
+      for (nm in c("ink", "ink2", "ink3", "panel", "rule")) {
+        best <- max(arch_contrast("#000000", bg), arch_contrast("#ffffff", bg))
+        want <- min(arch_contrast(th[[nm]], th$surface), best)
+        expect_gte(arch_contrast(new[[nm]], bg), want - 0.05,
+                   label = paste(theme, bg, nm))
+      }
+      expect_identical(new$hue, th$hue)
+    }
+  }
+  expect_identical(arch_adapt_theme(arch_theme(), NULL), arch_theme())
+})
+
+test_that("the highlight lands where each style says it does", {
+  arch <- arch_test_arch("tabicl")
+  hl <- "#1f4e79"
+  near <- function(col) arch_hue_distance(col, hl) < 0.03
+  colours <- list(background = "#f4f1ea", highlight = hl)
+  expect_true(near(arch_cards_colours(arch_theme(), colours)$hue[["attention"]]))
+  expect_true(near(arch_glyphs_colours(arch_glyphs_theme(), colours)$rows))
+  expect_true(all(vapply(arch_tufte_phase_colours(3, arch_adapt_theme(
+    arch_tufte_theme(), colours$background), colours), near, logical(1))))
+  ice <- arch_scene(arch, style = "icicle", highlight = hl)
+  fills <- vapply(Filter(function(e) e$type == "rect", ice$items),
+                  function(e) e$fill %||% NA_character_, character(1))
+  expect_true(hl %in% fills)
+  sch <- arch_scene(arch, style = "schematic", highlight = hl)
+  title <- Filter(function(e) e$type == "text", sch$items)[[1]]
+  expect_true(near(title$col))
+  # The diff's model B moves away from a highlight that would crowd it.
+  th <- arch_diff_colours(arch_diff_theme(), list(highlight = "#f2a900"))
+  expect_gt(arch_hue_distance(th$a, th$b), 0.2)
+})
+
+test_that("a dark background picks the dark theme unless told otherwise", {
+  arch <- arch_test_arch("mitra")
+  f <- file.path(withr::local_tempdir(), "a.svg")
+  suppressMessages(plot_architecture(arch, f, background = "#0b1f3a"))
+  expect_match(paste(readLines(f, warn = FALSE), collapse = ""),
+               "fill=\"#0b1f3a\"", fixed = TRUE)
+  expect_identical(arch_theme_for("#0b1f3a"), "dark")
+  expect_identical(arch_theme_for("#f4f1ea"), "light")
+  expect_identical(arch_scene(arch, background = "#0b1f3a")$theme$name, "dark")
+  expect_identical(arch_scene(arch, background = "#0b1f3a",
+                              theme = "light")$theme$name, "light")
+  expect_identical(arch_colour("navy", "x"), "#000080")
+  expect_error(plot_architecture(arch, f, background = "not a colour"),
+               "must be one colour")
+  expect_error(plot_architecture_diff(arch, arch, f, highlight = c("red", "blue")),
+               "must be one colour")
+})
