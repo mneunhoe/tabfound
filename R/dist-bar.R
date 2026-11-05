@@ -276,97 +276,140 @@ transform_borders_inverse_yeojohnson <- function(znorm_borders, lambda) {
   )
 }
 
-# Compute CDF of the bar distribution (logits + borders) at query points ys.
-# Matches Python's `_cdf` in tabpfn/utils.py.
-.cdf_bar_dist <- function(logits, borders_from, ys) {
-  # logits: (..., n_bars)
-  # borders_from: (n_bars + 1,)  (1-D torch tensor on same device)
-  # ys:    (n_query,)             (1-D torch tensor)
-  n_bars <- as.integer(borders_from$size(1)) - 1L
-  # searchsorted returns 0-indexed; Python subtracts 1.
-  y_buckets_0 <- torch::torch_searchsorted(borders_from, ys$contiguous())$to(dtype = torch::torch_long()) - 1L
-  y_buckets_0 <- y_buckets_0$clamp(min = 0L, max = n_bars - 1L)
+# The share of an outer bucket's half-normal tail that lies more than
+# `distance` past its inner border: 1 at the border, 1/2 one bucket width
+# out. `erfc` is taken as an upper normal tail, which keeps its precision
+# far out where `1 - cdf` would cancel to 0. A degenerate outer bucket is
+# floored to the smallest positive width, which makes it a point mass.
+# @keywords internal
+.halfnormal_tail_survival <- function(distance, width) {
+  s <- max(width, .Machine$double.xmin) / stats::qnorm(0.75)
+  2 * stats::pnorm(distance / s, lower.tail = FALSE)
+}
 
-  # Broadcast y_buckets_0 to (..., n_query)
-  lead_shape <- as.integer(logits$size()); lead_shape[length(lead_shape)] <- ys$size(1)
-  y_buckets_b <- y_buckets_0$unsqueeze(1L)$expand(lead_shape)   # (1, n_query) -> broadcast
-  # Actually for simplicity, since logits may be (n_test, n_bars) we want
-  # (n_test, n_query). Tile y_buckets to the leading dims of logits.
-  # We'll rebuild via repeat.
-  lead_shape_wo_last <- as.integer(logits$size())[-length(logits$size())]
-  y_buckets_full <- y_buckets_0$view(c(rep(1L, length(lead_shape_wo_last)), ys$size(1)))$
-    expand(c(lead_shape_wo_last, ys$size(1)))   # broadcast to logits shape w/o last dim
+# Weights that move bucket masses from the `frm` grid to the `to` grid.
+#
+# Destination bucket `j` receives `weight[k] * probs[source[k]]` for every
+# pair `k` with `destination[k] == j`, plus `lower_tail[j] * probs[1]` and
+# `upper_tail[j] * probs[n]`. An interior source bucket is a uniform bar,
+# so its weight on a destination bucket is the share of it the two
+# overlap; the two outer source buckets are half-normal tails, as the
+# full-support bar distribution reads them, and the first and last
+# destination buckets take whatever mass lies beyond `to`. A zero-width
+# interior source bucket is a point mass and goes whole to the destination
+# bucket holding its point. Every weight is non-negative, so no bucket's
+# mass comes out of a cancellation.
+#
+# A port of `_remap_weights()` from `tabpfn` 9.1+ (PriorLabs/TabPFN#1288),
+# in double precision like the reference's, since the weights depend on
+# the two grids alone. Indices are 1-based.
+# @keywords internal
+.remap_weights <- function(frm, to) {
+  frm <- as.numeric(frm); to <- as.numeric(to)
+  n_frm <- length(frm) - 1L
+  n_to  <- length(to) - 1L
+  if (n_frm < 3L) {
+    cli::cli_abort("{.arg frm} needs an interior bucket between its two tails.")
+  }
 
-  # Gather indices need to be 1-indexed for torch_gather in R.
-  idx_gather <- (y_buckets_full + 1L)$to(dtype = torch::torch_long())
+  # Cut the axis at every border of both grids. Each piece lies in one
+  # source bucket and one destination bucket; `findInterval(left.open =
+  # TRUE)` counts the borders strictly below, which is `searchsorted()`.
+  edges <- sort(unique(c(frm[2:n_frm], to)))
+  mids  <- (edges[-length(edges)] + edges[-1L]) / 2
+  source <- findInterval(mids, frm, left.open = TRUE)
+  destination <- pmin(pmax(findInterval(mids, to, left.open = TRUE), 1L), n_to)
+  interior <- source >= 2L & source <= n_frm - 1L
+  source <- source[interior]
+  destination <- destination[interior]
+  weight <- diff(edges)[interior] / (frm[source + 1L] - frm[source])
 
-  probs <- torch::nnf_softmax(logits, dim = -1L)
-  prob_so_far <- torch::torch_cumsum(probs, dim = -1L) - probs
-  prob_left_of_bucket <- torch::torch_gather(prob_so_far, dim = -1L, index = idx_gather)
+  point <- which(frm[2:(n_frm - 1L)] == frm[3:n_frm]) + 1L
+  if (length(point)) {
+    source <- c(source, point)
+    destination <- c(destination,
+                     pmin(pmax(findInterval(frm[point], to), 1L), n_to))
+    weight <- c(weight, rep(1, length(point)))
+  }
+  # Grouped by destination, pieces in axis order within each, which is the
+  # order the reference sums them in.
+  ord <- order(destination)
 
-  widths <- borders_from[2:(n_bars + 1L)] - borders_from[1:n_bars]
-  # Gather borders and widths by 0-index
-  border_at_bucket <- torch::torch_index_select(
-    borders_from, dim = 1L,
-    index = y_buckets_full$contiguous()$view(-1L) + 1L   # 0-idx -> R 1-idx
-  )$view(as.integer(y_buckets_full$size()))
-  width_at_bucket  <- torch::torch_index_select(
-    widths, dim = 1L,
-    index = y_buckets_full$contiguous()$view(-1L) + 1L
-  )$view(as.integer(y_buckets_full$size()))
+  lower <- c(-Inf, to[2:n_to])
+  upper <- c(to[2:n_to], Inf)
+  inner_low  <- frm[2L];     width_low  <- frm[2L] - frm[1L]
+  inner_high <- frm[n_frm];  width_high <- frm[n_frm + 1L] - frm[n_frm]
+  lower_survival <- function(y) {
+    .halfnormal_tail_survival(inner_low - pmin(y, inner_low), width_low)
+  }
+  upper_survival <- function(y) {
+    .halfnormal_tail_survival(pmax(y, inner_high) - inner_high, width_high)
+  }
 
-  # ys broadcast to match
-  ys_b <- ys$view(c(rep(1L, length(lead_shape_wo_last)), ys$size(1)))$
-    expand(c(lead_shape_wo_last, ys$size(1)))
-  share <- ((ys_b - border_at_bucket) / width_at_bucket)$clamp(min = 0, max = 1)
-  prob_in_bucket <- torch::torch_gather(probs, dim = -1L, index = idx_gather) * share
-  prob_left_of_ys <- prob_left_of_bucket + prob_in_bucket
-
-  # Boundary conditions
-  below <- (ys_b <= borders_from[1])$to(dtype = prob_left_of_ys$dtype)
-  above <- (ys_b >= borders_from[n_bars + 1L])$to(dtype = prob_left_of_ys$dtype)
-  prob_left_of_ys <- torch::torch_where(below$to(dtype = torch::torch_bool()),
-                                         torch::torch_zeros_like(prob_left_of_ys),
-                                         prob_left_of_ys)
-  prob_left_of_ys <- torch::torch_where(above$to(dtype = torch::torch_bool()),
-                                         torch::torch_ones_like(prob_left_of_ys),
-                                         prob_left_of_ys)
-  prob_left_of_ys$clamp(min = 0, max = 1)
+  list(
+    source      = source[ord],
+    destination = destination[ord],
+    weight      = weight[ord],
+    lower_tail  = pmax(lower_survival(upper) - lower_survival(lower), 0),
+    upper_tail  = pmax(upper_survival(lower) - upper_survival(upper), 0)
+  )
 }
 
 #' Translate member-logits from `frm` borders onto `to` borders (matches
-#' Python `translate_probs_across_borders`).
+#' Python `translate_probs_across_borders`, `tabpfn` 9.1 and later).
 #'
-#' Returns bucket probabilities (NOT logits) of shape `(..., len(to)-1)`.
+#' Each destination bucket's mass is a sum of non-negative terms -- its
+#' overlap with each source bucket times that bucket's probability, plus a
+#' slice of each outer half-normal tail -- so no bucket is lost to
+#' rounding however narrow it is. Until `tabpfn` 9.1 the reference took
+#' differences of float32 CDF values and clamped them at zero, which gave
+#' neighbouring CDF values that rounded together a probability of exactly
+#' zero (PriorLabs/TabPFN#1288).
+#'
+#' A member whose grid is the destination grid comes back as its softmax:
+#' every destination bucket is then a source bucket, and reading the outer
+#' ones as tails only moves mass around inside them.
+#'
+#' Returns bucket probabilities (NOT logits) of shape `(..., len(to)-1)`,
+#' in the dtype of `logits`.
 #' @keywords internal
 translate_probs_across_borders_r <- function(logits, frm, to) {
-  prob_left <- .cdf_bar_dist(logits, frm, to)
-  # Set endpoints exactly (Python does prob_left[..., 0] = 0, [..., -1] = 1)
-  n_last <- as.integer(prob_left$size(prob_left$dim()))
-  dev_   <- prob_left$device
-  # Instead of in-place, just clamp endpoints via explicit where
-  zeros_idx <- torch::torch_zeros_like(prob_left)
-  ones_idx  <- torch::torch_ones_like(prob_left)
-  # Positional mask: last dim == 0 -> replace with 0; last dim == n-1 -> 1
-  mask_shape <- as.integer(prob_left$size())
-  # Build a 1-D position mask of length n_last. It is compared against
-  # tensors that live wherever `prob_left` does, so it has to be built
-  # there too -- `torch_where` will not mix devices.
-  positions <- torch::torch_arange(1L, n_last, dtype = torch::torch_long(),
-                                   device = dev_)
-  # Broadcast to prob_left shape for comparison
-  pos_expanded <- positions$view(c(rep(1L, length(mask_shape) - 1L), n_last))
-  is_left  <- (pos_expanded == 1L)
-  is_right <- (pos_expanded == n_last)
-  prob_left <- torch::torch_where(is_left,  zeros_idx, prob_left)
-  prob_left <- torch::torch_where(is_right, ones_idx,  prob_left)
+  if (identical(as.integer(frm$size()), as.integer(to$size())) &&
+      frm$dtype == to$dtype && torch::torch_equal(frm$cpu(), to$cpu())) {
+    return(torch::nnf_softmax(logits, dim = -1L))
+  }
+  w <- .remap_weights(as.numeric(frm$cpu()), as.numeric(to$cpu()))
+  dev <- logits$device
+  dtype <- logits$dtype
+  as_t <- function(x) torch::torch_tensor(x, dtype = dtype, device = dev)
+  source      <- torch::torch_tensor(w$source, dtype = torch::torch_long(), device = dev)
+  destination <- torch::torch_tensor(w$destination, dtype = torch::torch_long(), device = dev)
+  weight      <- as_t(w$weight)
+  lower_tail  <- as_t(w$lower_tail)
+  upper_tail  <- as_t(w$upper_tail)
 
-  # Diff along last dim, clamp non-negative
-  left_idx  <- torch::torch_arange(1L, n_last - 1L, dtype = torch::torch_long(),
-                                    device = dev_)
-  right_idx <- torch::torch_arange(2L, n_last, dtype = torch::torch_long(),
-                                    device = dev_)
-  right <- torch::torch_index_select(prob_left, dim = -1L, index = right_idx)
-  left  <- torch::torch_index_select(prob_left, dim = -1L, index = left_idx)
-  (right - left)$clamp(min = 0)
+  shape <- as.integer(logits$size())
+  n_from <- shape[length(shape)]
+  n_to <- length(w$lower_tail)
+  flat <- logits$reshape(c(-1L, n_from))
+  apply_chunk <- function(x) {
+    probs <- torch::nnf_softmax(x, dim = -1L)
+    out <- probs[, 1, drop = FALSE] * lower_tail +
+      probs[, n_from, drop = FALSE] * upper_tail
+    out$index_add_(2L, destination, probs$index_select(2L, source) * weight)
+  }
+  # The `(rows, pairs)` product is the big intermediate; the reference caps
+  # it at 1e7 elements a chunk, about 40 MB in float32. Chunking does not
+  # change the result.
+  n_rows <- as.integer(flat$size(1))
+  chunk <- max(1L, 10000000L %/% max(length(w$source), 1L))
+  out <- if (n_rows <= chunk) {
+    apply_chunk(flat)
+  } else {
+    starts <- seq(1L, n_rows, by = chunk)
+    torch::torch_cat(lapply(starts, function(i) {
+      apply_chunk(flat[i:min(i + chunk - 1L, n_rows), , drop = FALSE])
+    }), dim = 1L)
+  }
+  out$reshape(c(shape[-length(shape)], n_to))
 }
