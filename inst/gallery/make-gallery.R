@@ -74,14 +74,23 @@ GALLERY <- list(
 )
 
 # Extra renderings the vignette uses to show the options off: the
-# sublayers opened up, the dark theme, and TabICL in every other style.
+# sublayers opened up, the dark theme, TabICL in every other style, and
+# the schematic for four models.
 EXTRAS <- list(
   list(key = "tabpfn3", suffix = "-full", detail = "full"),
   list(key = "tabpfn35", suffix = "-full", detail = "full"),
   list(key = "tabicl",  suffix = "-dark", theme  = "dark"),
   list(key = "tabicl",  suffix = "-tufte", style = "tufte"),
   list(key = "tabicl",  suffix = "-glyphs", style = "glyphs"),
-  list(key = "tabicl",  suffix = "-icicle", style = "icicle")
+  list(key = "tabicl",  suffix = "-icicle", style = "icicle"),
+  # The schematic for the models that each show something the others do
+  # not: TabICL in full (side inputs, zoom boxes), TabPFN v2.5's
+  # post-norm, Mitra's two attentions per layer, Kumo's alternating blocks.
+  list(key = "tabicl",  suffix = "-schematic-full", style = "schematic",
+       detail = "full"),
+  list(key = "tabpfn",  suffix = "-schematic", style = "schematic"),
+  list(key = "mitra",   suffix = "-schematic", style = "schematic"),
+  list(key = "kumo-medium", suffix = "-schematic", style = "schematic")
 )
 
 # Pairs drawn with `plot_architecture_diff()`, written as

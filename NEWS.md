@@ -15,6 +15,8 @@
     activation, Linear, or SwiGLU's gated pair) with its widths. Each
     feed-forward sublayer records them through `arch_ffn()`, checked
     against the network's parameter count.
+  * `vignette("architecture-gallery")` shows TabICL in every style, and
+    the schematic for four models that each show something different.
   * New `plot_architecture_diff()` draws two models side by side, pairing
     their stages by kind and attention axis and their facts by name. It
     takes models, fits or `tabfound_arch` objects in any mix.

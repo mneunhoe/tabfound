@@ -245,10 +245,10 @@ the colour-vision-deficiency separation floors. Every block is also
 labelled in words and listed in the legend, so nothing is carried by
 colour alone.
 
-## Four ways to draw the same model
+## Five ways to draw the same model
 
 Every figure above is in the default style, `"cards"`. The same
-description can be drawn three other ways, each answering a different
+description can be drawn four other ways, each answering a different
 question. Pick one with `style`, or set
 `options(tabfound.arch_style = )` once for a session.
 
@@ -258,6 +258,7 @@ icl <- tabular_classifier("tabicl-v2-classifier")
 plot_architecture(icl, "tabicl-tufte.svg", style = "tufte")
 plot_architecture(icl, "tabicl-glyphs.svg", style = "glyphs")
 plot_architecture(icl, "tabicl-icicle.svg", style = "icicle")
+plot_architecture(icl, "tabicl-schematic.svg", style = "schematic")
 ```
 
 Every style ends in the same kind of key: each symbol in its shapes,
@@ -307,6 +308,70 @@ layout is Kruskal and Landwehr's icicle plot, turned on its side.
 v2 drawn as three horizontal bands of phases, stages and sublayers,
 widths proportional to parameters; the in-context stack takes 93% of the
 width, split between attention and the MLP."}
+
+### Schematic: how a block runs
+
+The convention of the papers -- the original Transformer figure, and
+Sebastian Raschka's
+[LLM architecture gallery](https://sebastianraschka.com/llm-architecture-gallery/)
+-- applied to tabular models. The data flows upwards. Every repeated
+block is opened into its steps in the order they run, inside a container
+marked with how many times it is stacked, and each residual connection
+is a line up the right-hand side that rejoins the flow at a circled
+plus. Attention steps are dark, with a line saying which rows supply
+their keys and how they differ from plain attention; what feeds a step
+without being one -- a RoPE table, inducing points, QK-norm -- comes in
+from the left; facts point at the part they describe. With
+`detail = "full"`, a dotted box shows what each feed-forward computes
+inside.
+
+Everything on it is checked against the network: a test traces each
+model's forward pass and requires the steps to be listed in the order
+they run, each block's residual connections are pinned to its forward
+code, and each feed-forward's widths must account for its parameters.
+
+```{r}
+#| eval: false
+plot_architecture(icl, "tabicl-schematic-full.svg", style = "schematic",
+                  detail = "full")
+```
+
+![TabICL v2 as a schematic, in full](figures/tabicl-schematic-full.svg){fig-alt="TabICL
+v2 drawn bottom to top: the input table, cell projection and column
+stage with its two induced-attention halves, CLS columns, the row
+encoder, the in-context stack stacked 12 times with pre-norm residual
+connections, and the decoder; dotted boxes beside the feed-forward steps
+show Linear, GELU and Linear with their widths."}
+
+The three below each show something the others do not. TabPFN v2.5
+normalises *after* each residual add, so its norms sit above the
+circled plus rather than inside the connection; its item attention
+gives the test rows a single key/value head.
+
+![TabPFN v2.5 as a schematic](figures/tabpfn-schematic.svg){fig-alt="TabPFN
+v2.5 drawn bottom to top: the target, positional embedding and thinking
+rows joining the flow from the left, then 24 layers of attention between
+features, attention between items and an MLP, each followed by a
+LayerNorm placed after its residual add."}
+
+Mitra's single stack attends twice per layer, across rows and then
+across features, each with its own MLP -- four residual connections in
+one block.
+
+![Mitra as a schematic](figures/mitra-schematic.svg){fig-alt="Mitra drawn
+bottom to top: a weightless quantile-rank embedding, a cell embedding,
+the target embedding prepended as a column, then 12 layers of attention
+across rows, MLP, attention across features and MLP, each pre-norm with
+its own residual connection."}
+
+Kumo Tabular's column and row blocks take turns, one of each per layer,
+so they share one container.
+
+![Kumo Tabular medium as a schematic](figures/kumo-medium-schematic.svg){fig-alt="Kumo
+Tabular medium drawn bottom to top: the cell embedding, target embedding
+and readout tokens, then one container repeated six times holding an
+induced-attention column block followed by a row block, then the row
+projection and the in-context stack."}
 
 ## Comparing two models
 
