@@ -118,6 +118,10 @@
   buckets are read as half-normal tails. Means, quantiles and samples move
   by little; densities and log scores move a lot. The full-estimator
   parity fixtures are now cut against `tabpfn` 9.2.0 (#27).
+* `fit()` now refuses a target with missing or non-finite values, saying
+  how many and at which rows. Before, every backend accepted one: a single
+  `NA` in a regression target made every prediction `NA`, and a classifier
+  fitted on an `NA` label, both without a warning (#25).
 * `categorical_features = integer()` now declares that no column is
   categorical, and turns inference off; only `NULL` infers. Before, the
   two were the same, so a count or time step with fewer than four values

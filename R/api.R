@@ -202,6 +202,37 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
   )
 }
 
+# The target, checked before any backend sees it. None of them can use a
+# missing or infinite target, and none says so: a regressor standardises
+# `y`, so one `NA` turns its mean, its scale and then every border into
+# `NA`, and every prediction with them; a classifier codes an `NA` label as
+# an `NA` class index and fits on it. Aborting rather than dropping the
+# rows matches how `X` is treated -- which rows to drop is the caller's
+# call, not something to do behind their back.
+# @keywords internal
+.check_target <- function(y, call = sys.call(-1)) {
+  if (!is.atomic(y) && !is.factor(y)) return(invisible(y))
+  bad <- if (is.numeric(y)) !is.finite(y) else is.na(y)
+  if (!any(bad)) return(invisible(y))
+  rows <- which(bad)
+  n_bad <- length(rows)
+  # As text, so cli counts the rows rather than reading one as a quantity.
+  shown <- as.character(utils::head(rows, 5L))
+  where <- if (n_bad > length(shown)) {
+    paste0("At rows ", paste(shown, collapse = ", "), ", and ",
+           n_bad - length(shown), " more.")
+  } else {
+    "At row{?s} {shown}."
+  }
+  what <- if (is.numeric(y)) "missing or non-finite" else "missing"
+  # One quantity per line for cli to pluralise by; the rest is pasted in.
+  cli::cli_abort(c(
+    paste0("{.arg y} has {n_bad} ", what, " value{?s} out of ", length(y), "."),
+    x = where,
+    i = "Drop those rows, or impute the target, before {.fn fit}."
+  ), call = call)
+}
+
 # The factor levels of a coerced frame, for the columns that have any.
 # @keywords internal
 .training_levels <- function(d) {
@@ -402,6 +433,7 @@ fit <- function(object, X, y, ...) UseMethod("fit")
 #' @export
 fit.tabfound_model <- function(object, X, y, ...) {
   .check_weights_alive(object)
+  .check_target(y)
   expanded <- .fit_expansion_for(object, X)
   object <- expanded$object
   X <- expanded$X

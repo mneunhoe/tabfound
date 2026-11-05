@@ -59,6 +59,28 @@ test_that("a non-numeric matrix is refused rather than coerced", {
 })
 
 
+test_that("a missing or non-finite target is refused at fit()", {
+  # One NA in a regression target used to turn every prediction into NA,
+  # with no error: the scaler's mean and scale went NA, then the borders.
+  X <- matrix(rnorm(20), ncol = 2)
+  y <- rnorm(10)
+  reg <- stub_model("regression")
+  expect_error(fit(reg, X, replace(y, 3, NA)),
+               "1 missing or non-finite value out of 10")
+  expect_error(fit(reg, X, replace(y, 3, NA)), "At row 3\\.")
+  expect_error(fit(reg, X, replace(y, c(2, 9), c(Inf, NaN))), "At rows 2 and 9")
+  expect_error(fit(reg, X, rep(NA_real_, 10)), "At rows 1, 2, 3, 4, 5, and 5 more")
+  expect_no_error(fit(reg, X, y))
+
+  # A classifier would code an NA label as an NA class and fit on it.
+  clf <- stub_model("classification")
+  lab <- factor(rep(c("a", "b"), 5))
+  expect_error(fit(clf, X, replace(lab, 4, NA)), "1 missing value out of 10")
+  expect_error(fit(clf, X, replace(as.character(lab), 4, NA)), "At row 4\\.")
+  expect_no_error(fit(clf, X, lab))
+})
+
+
 test_that("predict checks new data against the fitted schema", {
   X <- matrix(rnorm(30), ncol = 3, dimnames = list(NULL, c("a", "b", "c")))
   m <- fit(stub_model("regression"), X, rnorm(10))
