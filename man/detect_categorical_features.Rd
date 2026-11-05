@@ -16,7 +16,8 @@ detect_categorical_features(
 \item{X}{Numeric matrix.}
 
 \item{categorical_features}{Integer vector of 1-based column indices
-the caller declares categorical, or \code{NULL}.}
+the caller declares categorical; \code{integer()} to declare none and turn
+inference off; or \code{NULL} to infer.}
 
 \item{max_unique}{Cardinality ceiling for a declared column to stay
 categorical. The reference's \code{MAX_UNIQUE_FOR_CATEGORICAL_FEATURES}.}
@@ -54,5 +55,12 @@ Constant columns (one distinct value or fewer) are not categorical
 unless declared; the reference calls them a modality of their own, and
 they are dropped by \code{\link[=remove_constant_features_fit]{remove_constant_features_fit()}} before any of this
 matters.
+
+An empty declaration is a declaration: \code{integer()} says no column is
+categorical, and nothing is inferred. Only \code{NULL} asks for inference.
+The reference folds the two together, which leaves a caller no way to
+keep a low-cardinality count or time step numeric -- and since
+inference counts distinct values, the same column can flip on a
+filtered or subsampled table.
 }
 \keyword{internal}

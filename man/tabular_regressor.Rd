@@ -26,11 +26,16 @@ when \code{NULL}.}
 \item{device}{One of \code{"cpu"}, \code{"cuda"}, \code{"mps"}.}
 
 \item{categorical_features}{Integer vector of 1-based column indices to
-treat as categorical, or \code{NULL} to let the backend infer. Declaring
-is much stronger than inferring: inference only catches columns with
-fewer than four distinct values, so an ordinal-coded factor with five
-levels is invisible to it. \code{\link[=tabfound]{tabfound()}} fills this in from the frame's
-factor columns automatically.}
+treat as categorical, \code{integer()} to declare that none are, or \code{NULL}
+to let the backend infer. Declaring is much stronger than inferring:
+on TabPFN, inference takes a column nobody declared as categorical
+only when it has fewer than four distinct values and the training
+set has more than 100 rows, so an ordinal-coded factor with five
+levels is invisible to it -- and a count or time step with three
+values is swept up by it. Declared columns are still checked, and the
+other columns still inferred; only \code{integer()} turns inference off.
+\code{\link[=tabfound]{tabfound()}} fills this in from the frame's factor columns
+automatically.}
 
 \item{transform_text}{Expand text columns into numeric features at
 \code{\link[=fit]{fit()}}: \code{"auto"} (default) does so when the checkpoint's own recipe

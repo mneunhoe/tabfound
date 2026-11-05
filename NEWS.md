@@ -106,6 +106,25 @@
   * New `native_ensemble_presets()` returns the checkpoint's member menu,
     and `generate_ensemble_configs_native(presets = )` draws members from
     an edited one.
+* `categorical_features = integer()` now declares that no column is
+  categorical, and turns inference off; only `NULL` infers. Before, the
+  two were the same, so a count or time step with fewer than four values
+  was always taken as categorical on a table of more than 100 rows, and
+  there was no way to say otherwise (#24). `tabfound()` on a frame with
+  no factor columns still infers, as before. The inference rule is now
+  documented in `tabular_classifier()` and `tabular_regressor()`.
+* Fixed TabPFN ensembles failing when the configs from
+  `generate_ensemble_configs_native()` were fitted on other rows than
+  they were generated on -- a fold, a subsample, a time window. `fit()`
+  inferred the categorical columns again on its own rows, and a column
+  numeric on the whole table could look categorical on a slice of it,
+  which ended in an error about missing mappings or a bare `stopifnot()`
+  at predict time (#23). Each config now records the categorical columns
+  and the predictor count it was generated for, and a fit uses that set.
+  A `categorical_features` given to the model as well is checked against
+  it, and a mismatch, or a member that does not fit the rows (a column
+  constant on them, say), is an error naming the problem. Python dumps
+  record no set and infer as before.
 * Fixed wrong predictions from Kumo Tabular medium and large on Apple's
   `mps` device. libtorch's fused attention kernel on MPS returns wrong
   values for non-contiguous inputs when the query is shorter than the keys

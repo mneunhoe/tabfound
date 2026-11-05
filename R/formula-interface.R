@@ -335,9 +335,11 @@ tabfound.default <- function(x, ...) {
   # caller has already said. Nothing downstream can recover this: by the
   # time the matrix exists, a factor is just small integers, and the
   # reference's own cardinality heuristic would only catch the columns
-  # with fewer than four levels.
+  # with fewer than four levels. A frame with no factors has said nothing
+  # about its numeric columns, so it declares nothing: an empty declaration
+  # would turn the backend's inference off.
   cat_idx <- unname(.categorical_predictor_indices(predictors))
-  if (!"categorical_features" %in% names(dots)) {
+  if (!"categorical_features" %in% names(dots) && length(cat_idx)) {
     dots$categorical_features <- cat_idx
   }
   # The inner model gets the same options: a refit on the engine API should

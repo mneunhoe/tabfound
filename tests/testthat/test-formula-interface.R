@@ -84,6 +84,20 @@ test_that("factor columns are declared categorical, by position", {
 })
 
 
+test_that("tabfound() declares factor columns, and nothing for a frame without", {
+  dir <- local_fake_backend()
+  d <- data.frame(a = rnorm(8), b = rnorm(8), y = factor(rep(c("p", "q"), 4)))
+  # No factors is not a declaration of none: `integer()` would turn the
+  # backend's inference off for the numeric columns.
+  f <- tabfound(y ~ ., data = d, model = dir)
+  expect_null(f$inner$model_ref$args$categorical_features)
+
+  d$fac <- factor(rep(c("u", "v"), 4))
+  f <- tabfound(y ~ ., data = d, model = dir)
+  expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+})
+
+
 test_that("a backend without categorical handling says so", {
   # Silently ignoring a declaration would be the worst outcome: the user
   # believes the column is being encoded and it is not.

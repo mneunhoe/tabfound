@@ -12,7 +12,10 @@ load_ensemble_configs_from_dump(dump_dir)
 \value{
 A list of member specs, each carrying the preprocessing
 settings (\code{\link[=apply_member_pipeline]{apply_member_pipeline()}} reads them) plus \code{class_perm}
-(0-indexed) and \code{target_transform_lambda}.
+(0-indexed) and \code{target_transform_lambda}. Configs written by
+\code{\link[=generate_ensemble_configs_native]{generate_ensemble_configs_native()}} also carry
+\code{categorical_features} (1-based) and \code{n_features_in}, the schema they
+were sized for; a Python dump records neither, and both are \code{NULL}.
 }
 \description{
 The directory must contain \code{ensemble_configs.json} and one

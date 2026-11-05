@@ -297,9 +297,13 @@ native_ensemble_presets <- function(variant = c("v2.5", "v2.6"),
 #' @param n_estimators Integer ensemble size. Typical values: 4, 8.
 #' @param head `"classifier"` or `"regressor"`.
 #' @param categorical_features Integer vector of 1-based column indices to
-#'   declare categorical, or `NULL` to infer. Must match what the model
-#'   will be given at `fit()` time -- the configs record a code
-#'   permutation per encoded column, and those are sized from this.
+#'   declare categorical, `integer()` to declare none, or `NULL` to infer.
+#'   The set this resolves to on `X_train` is recorded on every config,
+#'   with the predictor count: each member's code permutations and width
+#'   are sized from it. A model fitted with these configs uses the
+#'   recorded set rather than inferring its own, so a fit on a fold or a
+#'   subsample of `X_train` treats the same columns as categorical. A
+#'   `categorical_features` given to the model as well must agree with it.
 #' @param variant Which TabPFN generation's member menu to use: `"v2.5"`
 #'   (the default, for the `tabpfn` backend) or `"v2.6"` (for
 #'   `tabpfn26`). Passing the wrong one produces a working but
@@ -446,7 +450,12 @@ generate_ensemble_configs_native <- function(X_train, y_train,
       feature_shift_decoder   = "shuffle",
       subsample_ix            = NULL,
       outlier_removal_std     = NULL,
-      `_model_index`          = 0L
+      `_model_index`          = 0L,
+      # Not the reference's: the schema this member was sized for, so that
+      # a fit on other rows uses it instead of inferring its own. 0-indexed,
+      # like every other index in the file.
+      `_categorical_features` = I(as.integer(cat_ix) - 1L),
+      `_n_features_in`        = n_features
     )
 
     if (head == "classifier") {

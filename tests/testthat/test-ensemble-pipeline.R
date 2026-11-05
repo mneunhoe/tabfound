@@ -188,10 +188,10 @@ test_that("shuffled category codes need mappings that fit", {
               max_features_per_estimator = 500L, shuffle_perm = NULL,
               categorical_name = "ordinal_shuffled")
 
-  expect_error(apply_member_pipeline(X, X, cfg, 1L), "no mappings")
+  expect_error(apply_member_pipeline(X, X, cfg, 1L), "no code mappings")
   expect_error(
     apply_member_pipeline(X, X, modifyList(cfg, list(cat_mappings = list(0:3, 0:3))), 1L),
-    "2 code mappings for 1 encoded column")
+    "carries 2 code mappings")
   expect_error(
     apply_member_pipeline(X, X, modifyList(cfg, list(cat_mappings = list(0:1))), 1L),
     "4 categories but its mapping is 2 long")

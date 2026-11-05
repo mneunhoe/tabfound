@@ -256,9 +256,17 @@ remove_constant_features_fit <- function(X_train) {
 #' they are dropped by [remove_constant_features_fit()] before any of this
 #' matters.
 #'
+#' An empty declaration is a declaration: `integer()` says no column is
+#' categorical, and nothing is inferred. Only `NULL` asks for inference.
+#' The reference folds the two together, which leaves a caller no way to
+#' keep a low-cardinality count or time step numeric -- and since
+#' inference counts distinct values, the same column can flip on a
+#' filtered or subsampled table.
+#'
 #' @param X Numeric matrix.
 #' @param categorical_features Integer vector of 1-based column indices
-#'   the caller declares categorical, or `NULL`.
+#'   the caller declares categorical; `integer()` to declare none and turn
+#'   inference off; or `NULL` to infer.
 #' @param max_unique Cardinality ceiling for a declared column to stay
 #'   categorical. The reference's `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`.
 #' @param min_unique_numerical Below this many distinct values, an
@@ -274,6 +282,9 @@ detect_categorical_features <- function(X,
                                         min_unique_numerical = 4L,
                                         min_samples_inference = 100L) {
   X <- as.matrix(X)
+  if (!is.null(categorical_features) && !length(categorical_features)) {
+    return(integer())
+  }
   declared <- as.integer(categorical_features %||% integer())
   if (length(declared)) {
     bad <- declared[declared < 1L | declared > ncol(X)]

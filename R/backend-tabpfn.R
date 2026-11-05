@@ -170,6 +170,92 @@ tabpfn_task_of <- function(config) {
   list(configs = configs[keep], weights = w[keep])
 }
 
+# The categorical columns a fit uses.
+#
+# Configs from `generate_ensemble_configs_native()` record the set they
+# were generated for, and every member's width and code mappings follow
+# from it. Inference counts distinct values, so a column that is numeric
+# on the whole table can look categorical on a fold or a time window of
+# it; re-inferring on the fitted rows would then hand the members a schema
+# they were not sized for. So a fit with such configs uses the recorded
+# set, and checks only what the caller said explicitly against it: a
+# column declared categorical that the configs treat as numeric, or an
+# empty declaration the configs do not share. Columns the configs treat
+# as categorical beyond a declaration are fine -- the generator may have
+# inferred them. Configs that record nothing (a Python dump, or a single
+# pass with no configs at all) infer as before.
+# @keywords internal
+.fit_categoricals <- function(X_train, categorical_features, configs) {
+  recorded <- .recorded_categoricals(configs)
+  if (is.null(recorded)) {
+    return(detect_categorical_features(X_train, categorical_features))
+  }
+  p <- ncol(X_train)
+  if (!is.null(recorded$n_features) && recorded$n_features != p) {
+    cli::cli_abort(c(
+      "The ensemble configs were generated for {recorded$n_features} \\
+       predictor{?s}, but {.fn fit} got {p}.",
+      i = "Generate them on a matrix with the same columns as the one you \\
+           fit on."
+    ))
+  }
+  cat_ix <- recorded$cat_ix
+  if (is.null(categorical_features)) return(cat_ix)
+
+  label <- function(j) {
+    nm <- colnames(X_train)[j]
+    if (is.null(nm)) as.character(j) else paste0(nm, " (", j, ")")
+  }
+  hint <- c(i = "Pass the model and {.fn generate_ensemble_configs_native} \\
+                 the same {.arg categorical_features}.")
+  if (!length(categorical_features)) {
+    if (length(cat_ix)) {
+      cols <- label(cat_ix)
+      cli::cli_abort(c(
+        "The model declares no categorical columns, but its ensemble \\
+         configs were generated treating {.field {cols}} as categorical.",
+        hint
+      ))
+    }
+    return(cat_ix)
+  }
+  # As the declaration resolves on these rows: a declared column past the
+  # cardinality ceiling is not categorical here either.
+  declared <- intersect(
+    detect_categorical_features(X_train, categorical_features),
+    as.integer(categorical_features))
+  numeric_in_configs <- setdiff(declared, cat_ix)
+  if (length(numeric_in_configs)) {
+    cols <- label(numeric_in_configs)
+    cli::cli_abort(c(
+      "{.field {cols}} {?is/are} declared categorical, but the ensemble \\
+       configs were generated treating {?it/them} as numeric.",
+      hint
+    ))
+  }
+  cat_ix
+}
+
+# The schema the configs agree on, or NULL when none records one.
+# @keywords internal
+.recorded_categoricals <- function(configs) {
+  if (is.null(configs)) return(NULL)
+  sets <- lapply(configs, function(cfg) cfg$categorical_features)
+  has <- !vapply(sets, is.null, logical(1))
+  if (!any(has)) return(NULL)
+  widths <- lapply(configs, function(cfg) cfg$n_features_in)
+  if (!all(has) || length(unique(lapply(sets, sort))) > 1L ||
+      length(unique(widths)) > 1L) {
+    cli::cli_abort(c(
+      "The ensemble's members were generated for different columns.",
+      i = "Every member has to come from one call to \\
+           {.fn generate_ensemble_configs_native}, or from calls on the \\
+           same matrix with the same {.arg categorical_features}."
+    ))
+  }
+  list(cat_ix = sort(as.integer(sets[[1L]])), n_features = widths[[1L]])
+}
+
 # @keywords internal
 .require_ensemble_for_members <- function(configs) {
   if (!is.null(configs)) return(invisible(TRUE))
@@ -225,10 +311,13 @@ tabpfn_task_of <- function(config) {
 #'   same layout the Python parity harness produces, so the two can be
 #'   diffed file-for-file. See `inst/parity/`.
 #' @param categorical_features Integer vector of 1-based column indices to
-#'   treat as categorical, or `NULL` to infer. Only the ensemble path uses
-#'   it: a single forward pass hands the matrix to the network unchanged.
-#'   See [detect_categorical_features()] for what inference will and will
-#'   not pick up on its own.
+#'   treat as categorical, `integer()` to declare none (and infer none), or
+#'   `NULL` to infer. Only the ensemble path uses it: a single forward pass
+#'   hands the matrix to the network unchanged. See
+#'   [detect_categorical_features()] for what inference will and will not
+#'   pick up on its own. Configs from [generate_ensemble_configs_native()]
+#'   record the set they were generated for, and a fit uses that set; a
+#'   declaration here must agree with it.
 #' @param kv_cache Condition on the training rows once per `predict()`
 #'   call and reuse that across every prediction chunk and ensemble
 #'   member, instead of rebuilding the whole context per chunk. Cuts the
@@ -310,8 +399,8 @@ tabpfn_classifier <- function(ctx,
     # a test batch could disagree with itself.
     list(X_train = X_train, y_train_int = y_int, class_levels = levels_,
          n_train = nrow(X_train),
-         categorical_features = detect_categorical_features(
-           X_train, categorical_features))
+         categorical_features = .fit_categoricals(
+           X_train, categorical_features, ensemble_configs))
   }
 
   .single_pass_chunk <- function(state, X_test_chunk, cache, pipelines = NULL) {
@@ -479,8 +568,8 @@ tabpfn_regressor <- function(ctx,
     y_std  <- sqrt(mean((y - y_mean) ^ 2)) + 1e-20
     list(X_train = X_train, y_train = y, y_mean = y_mean, y_std = y_std,
          n_train = nrow(X_train),
-         categorical_features = detect_categorical_features(
-           X_train, categorical_features))
+         categorical_features = .fit_categoricals(
+           X_train, categorical_features, ensemble_configs))
   }
 
   .single_pass_chunk <- function(state, X_test_chunk, quantiles, cache,

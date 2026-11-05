@@ -92,6 +92,113 @@ test_that("a custom menu changes the members drawn", {
 
 
 # ---------------------------------------------------------------------------
+# The categorical schema a config was generated for
+# ---------------------------------------------------------------------------
+
+# A table whose time step is numeric as a whole -- eight values -- but is
+# inferred categorical on a window of it, where it has two.
+schema_data <- function() {
+  set.seed(1)
+  X <- cbind(x1 = rnorm(480), x2 = runif(480), t = rep(1:8, 60))
+  list(X = X, y = 2 * X[, "x1"] + 0.8 * X[, "t"] + rnorm(480),
+       win = which(X[, "t"] <= 2))
+}
+
+# The regressor's fit needs no weights: it records the training rows and
+# decides the schema, nothing more.
+stub_tabpfn_regressor <- function(...) {
+  ctx <- list(net = list(regression_borders = torch::torch_tensor(c(-1, 0, 1))),
+              device = "cpu")
+  tabpfn_regressor(ctx, ...)
+}
+
+test_that("native configs record the schema they were sized for", {
+  skip_if_not_installed("safetensors")
+  skip_if_not_installed("jsonlite")
+  dat <- schema_data()
+  for (cats in list(NULL, 3L, integer())) {
+    cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 2L,
+                                            head = "regressor",
+                                            categorical_features = cats)
+    for (m in cfg) {
+      expect_identical(m$categorical_features, as.integer(cats))
+      expect_identical(m$n_features_in, 3L)
+    }
+  }
+})
+
+test_that("a fit on a slice uses the configs' schema, not its own inference", {
+  skip_if_not_installed("safetensors")
+  skip_if_not_installed("jsonlite")
+  dat <- schema_data()
+  X_win <- dat$X[dat$win, ]
+  expect_identical(detect_categorical_features(X_win), 3L)
+
+  cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 4L,
+                                          head = "regressor", variant = "v2.6")
+  state <- stub_tabpfn_regressor(ensemble_configs = cfg)$fit(X_win, dat$y[dat$win])
+  expect_identical(state$categorical_features, integer())
+  # ...and every member's pipeline fits on those rows.
+  for (m in cfg) {
+    expect_no_error(fit_member_pipeline(X_win, m, state$categorical_features))
+  }
+
+  # Without configs there is nothing recorded, and inference runs as ever.
+  state <- stub_tabpfn_regressor()$fit(X_win, dat$y[dat$win])
+  expect_identical(state$categorical_features, 3L)
+})
+
+test_that("a declaration on the model is checked against the configs' schema", {
+  skip_if_not_installed("safetensors")
+  skip_if_not_installed("jsonlite")
+  dat <- schema_data()
+  numeric_cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 2L,
+                                                  head = "regressor")
+  cat_cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 2L,
+                                              head = "regressor",
+                                              categorical_features = 3L)
+  fit_with <- function(cfg, cats, X = dat$X) {
+    stub_tabpfn_regressor(ensemble_configs = cfg,
+                          categorical_features = cats)$fit(X, dat$y)
+  }
+
+  expect_error(fit_with(numeric_cfg, 3L), "t \\(3\\).*declared categorical")
+  expect_error(fit_with(cat_cfg, integer()), "declares no categorical")
+  expect_identical(fit_with(cat_cfg, 3L)$categorical_features, 3L)
+  expect_identical(fit_with(numeric_cfg, integer())$categorical_features,
+                   integer())
+  # Columns the configs treat as categorical beyond a declaration are
+  # allowed: the generator may have inferred them.
+  wide_cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 2L,
+                                               head = "regressor",
+                                               categorical_features = 2:3)
+  expect_identical(fit_with(wide_cfg, 3L)$categorical_features, 3L)
+
+  expect_error(fit_with(numeric_cfg, NULL, dat$X[, 1:2]),
+               "generated for 3 predictors, but .*fit.* got 2")
+  expect_error(fit_with(c(numeric_cfg, cat_cfg), NULL),
+               "generated for different columns")
+})
+
+test_that("a member that does not fit the rows says why, not stopifnot", {
+  skip_if_not_installed("safetensors")
+  skip_if_not_installed("jsonlite")
+  dat <- schema_data()
+  cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 1L,
+                                          head = "regressor")
+  # One value of the time step: constant on these rows, so dropped.
+  one_step <- dat$X[dat$X[, "t"] == 1, ]
+  expect_error(fit_member_pipeline(one_step, cfg[[1]], integer()),
+               "Predictor 3 is constant")
+
+  # A member generated with no categorical columns, fitted with one.
+  expect_error(fit_member_pipeline(dat$X, within(cfg[[1]], {
+    categorical_name <- "ordinal_very_common_categories_shuffled"
+  }), 3L), "carries no code mappings")
+})
+
+
+# ---------------------------------------------------------------------------
 # Against real weights
 # ---------------------------------------------------------------------------
 
@@ -192,6 +299,20 @@ test_that("predict_members() needs an ensemble", {
   dat <- members_data("classification")
   clf <- fit(tabular_classifier(d), dat$X_tr, dat$y_tr)
   expect_error(predict_members(clf, dat$X_te), "needs an ensemble")
+})
+
+test_that("regressor: configs generated on the table predict from a slice of it", {
+  d <- Sys.getenv("TABFOUND_TABPFN_REG_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN_REG_DIR not configured")
+  dat <- schema_data()
+  for (seed in 1:3) {
+    cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 4L,
+                                            head = "regressor",
+                                            random_state = seed)
+    reg <- fit(tabular_regressor(d, ensemble_configs = cfg),
+               dat$X[dat$win, ], dat$y[dat$win])
+    expect_true(all(is.finite(predict(reg, dat$X[1:3, ]))))
+  }
 })
 
 test_that("regressor: unit weights change nothing, and predict_members() reproduces the mean", {

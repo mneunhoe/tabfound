@@ -29,9 +29,13 @@ column permutations and to fit the y target transform.}
 \item{head}{\code{"classifier"} or \code{"regressor"}.}
 
 \item{categorical_features}{Integer vector of 1-based column indices to
-declare categorical, or \code{NULL} to infer. Must match what the model
-will be given at \code{fit()} time -- the configs record a code
-permutation per encoded column, and those are sized from this.}
+declare categorical, \code{integer()} to declare none, or \code{NULL} to infer.
+The set this resolves to on \code{X_train} is recorded on every config,
+with the predictor count: each member's code permutations and width
+are sized from it. A model fitted with these configs uses the
+recorded set rather than inferring its own, so a fit on a fold or a
+subsample of \code{X_train} treats the same columns as categorical. A
+\code{categorical_features} given to the model as well must agree with it.}
 
 \item{variant}{Which TabPFN generation's member menu to use: \code{"v2.5"}
 (the default, for the \code{tabpfn} backend) or \code{"v2.6"} (for

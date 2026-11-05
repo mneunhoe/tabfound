@@ -193,6 +193,19 @@ test_that("categorical detection matches detect_feature_modalities", {
   expect_error(detect_categorical_features(cat_X, 99L), "outside the predictor matrix")
 })
 
+test_that("an empty declaration declares no categoricals and infers none", {
+  # A time step with eight values, cut to the two that fall in a window:
+  # numeric on the whole table, inferred categorical on the slice.
+  X <- cbind(x = seq(0, 1, length.out = 480), t = rep(1:8, 60))
+  win <- X[X[, "t"] <= 2, ]
+  expect_identical(detect_categorical_features(X), integer())
+  expect_identical(detect_categorical_features(win), 2L)
+  # `integer()` is the caller saying so, and it holds on the slice too.
+  expect_identical(detect_categorical_features(win, integer()), integer())
+  expect_identical(detect_categorical_features(as_mat(ref$cat_X), integer()),
+                   integer())
+})
+
 
 test_that("ordinal encoding matches sklearn, NaN and unseen levels included", {
   cat_X <- as_mat(ref$cat_X)
