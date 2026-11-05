@@ -1111,7 +1111,7 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
 # Both sublayers are sandwiched: a norm before and a norm after, inside
 # the residual connection.
 # @keywords internal
-tabfm_block_children <- function(pfx, id, label, axis, keys = "all") {
+tabfm_block_children <- function(pfx, id, label, axis, ffn, keys = "all") {
   p <- function(x) paste0(pfx, ".", x)
   list(
     arch_residual(
@@ -1127,7 +1127,7 @@ tabfm_block_children <- function(pfx, id, label, axis, keys = "all") {
       arch_stage(paste0(id, "_ffpre"), "RMSNorm", kind = "norm",
                  prefix = p("pre_ff_ln")),
       arch_stage(paste0(id, "_ff"), "SwiGLU feed-forward", kind = "ffn",
-                 prefix = p(c("linear1_gate", "linear1", "linear2"))),
+                 ffn = ffn, prefix = p(c("linear1_gate", "linear1", "linear2"))),
       arch_stage(paste0(id, "_ffpost"), "RMSNorm", kind = "norm",
                  prefix = p("post_ff_ln"))
     )
@@ -1162,6 +1162,7 @@ tabfm_describe <- function(config, task) {
   clf   <- isTRUE(config$is_classifier)
   n_out <- if (clf) as.integer(config$max_classes) else 1L
 
+  ff_e <- arch_ffn(E, E * ff, type = "swiglu")
   col_children <- function(pfx) {
     blk <- paste0(pfx, ".tf_col.blocks.0")
     c(
@@ -1170,10 +1171,10 @@ tabfm_describe <- function(config, task) {
                       prefix = paste0(blk, ".ind_vectors"))),
       tabfm_block_children(paste0(blk, ".mab1"), "ind",
                            "Inducing points attend to the training rows",
-                           axis = "rows", keys = "training rows"),
+                           axis = "rows", keys = "training rows", ffn = ff_e),
       tabfm_block_children(paste0(blk, ".mab2"), "back",
                            "Rows attend back to the inducing points",
-                           axis = "inducing", keys = "inducing points"),
+                           axis = "inducing", keys = "inducing points", ffn = ff_e),
       list(
         arch_stage("out", "Output projection, after the stack", kind = "embed",
                    role = "final", prefix = paste0(pfx, ".out_w")),
@@ -1187,7 +1188,8 @@ tabfm_describe <- function(config, task) {
   # stage's detail line is where it is stated.
   row_children <- function(pfx) c(
     tabfm_block_children(paste0(pfx, ".tf_row.blocks.0"), "attn",
-                         "Attention over a row's columns", axis = "columns"),
+                         "Attention over a row's columns", axis = "columns",
+                         ffn = ff_e),
     list(arch_stage("oln", "RMSNorm, after the stack", kind = "norm",
                     role = "final", prefix = paste0(pfx, ".out_ln")))
   )
@@ -1251,7 +1253,8 @@ tabfm_describe <- function(config, task) {
       shape = sprintf("(B, n, %d)", D), prefix = "icl_predictor.tf_icl",
       children = tabfm_block_children("icl_predictor.tf_icl.blocks.0", "iattn",
                                       "Attention over rows, training-row keys",
-                                      axis = "rows", keys = "training rows")),
+                                      axis = "rows", keys = "training rows",
+                                      ffn = arch_ffn(D, D * ff, type = "swiglu"))),
     arch_stage(
       "dec", "Decoder MLP", kind = "decode", group = "Decode",
       detail = sprintf("RMSNorm, then %d -> %s -> %d, GELU", D,

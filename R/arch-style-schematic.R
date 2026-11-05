@@ -150,6 +150,8 @@ arch_scene_schematic <- function(arch, detail, theme, show_shapes,
                 anchor = "middle"))
   }
 
+  full <- identical(detail, "full")
+  zooms <- list()           # one per distinct feed-forward, at full detail
   anchors <- list()         # where callouts can point, by stage/child
   side <- list()            # side inputs, placed once the flow is known
   shapes <- list()          # shape labels on the arrows
@@ -177,6 +179,13 @@ arch_scene_schematic <- function(arch, detail, theme, show_shapes,
     }
     drawn_extra <<- c(drawn_extra, sub_lines)
     anchors[[paste(stage_id, ch$id)]] <<- list(x = bx + g$box_w, u = u + h / 2)
+    if (full && identical(ch$kind, "ffn") && !is.null(ch$ffn)) {
+      sig <- paste(unlist(ch$ffn), collapse = "/")
+      if (is.null(zooms[[sig]])) {
+        zooms[[sig]] <<- list(ffn = ch$ffn, x = bx + g$box_w, u = u + h / 2,
+                              key = paste(stage_id, ch$id))
+      }
+    }
     # QK-norm is drawn the way the papers do: a box feeding the attention.
     if (is_attn && isTRUE(ch$attn$qk_norm)) {
       side[[length(side) + 1L]] <<- list(label = "QK-norm", u = u + h / 2,
@@ -407,31 +416,62 @@ arch_scene_schematic <- function(arch, detail, theme, show_shapes,
       callouts[[key]]$facts[[f]] <- as.character(arch$facts[[f]])
     }
   }
-  placed <- character()
-  if (length(callouts)) {
-    ord <- order(vapply(callouts, function(c) c$pos$u, numeric(1)))
+  # --- the right-hand column: callouts and zoom boxes ----------------------
+  # Each block wants to sit level with what it points at; they are taken
+  # in order up the page and pushed apart where they would overlap.
+  blocks <- list()
+  zoom_keys <- vapply(zooms, `[[`, character(1), "key")
+  text_block <- function(cl, centre_top) {
+    n <- length(cl$facts)
+    for (k in seq_len(n)) {
+      yk <- centre_top - 7.5 - 15 * (k - 1L)
+      nm <- names(cl$facts)[k]
+      nm_w <- arch_text_width(nm, 11, bold = TRUE)
+      emit(text_u(g$call_x, yk, nm, size = 11, col = th$ink, bold = TRUE))
+      # Bold sans runs a little wider than its estimate; 10 px keeps the
+      # value clear of its name.
+      emit(text_u(g$call_x + nm_w + 10, yk,
+                  arch_fit_text(cl$facts[[k]], W - g$pad - g$call_x - nm_w - 10,
+                                11, bold = TRUE),
+                  size = 11, col = accent, bold = TRUE))
+    }
+  }
+  zoom_block <- function(z, bottom) {
+    drawn_extra <<- c(drawn_extra,
+                      arch_zoom_items(z$ffn, g$call_x, bottom, W - g$pad - g$call_x,
+                                      arch_zoom_height(z$ffn), th, emit, rect_u,
+                                      text_u, line_u, arrow_up))
+  }
+  for (key in names(callouts)) local({
+    cl <- callouts[[key]]
+    z <- zooms[zoom_keys == key]
+    z <- if (length(z)) z[[1L]] else NULL
+    th_text <- 15 * length(cl$facts)
+    zh <- if (is.null(z)) 0 else arch_zoom_height(z$ffn) + 8
+    blocks[[length(blocks) + 1L]] <<- list(
+      u = cl$pos$u, x_from = cl$pos$x, h = th_text + zh,
+      draw = function(centre, h) {
+        top <- centre + h / 2
+        text_block(cl, top)
+        # A zoom of the same step hangs under its callout.
+        if (!is.null(z)) zoom_block(z, top - th_text - zh)
+      })
+  })
+  for (z in zooms[!zoom_keys %in% names(callouts)]) local({
+    z <- z
+    blocks[[length(blocks) + 1L]] <<- list(
+      u = z$u, x_from = z$x, h = arch_zoom_height(z$ffn),
+      draw = function(centre, h) zoom_block(z, centre - h / 2))
+  })
+  placed <- unlist(lapply(callouts, function(cl) names(cl$facts)))
+  if (length(blocks)) {
     prev_top <- -Inf
-    for (cl in callouts[ord]) {
-      n <- length(cl$facts)
-      h <- 15 * n
-      centre <- max(cl$pos$u, prev_top + h / 2 + 10)
-      prev_top <- centre + h / 2
-      leader_x <- g$call_x - 8
-      emit(line_u(cl$pos$x + 4, cl$pos$u, leader_x, centre, col = th$ink3,
+    for (bl in blocks[order(vapply(blocks, `[[`, numeric(1), "u"))]) {
+      centre <- max(bl$u, prev_top + bl$h / 2 + 10)
+      prev_top <- centre + bl$h / 2
+      emit(line_u(bl$x_from + 4, bl$u, g$call_x - 8, centre, col = th$ink3,
                   lwd = 1, dash = TRUE))
-      for (k in seq_len(n)) {
-        yk <- centre + h / 2 - 7.5 - 15 * (k - 1L)
-        nm <- names(cl$facts)[k]
-        nm_w <- arch_text_width(nm, 11, bold = TRUE)
-        emit(text_u(g$call_x, yk, nm, size = 11, col = th$ink, bold = TRUE))
-        # Bold sans runs a little wider than its estimate; 10 px keeps
-        # the value clear of its name.
-        emit(text_u(g$call_x + nm_w + 10, yk,
-                    arch_fit_text(cl$facts[[k]], W - g$pad - g$call_x - nm_w - 10, 11,
-                                  bold = TRUE),
-                    size = 11, col = accent, bold = TRUE))
-      }
-      placed <- c(placed, names(cl$facts))
+      bl$draw(centre, bl$h)
     }
     flow_top <- max(flow_top, prev_top)
   }
@@ -468,7 +508,7 @@ arch_scene_schematic <- function(arch, detail, theme, show_shapes,
   # --- key ----------------------------------------------------------------
   notes <- arch_schematic_notes(arch, th, accent, any_unit,
                                 show_shapes && length(shapes) > 0L,
-                                length(callouts) > 0L,
+                                length(callouts) > 0L, length(zooms) > 0L,
                                 fallback = !arch_schematic_has_flow(arch))
   groups_key <- arch_key_groups(arch, notes, show_shapes = show_shapes,
                                 extra = drawn_extra, show_details = FALSE)
@@ -507,7 +547,7 @@ arch_schematic_has_flow <- function(arch) {
 # The notation the schematic draws, and only what this diagram uses.
 # @keywords internal
 arch_schematic_notes <- function(arch, th, accent, any_unit, any_shape,
-                                 any_callout, fallback) {
+                                 any_callout, any_zoom, fallback) {
   st <- arch$stages
   joins <- vapply(st, function(s) s$join %||% NA_character_, character(1))
   kids <- unlist(lapply(st, `[[`, "children"), recursive = FALSE)
@@ -538,6 +578,81 @@ arch_schematic_notes <- function(arch, th, accent, any_unit, any_shape,
       "beside the arrows: the tensor shape each stage emits, in the symbols above")),
     if (any_callout) list(arch_note(paste(
       "dotted lines: facts about the part they point to, with the numbers in",
-      "the model's colour")))
+      "the model's colour"))),
+    if (any_zoom) list(arch_note(paste0(
+      "a dotted box: what a feed-forward step computes inside, read upwards; ",
+      "its caption is the widths, in to hidden and back out; another ",
+      "feed-forward of the same widths computes the same",
+      if (any(vapply(kids, function(ch) identical(ch$ffn$type, "swiglu"),
+                     logical(1))))
+        "; \u00d7 multiplies the two branches element by element")))
   )
+}
+
+# How tall a zoom box is for a feed-forward.
+# @keywords internal
+arch_zoom_height <- function(f) {
+  if (identical(f$type, "swiglu")) 160 else 124
+}
+
+# Draw a zoom box -- what a feed-forward computes inside, read upwards --
+# with its bottom at u0. The emitters are the schematic's own, in its
+# u-space. Returns the text it drew, for the key's abbreviation scan.
+# @keywords internal
+arch_zoom_items <- function(f, x, u0, w, h, th, emit, rect_u, text_u, line_u,
+                            arrow_up) {
+  emit(rect_u(x, u0, w, h, fill = th$outer, stroke = th$ink3, lwd = 1,
+              r = 8, dash = TRUE))
+  caption <- paste0(f$width, " \u2192 ", f$hidden, " \u2192 ", f$width,
+                    if (!f$bias) ", no bias" else "")
+  emit(text_u(x + 10, u0 + h - 12, caption, size = 10, col = th$ink2,
+              italic = TRUE))
+  bw <- w - 40
+  cx <- x + w / 2
+  bh <- 22
+  box <- function(bx, bu, bw, label) {
+    emit(rect_u(bx, bu, bw, bh, fill = th$box, stroke = th$box_stroke,
+                lwd = 1, r = 5))
+    emit(text_u(bx + bw / 2, bu + bh / 2, label, size = 10, col = th$ink,
+                anchor = "middle"))
+    label
+  }
+  up <- "Linear"
+  down <- "Linear"
+  drawn <- c(caption, up, f$act)
+  u <- u0 + 12
+  if (identical(f$type, "mlp")) {
+    box(cx - bw / 2, u, bw, up)
+    arrow_up(cx, u + bh, u + bh + 12)
+    u <- u + bh + 12
+    box(cx - bw / 2, u, bw, f$act)
+    arrow_up(cx, u + bh, u + bh + 12)
+    u <- u + bh + 12
+    box(cx - bw / 2, u, bw, down)
+    return(drawn)
+  }
+  # SwiGLU: two projections side by side, one through SiLU, multiplied.
+  half <- (bw - 8) / 2
+  lx <- cx - bw / 2
+  rx <- cx + 4
+  box(lx, u, half, up)
+  box(rx, u, half, up)
+  emit(line_u(rx + half / 2, u + bh, rx + half / 2, u + bh + 12 + bh + 12 + 8,
+              col = th$line, lwd = 1.1))
+  arrow_up(lx + half / 2, u + bh, u + bh + 12)
+  u <- u + bh + 12
+  box(lx, u, half, f$act)
+  u <- u + bh + 12
+  # The product, joined from the SiLU branch and the plain one.
+  r <- 8
+  mu <- u + r
+  emit(line_u(lx + half / 2, u - 12, lx + half / 2, mu, col = th$line, lwd = 1.1))
+  emit(line_u(lx + half / 2, mu, cx - r, mu, col = th$line, lwd = 1.1))
+  emit(line_u(rx + half / 2, mu, cx + r, mu, col = th$line, lwd = 1.1))
+  emit(rect_u(cx - r, mu - r, 2 * r, 2 * r, fill = th$box, stroke = th$line,
+              lwd = 1.1, r = r))
+  emit(text_u(cx, mu, "\u00d7", size = 11, col = th$ink, anchor = "middle"))
+  arrow_up(cx, mu + r, mu + r + 12)
+  box(cx - bw / 2, mu + r + 12, bw, down)
+  drawn
 }

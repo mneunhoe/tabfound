@@ -81,6 +81,8 @@ ARCH_AXES <- c("features", "columns", "rows", "cells", "inducing", "classes")
 #'   them -- `"training rows"` or `"context rows"`.
 #' @param attn For an attention child: an [arch_attn()] saying which rows
 #'   supply its keys and how it differs from plain attention.
+#' @param ffn For a feed-forward child: an [arch_ffn()] giving its widths
+#'   and what it computes inside.
 #' @return A `tabfound_arch_stage`.
 #' @keywords internal
 arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
@@ -88,7 +90,8 @@ arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
                        prefix = character(), children = list(),
                        collapses = FALSE, interleave = NULL,
                        role = c("step", "input", "final"), feeds = NULL,
-                       join = NULL, join_rows = NULL, attn = NULL) {
+                       join = NULL, join_rows = NULL, attn = NULL,
+                       ffn = NULL) {
   kind <- match.arg(kind, names(ARCH_KINDS))
   role <- match.arg(role)
   if (!is.null(join)) join <- match.arg(join, c("add", "concat", "prepend"))
@@ -98,6 +101,9 @@ arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
   }
   if (!is.null(attn) && !(identical(kind, "attention") && inherits(attn, "arch_attn"))) {
     cli::cli_abort("{.arg attn} is an {.fn arch_attn} on an attention child.")
+  }
+  if (!is.null(ffn) && !(identical(kind, "ffn") && inherits(ffn, "arch_ffn"))) {
+    cli::cli_abort("{.arg ffn} is an {.fn arch_ffn} on a feed-forward child.")
   }
   children <- arch_flatten_residuals(children)
   if (identical(role, "input") != !is.null(feeds)) {
@@ -110,7 +116,7 @@ arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
          prefix = as.character(prefix), children = children,
          collapses = isTRUE(collapses), interleave = interleave,
          role = role, feeds = feeds, join = join, join_rows = join_rows,
-         attn = attn, residual = NA_integer_, params = NA_real_),
+         attn = attn, ffn = ffn, residual = NA_integer_, params = NA_real_),
     class = "tabfound_arch_stage"
   )
 }
@@ -280,6 +286,36 @@ arch_attn <- function(keys = c("all", "training rows", "context rows",
                  kv_heads_test = if (is.null(kv_heads_test)) NULL
                                  else as.integer(kv_heads_test)),
             class = "arch_attn")
+}
+
+#' Describe what a feed-forward step computes inside
+#'
+#' @param width The width it reads and writes.
+#' @param hidden The width it expands to.
+#' @param type `"mlp"` (Linear, activation, Linear) or `"swiglu"` (two
+#'   Linears, one through SiLU, multiplied, then a Linear back).
+#' @param act The activation of an `"mlp"`.
+#' @param bias Whether its Linears carry a bias.
+#' @return An `arch_ffn`.
+#' @keywords internal
+arch_ffn <- function(width, hidden, type = c("mlp", "swiglu"), act = "GELU",
+                     bias = TRUE) {
+  type <- match.arg(type)
+  structure(list(width = as.integer(width), hidden = as.integer(hidden),
+                 type = type, act = if (identical(type, "swiglu")) "SiLU" else act,
+                 bias = isTRUE(bias)),
+            class = "arch_ffn")
+}
+
+# The parameters one block's feed-forward holds, from its widths: what a
+# test compares against the network's own count.
+# @keywords internal
+arch_ffn_params <- function(f) {
+  w <- f$width
+  h <- f$hidden
+  linears <- if (identical(f$type, "swiglu")) 3 * w * h else 2 * w * h
+  biases <- if (!f$bias) 0 else if (identical(f$type, "swiglu")) 2 * h + w else h + w
+  linears + biases
 }
 
 # Convenience: the same stage list every backend starts and ends with.
@@ -580,7 +616,8 @@ ARCH_GLOSSARY <- c(
   `NA`      = "missing values in the input",
   ECDF      = "empirical cumulative distribution function",
   GQA       = "grouped-query attention: several query heads share one set of keys and values",
-  MQA       = "multi-query attention: every query head shares one set of keys and values"
+  MQA       = "multi-query attention: every query head shares one set of keys and values",
+  SiLU      = "sigmoid linear unit, x times sigmoid(x) (activation; also called Swish)"
 )
 
 # Names that look like abbreviations but need no definition: models,

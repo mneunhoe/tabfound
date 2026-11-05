@@ -1973,7 +1973,8 @@ tabpfn35_describe <- function(config, task) {
         n_ind),
       shape = sprintf("(B, n, F, %d)", E),
       prefix = "feature_distribution_embedder",
-      children = tabpfn3_dist_children(qk_norm = TRUE)),
+      children = tabpfn3_dist_children(arch_ffn(E, E * ff, bias = FALSE),
+                                       qk_norm = TRUE)),
     arch_stage(
       "agg", "Column aggregator", kind = "attention",
       group = "Stage 2 - per row", repeats = n_agg, axis = "columns",
@@ -1982,7 +1983,8 @@ tabpfn35_describe <- function(config, task) {
         n_cls),
       shape = sprintf("(B, n, %d)", D), prefix = "column_aggregator",
       collapses = TRUE,
-      children = tabpfn3_agg_children(qk_norm = TRUE)),
+      children = tabpfn3_agg_children(arch_ffn(E, E * ff, bias = FALSE),
+                                      qk_norm = TRUE)),
     arch_stage(
       "icl_y", "Target encoder (per row)", kind = "embed",
       group = "Stage 3 - in-context",
@@ -1999,7 +2001,8 @@ tabpfn35_describe <- function(config, task) {
         h_icl, as.integer(D / h_icl), kv_t, if (kv_t == 1L) "" else "s",
         D, D * ff),
       shape = sprintf("(B, n, %d)", D), prefix = "icl_blocks",
-      children = tabpfn3_icl_children(kv_t, qk_norm = TRUE)),
+      children = tabpfn3_icl_children(arch_ffn(D, D * ff, bias = FALSE), kv_t,
+                                      qk_norm = TRUE)),
     arch_stage(
       "onorm", "Output RMSNorm", kind = "norm", group = "Decode",
       prefix = "output_norm"),

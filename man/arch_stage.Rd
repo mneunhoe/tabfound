@@ -21,7 +21,8 @@ arch_stage(
   feeds = NULL,
   join = NULL,
   join_rows = NULL,
-  attn = NULL
+  attn = NULL,
+  ffn = NULL
 )
 }
 \arguments{
@@ -80,6 +81,9 @@ them -- \code{"training rows"} or \code{"context rows"}.}
 
 \item{attn}{For an attention child: an \code{\link[=arch_attn]{arch_attn()}} saying which rows
 supply its keys and how it differs from plain attention.}
+
+\item{ffn}{For a feed-forward child: an \code{\link[=arch_ffn]{arch_ffn()}} giving its widths
+and what it computes inside.}
 }
 \value{
 A \code{tabfound_arch_stage}.

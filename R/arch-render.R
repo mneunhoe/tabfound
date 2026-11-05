@@ -315,7 +315,9 @@ arch_format_from_file <- function(file) {
 #'   change the default for a session.
 #' @param detail `"overview"` draws each repeated stack as one block;
 #'   `"full"` expands it into its sublayers. In `"tufte"`, the sublayers
-#'   are indented rows with a hollow dot each.
+#'   are indented rows with a hollow dot each; in `"schematic"`, which
+#'   always shows them, it adds a zoom box showing what each distinct
+#'   feed-forward step computes inside.
 #' @param theme `"light"` or `"dark"`.
 #' @param scale Multiplies the rendered size. Only affects raster output
 #'   (`png`), where it raises the resolution; SVG and PDF are vector and

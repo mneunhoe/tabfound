@@ -763,7 +763,7 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
 # MLP, whose own RMSNorm is its first layer. Both sit inside residual
 # connections.
 # @keywords internal
-kumo_block_children <- function(pfx, id, label, axis, attn) {
+kumo_block_children <- function(pfx, id, label, axis, attn, ffn) {
   p <- function(x) paste0(pfx, ".", x)
   list(
     arch_residual(
@@ -776,14 +776,14 @@ kumo_block_children <- function(pfx, id, label, axis, attn) {
     ),
     arch_residual(
       arch_stage(paste0(id, "_n2"), "RMSNorm", kind = "norm", prefix = p("mlp.0")),
-      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn",
+      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn", ffn = ffn,
                  prefix = p(c("mlp.1", "mlp.3")))
     )
   )
 }
 
 # @keywords internal
-kumo_col_children <- function(pfx = "row_embedding.col_blocks.0") {
+kumo_col_children <- function(ffn, pfx = "row_embedding.col_blocks.0") {
   c(
     list(arch_stage("iv", "Learned inducing points", kind = "embed",
                     role = "input", feeds = "ind",
@@ -792,19 +792,21 @@ kumo_col_children <- function(pfx = "row_embedding.col_blocks.0") {
                         "Inducing points attend to the context rows",
                         axis = "rows",
                         attn = arch_attn("context rows", qk_norm = TRUE,
-                                         scaling = "log-n")),
+                                         scaling = "log-n"),
+                        ffn = ffn),
     kumo_block_children(paste0(pfx, ".output_block"), "back",
                         "Rows attend to the inducing summary",
                         axis = "inducing",
-                        attn = arch_attn("inducing points", qk_norm = TRUE))
+                        attn = arch_attn("inducing points", qk_norm = TRUE),
+                        ffn = ffn)
   )
 }
 
 # A repeated stack of blocks, then the norm it ends with.
 # @keywords internal
-kumo_stack_children <- function(pfx, id, label, axis, final_norm, attn) {
+kumo_stack_children <- function(pfx, id, label, axis, final_norm, attn, ffn) {
   c(
-    kumo_block_children(pfx, id, label, axis, attn),
+    kumo_block_children(pfx, id, label, axis, attn, ffn),
     list(arch_stage("onorm", "RMSNorm, after the stack", kind = "norm",
                     role = "final", prefix = final_norm))
   )
@@ -851,7 +853,7 @@ kumo_describe <- function(config, task) {
       detail = sprintf("induced attention over a column's cell tokens: %d inducing points read the context rows (log-n query scaling), every row reads them back; %d heads",
                        M, H),
       shape = sprintf("(C, R, %d)", D), prefix = "row_embedding.col_blocks",
-      children = kumo_col_children()),
+      children = kumo_col_children(arch_ffn(D, 2L * D))),
     arch_stage(
       "row", "Row block", kind = "attention", group = "Row embedding",
       repeats = L, axis = "columns", interleave = "embedding",
@@ -865,7 +867,8 @@ kumo_describe <- function(config, task) {
       children = kumo_stack_children("row_embedding.row_blocks.0", "rattn", "Attention over a row's tokens", "columns", "row_embedding.norm",
                                      attn = arch_attn("all", queries = "readout tokens",
                                                       qk_norm = TRUE,
-                                                      scaling = "gated log-n"))),
+                                                      scaling = "gated log-n"),
+                                     ffn = arch_ffn(D, 2L * D))),
     if (proj) arch_stage(
       "proj", "Row projection", kind = "embed", group = "In-context",
       detail = sprintf("Linear(%d -> %d) from the flattened readout tokens", K * D, E),
@@ -886,7 +889,8 @@ kumo_describe <- function(config, task) {
       children = kumo_stack_children("icl_block.layers.0", "iattn", "Attention over context rows", "rows", "icl_block.norm",
                                      attn = arch_attn("context rows", queries = "query rows",
                                                       qk_norm = TRUE, scaling = "log-n",
-                                                      kv_heads_test = kvh))),
+                                                      kv_heads_test = kvh),
+                                     ffn = arch_ffn(E, 2L * E))),
     arch_stage(
       "head", "Decoder MLP", kind = "decode", group = "Decode",
       detail = sprintf("%d -> %d -> %d, GELU", E, 2L * E, n_out),

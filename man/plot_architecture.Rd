@@ -36,7 +36,9 @@ change the default for a session.}
 
 \item{detail}{\code{"overview"} draws each repeated stack as one block;
 \code{"full"} expands it into its sublayers. In \code{"tufte"}, the sublayers
-are indented rows with a hollow dot each.}
+are indented rows with a hollow dot each; in \code{"schematic"}, which
+always shows them, it adds a zoom box showing what each distinct
+feed-forward step computes inside.}
 
 \item{theme}{\code{"light"} or \code{"dark"}.}
 

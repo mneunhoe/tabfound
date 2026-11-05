@@ -877,6 +877,7 @@ mitra_describe <- function(config, task) {
         arch_residual(
           arch_stage("ln2", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm2"),
           arch_stage("mlp1", "MLP, GELU", kind = "ffn",
+                     ffn = arch_ffn(D, 4L * D),
                      prefix = c("layers.0.linear1", "layers.0.linear2"))
         ),
         arch_residual(
@@ -888,6 +889,7 @@ mitra_describe <- function(config, task) {
         arch_residual(
           arch_stage("ln4", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm4"),
           arch_stage("mlp2", "MLP, GELU", kind = "ffn",
+                     ffn = arch_ffn(D, 4L * D),
                      prefix = c("layers.0.linear3", "layers.0.linear4"))
         )
       )),

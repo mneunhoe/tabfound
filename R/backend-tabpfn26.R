@@ -1003,6 +1003,7 @@ tabpfn26_describe <- function(config, task) {
         arch_stage("rms2", "RMSNorm", kind = "norm",
                    prefix = paste0(blk, ".layernorm_mha2")),
         arch_residual(arch_stage("mlp", "MLP, GELU, no bias", kind = "ffn",
+                                 ffn = arch_ffn(E, ff, bias = FALSE),
                                  prefix = paste0(blk, ".mlp"))),
         arch_stage("rms3", "RMSNorm", kind = "norm",
                    prefix = paste0(blk, ".layernorm_mlp"))
