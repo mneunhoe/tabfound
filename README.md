@@ -67,9 +67,9 @@ is not found. TabFM and Mitra need no conversion. After this step, Python
 is never used again.
 
 > **Check the licence before you publish or deploy.** The package is MIT,
-> but the model weights are not. TabPFN v2.6, v3 and v3.5 and TabFM are
-> licensed for **research and evaluation only**, not commercial or
-> production use. `list_models()` shows each licence, and the download
+> but the model weights are not. TabPFN (v2.5, v2.6, v3 and v3.5) and
+> TabFM are licensed for **research and evaluation only**, not commercial
+> or production use. `list_models()` shows each licence, and the download
 > prompt repeats it.
 
 ## Which model?
@@ -79,14 +79,14 @@ matter:
 
 | model | name | size | licence | notes |
 |---|---|---|---|---|
-| TabPFN v2.5 | `"tabpfn-v2.5"` | ~40 MB per task | Prior Labs licence | Small and fast. The best-tested option for imputation (see below). |
-| TabPFN v2.6 | `"tabpfn-v2.6"` | ~50 MB per task | non-commercial | |
-| TabPFN v3 | `"tabpfn-v3"` | ~200 MB per task | non-commercial | Scales to larger tables. Six specialised variants (binary, OOD, time series, …). |
-| TabPFN v3.5 | `"tabpfn-v3.5"` | 876 MB, both tasks | research only | Newest. Handles free-text and date columns natively. |
-| TabICL v2 | `"tabicl"` | ~110 MB per task | see repo | Regression returns a full quantile grid. **Not recommended for imputation.** |
-| TabFM 1.0 | `"tabfm-1.0.0"` | ~6.6 GB per task | non-commercial | Large (1.6 B parameters) and slow on CPU. Regression is point prediction only. |
-| Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | Permissive licence. Best suited to small tables. Regression is point prediction only. |
-| Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | Permissive licence. NVIDIA's model in three sizes; `"kumo-tabular"` is large, which is slow on CPU. Handles `NA` natively. Regression returns a full quantile grid. 8-member ensemble by default. |
+| TabPFN v2.5 | `"tabpfn-v2.5"` | ~40 MB per task | non-commercial | Small and fast. The best-tested option for imputation (see below). Weights: [Prior-Labs/tabpfn_2_5](https://huggingface.co/Prior-Labs/tabpfn_2_5). |
+| TabPFN v2.6 | `"tabpfn-v2.6"` | ~50 MB per task | non-commercial | Successor to v2.5 at about the same size, with its preprocessing moved inside the network. Weights: [Prior-Labs/tabpfn_2_6](https://huggingface.co/Prior-Labs/tabpfn_2_6). |
+| TabPFN v3 | `"tabpfn-v3"` | ~200 MB per task | non-commercial | Row and column chunking for larger tables. Six specialised variants (binary, multiclass, OOD, medium data, time series). Weights: [Prior-Labs/tabpfn_3](https://huggingface.co/Prior-Labs/tabpfn_3). |
+| TabPFN v3.5 | `"tabpfn-v3.5"` | 876 MB, both tasks | non-commercial | Newest. One checkpoint for both tasks. Handles free-text and date columns natively. Also a 334 MB `"tabpfn-v3.5-fast"` and a multiclass variant. Weights: [Prior-Labs/tabpfn_3_5](https://huggingface.co/Prior-Labs/tabpfn_3_5). |
+| TabICL v2 | `"tabicl"` | ~110 MB per task | BSD-3-Clause | Regression returns a full quantile grid. **Not recommended for imputation.** Weights: [jingang/TabICL](https://huggingface.co/jingang/TabICL). |
+| TabFM 1.0 | `"tabfm-1.0.0"` | ~6.6 GB per task | non-commercial | Large (1.6 B parameters) and slow on CPU. Regression is point prediction only. Weights: [google/tabfm-1.0.0-pytorch](https://huggingface.co/google/tabfm-1.0.0-pytorch). |
+| Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | Permissive licence. 72 M parameters. Regression is point prediction only. Weights: [autogluon/mitra-classifier](https://huggingface.co/autogluon/mitra-classifier), [autogluon/mitra-regressor](https://huggingface.co/autogluon/mitra-regressor). |
+| Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | Permissive licence. NVIDIA's model in three sizes; `"kumo-tabular"` is large, which is slow on CPU. Handles `NA` natively. Regression returns a full quantile grid. 8-member ensemble by default. Weights: [nvidia/Kumo-Tabular](https://huggingface.co/nvidia/Kumo-Tabular) (`v1.0.1`). |
 
 All the models are inference-only. Each one reproduces its Python
 reference's own preprocessing and ensembling, and gets the same predictions
