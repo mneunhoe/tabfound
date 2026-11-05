@@ -53,8 +53,8 @@ character column counts as text rather than categorical.}
 
 \item{text_n_components}{Features each text column becomes, at most.}
 
-\item{...}{Backend-specific arguments, e.g. \code{ensemble_configs_dir} or
-\code{softmax_temperature}.}
+\item{...}{Backend-specific arguments, e.g. \code{ensemble_configs} (or
+\code{ensemble_configs_dir}), \code{member_weights} or \code{softmax_temperature}.}
 }
 \value{
 An unfitted object of class \code{tabfound_regressor}.

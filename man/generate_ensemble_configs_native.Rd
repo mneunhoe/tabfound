@@ -12,8 +12,9 @@ generate_ensemble_configs_native(
   categorical_features = NULL,
   variant = c("v2.5", "v2.6"),
   random_state = 0L,
-  output_dir,
-  add_target_transform = TRUE
+  output_dir = NULL,
+  add_target_transform = TRUE,
+  presets = NULL
 )
 }
 \arguments{
@@ -39,14 +40,22 @@ off-distribution ensemble, so match it to the weights.}
 
 \item{random_state}{Integer seed. Default 0.}
 
-\item{output_dir}{Directory to write configs to (created if missing).}
+\item{output_dir}{Directory to write configs to (created if missing),
+for \verb{ensemble_configs_dir =}. \code{NULL} (the default) writes nothing
+and returns the configs instead, for \verb{ensemble_configs =}.}
 
 \item{add_target_transform}{Regressor only, and ignored for \code{"v2.6"}.
 If \code{TRUE} (default), every second v2.5 member includes a
 Yeo-Johnson target transform with MLE-fitted lambda.}
+
+\item{presets}{The member menu to cycle through, \code{NULL} for the
+checkpoint's own (see \code{\link[=native_ensemble_presets]{native_ensemble_presets()}}). A custom menu
+produces members the checkpoint was not tuned on: valid, but no
+longer the reference's ensemble.}
 }
 \value{
-\code{output_dir}, invisibly.
+\code{output_dir}, invisibly; or, with \code{output_dir = NULL}, the
+list of member configs.
 }
 \description{
 Produces configs in the same directory layout as
@@ -78,6 +87,12 @@ out the wrong length as the pipeline grows.
 }
 \examples{
 \dontrun{
+cfg <- generate_ensemble_configs_native(X, y, n_estimators = 4,
+                                        head = "classifier",
+                                        variant = "v2.6")
+clf <- tabular_classifier("tabpfn-v2.6-classifier", ensemble_configs = cfg)
+
+# Or on disk, for a directory to keep or share:
 d <- tempfile()
 generate_ensemble_configs_native(X, y, n_estimators = 4,
                                  head = "classifier", variant = "v2.6",

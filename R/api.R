@@ -96,8 +96,8 @@
 #' @param min_cardinality_for_text Distinct-value count above which a
 #'   character column counts as text rather than categorical.
 #' @param text_n_components Features each text column becomes, at most.
-#' @param ... Backend-specific arguments, e.g. `ensemble_configs_dir` or
-#'   `softmax_temperature`.
+#' @param ... Backend-specific arguments, e.g. `ensemble_configs` (or
+#'   `ensemble_configs_dir`), `member_weights` or `softmax_temperature`.
 #' @return An unfitted object of class `tabfound_classifier`. Fit it with
 #'   [fit()], which returns a fitted copy.
 #' @examples
@@ -685,6 +685,64 @@ predict_quantiles.tabfound_fit <- function(object, newdata,
                     not a {.val {object$mode}} one.")
   }
   predict(object, newdata, type = "quantiles", quantiles = quantiles, ...)
+}
+
+#' Per-member ensemble predictions
+#'
+#' The pieces an ensemble prediction is assembled from, before they are
+#' combined: one entry per member, in the order of the model's
+#' `ensemble_configs`. This is the hook for anything that reweights,
+#' selects or recalibrates an ensemble after the fact -- each member is
+#' run once, and every combination of them is then arithmetic on what
+#' this returns.
+#'
+#' * For a classifier, `$logits` holds each member's raw logits,
+#'   `(n_new, n_classes)`, *before* the softmax temperature and with the
+#'   member's class permutation undone. The model's own prediction is the
+#'   (weighted) mean of `softmax(logits / softmax_temperature)`.
+#' * For a regressor, `$probs` holds each member's bucket probabilities,
+#'   `(n_new, n_bins)`, after the temperature and translated onto the
+#'   shared grid whose raw-scale borders are `$borders`. The model's own
+#'   prediction takes the log of their (weighted) mean as logits for
+#'   [bar_logits_to_mean()] and [bar_logits_to_quantiles()].
+#'
+#' Supported by the TabPFN backends (v2.5 to v3.5), and only for a model
+#' built with an ensemble (`ensemble_configs` or `ensemble_configs_dir`).
+#'
+#' @param object A fitted `tabfound_model`.
+#' @param newdata Test features, as for `predict()`.
+#' @param ... Unused.
+#' @return A list: `$logits` (classifier) or `$probs` and `$borders`
+#'   (regressor), plus `$softmax_temperature` and `$member_weights` (the
+#'   normalised weights the model itself combines with, `NULL` for
+#'   uniform).
+#' @examples
+#' \dontrun{
+#' cfg <- generate_ensemble_configs_native(X, y, n_estimators = 8,
+#'                                         variant = "v2.6")
+#' clf <- fit(tabular_classifier("tabpfn-v2.6-classifier",
+#'                               ensemble_configs = cfg), X, y)
+#' m <- predict_members(clf, X_new)
+#' p <- Reduce(`+`, lapply(m$logits, function(l) {
+#'   e <- exp(l / m$softmax_temperature); e / rowSums(e)
+#' })) / length(m$logits)                 # == predict(clf, X_new, type = "prob")
+#' }
+#' @export
+predict_members <- function(object, newdata, ...) UseMethod("predict_members")
+
+#' @export
+predict_members.tabfound_model <- function(object, newdata, ...) {
+  .require_fitted(object)
+  if (is.null(object$spec$predict_members)) {
+    cli::cli_abort("The {.val {object$backend}} backend has no \\
+                    per-member predictions.")
+  }
+  newdata <- .prepare_newdata(object, newdata)
+  out <- object$spec$predict_members(object$state, newdata)
+  if (!is.null(out$member_weights)) {
+    out$member_weights <- out$member_weights / sum(out$member_weights)
+  }
+  out
 }
 
 
