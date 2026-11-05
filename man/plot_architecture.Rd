@@ -66,7 +66,15 @@ unless \code{theme} is given.}
 \code{"schematic"}, the phase colours of \code{"tufte"} (as shades of it), the
 attention colour of \code{"cards"} and \code{"icicle"}, and attention across
 rows in \code{"glyphs"}. Where it is drawn as text, or must stand out from
-a fill, it is darkened or lightened just enough to stay readable.}
+a fill, it is darkened or lightened just enough to stay readable.
+Up to four colours can be given, and any left out keep the style's
+own. \code{"cards"} and \code{"icicle"} use them for attention, embeddings,
+feed-forward layers and the decoder, in that order. \code{"glyphs"} uses
+them for attention across rows, attention across columns or
+features, inducing points, and the prediction. \code{"tufte"} uses them as
+its phase colours in stage order, blended between when there are
+more phases than colours. \code{"schematic"} has one accent and uses the
+first, so one vector can be passed to every style.}
 }
 \value{
 Invisibly: the output path when \code{file} is given, otherwise the
@@ -169,6 +177,9 @@ plot_architecture(clf, "tabpfn-schematic.svg", style = "schematic")
 # House colours.
 plot_architecture(clf, "tabpfn-brand.svg", style = "schematic",
                   background = "#f4f1ea", highlight = "#1f4e79")
+# One colour per highlight in the glyphs.
+plot_architecture(clf, "tabpfn-glyphs-viridis.svg", style = "glyphs",
+                  highlight = grDevices::hcl.colors(4, "viridis"))
 }
 }
 \seealso{

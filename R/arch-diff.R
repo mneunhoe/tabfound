@@ -24,22 +24,24 @@ arch_diff_theme <- function(theme = c("light", "dark")) {
   }
 }
 
-# The theme with your own colours: the highlight is model A. The card
-# fills follow their model's colour onto the new background, and every
-# text colour keeps 4.5:1 on the surface and on both fills.
+# The theme with your own colours: the highlights, in order, are model
+# A, model B and what differs. The card fills follow their model's
+# colour onto the new background, and every text colour keeps 4.5:1 on
+# the surface and on both fills.
 # @keywords internal
 arch_diff_colours <- function(th, colours) {
   if (is.null(colours$background) && is.null(colours$highlight)) return(th)
   hues <- c("a", "b", "diff", "same", "a_bg", "b_bg")
   th <- arch_adapt_theme(th, colours$background, keep = hues)
-  if (!is.null(colours$highlight)) {
+  hl <- colours$highlight
+  if (length(hl) == 1L) {
     # Model B must stay apart from A: it takes whichever of the theme's
     # two model colours is further round the colour wheel from yours.
     candidates <- c(th$b, th$a)
-    th$a <- colours$highlight
     th$b <- candidates[[which.max(vapply(candidates, arch_hue_distance,
-                                         numeric(1), th$a))]]
+                                         numeric(1), hl))]]
   }
+  th[c("a", "b", "diff")[seq_along(hl)]] <- as.list(hl)
   w <- if (identical(th$name, "dark")) 0.2 else 0.1
   th$a_bg <- arch_mix(th$a, th$surface, w)
   th$b_bg <- arch_mix(th$b, th$surface, w)
@@ -333,8 +335,10 @@ arch_as_arch <- function(x, arg) {
 #'   [tabular_regressor()], a [tabfound()] fit, or a `tabfound_arch` from
 #'   [tabfound_architecture()], in any mix. `a` is drawn on the left.
 #' @inheritParams plot_architecture
-#' @param highlight A colour for model A, which is teal by default.
-#'   Model B takes amber or teal, whichever is further from it.
+#' @param highlight Up to three colours, in this order: model A (teal by
+#'   default), model B (amber) and what differs (red). Given one, model B
+#'   takes amber or teal, whichever is further from it. Matched stages
+#'   and shared facts stay grey.
 #' @return Invisibly: the output path when `file` is given, otherwise a
 #'   list of the two `tabfound_arch` objects that were drawn.
 #' @examples
@@ -342,6 +346,9 @@ arch_as_arch <- function(x, arg) {
 #' icl <- tabular_classifier("tabicl-v2-classifier")
 #' pfn <- tabular_classifier("tabpfn-v3-classifier")
 #' plot_architecture_diff(icl, pfn, "tabicl-vs-tabpfn3.svg")
+#' plot_architecture_diff(icl, pfn, "tabicl-vs-tabpfn3-viridis.svg",
+#'                        background = "white",
+#'                        highlight = grDevices::hcl.colors(3, "viridis"))
 #' }
 #' @seealso [plot_architecture()] to draw one model.
 #' @export
@@ -349,7 +356,7 @@ plot_architecture_diff <- function(a, b, file = NULL, format = NULL,
                                    theme = c("light", "dark"), scale = 1,
                                    background = NULL, highlight = NULL) {
   background <- arch_colour(background, "background")
-  highlight <- arch_colour(highlight, "highlight")
+  highlight <- arch_colour(highlight, "highlight", n = 3L)
   theme <- if (missing(theme) && !is.null(background)) arch_theme_for(background)
            else match.arg(theme)
   A <- arch_as_arch(a, "a")

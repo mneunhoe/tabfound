@@ -106,17 +106,18 @@ arch_stage_height <- function(s, detail, g) {
 }
 
 # The theme with your own colours: the background carries the neutrals
-# with it; the highlight is the attention colour. On another background
-# every hue is kept at 3:1, so no kind of card fades into it.
+# with it; the highlights, in order, are the attention, embedding,
+# feed-forward and decoder colours. On another background every hue is
+# kept at 3:1, so no kind of card fades into it.
 # @keywords internal
 arch_cards_colours <- function(th, colours) {
   if (!is.null(colours$background)) {
     th <- arch_adapt_theme(th, colours$background)
     th$hue <- vapply(th$hue, arch_readable, character(1), th$surface, 3)
   }
-  if (!is.null(colours$highlight)) {
-    th$hue[["attention"]] <- arch_readable(colours$highlight, th$surface, 3)
-  }
+  hl <- colours$highlight
+  th$hue[ARCH_HIGHLIGHT_KINDS[seq_along(hl)]] <-
+    vapply(hl, arch_readable, character(1), th$surface, 3, USE.NAMES = FALSE)
   th
 }
 

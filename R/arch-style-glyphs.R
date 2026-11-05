@@ -33,14 +33,17 @@ arch_glyphs_theme <- function(theme = c("light", "dark")) {
   }
 }
 
-# The theme with your own colours: the highlight is attention across
-# rows. Each highlight keeps 3:1 against both cell fills and the
-# background, as the theme's own do.
+# The theme with your own colours: the highlights, in order, are
+# attention across rows, attention across columns or features, inducing
+# points and the prediction; any not given keep the theme's own. Each
+# keeps 3:1 against both cell fills and the background, as the theme's
+# own do.
 # @keywords internal
 arch_glyphs_colours <- function(th, colours) {
   hues <- c("rows", "cols", "induce", "out", "embed")
   th <- arch_adapt_theme(th, colours$background, keep = hues)
-  if (!is.null(colours$highlight)) th$rows <- colours$highlight
+  hl <- colours$highlight
+  th[hues[seq_along(hl)]] <- as.list(hl)
   if (!is.null(colours$background) || !is.null(colours$highlight)) {
     for (h in hues) {
       th[[h]] <- arch_readable(th[[h]], c(th$train, th$test, th$surface), 3)

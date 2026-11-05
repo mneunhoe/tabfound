@@ -1080,6 +1080,92 @@ test_that("a dark background picks the dark theme unless told otherwise", {
   expect_identical(arch_colour("navy", "x"), "#000080")
   expect_error(plot_architecture(arch, f, background = "not a colour"),
                "must be one colour")
-  expect_error(plot_architecture_diff(arch, arch, f, highlight = c("red", "blue")),
-               "must be one colour")
+  expect_error(plot_architecture_diff(arch, arch, f, highlight = rep("red", 4)),
+               "must be one to 3 colours")
+  expect_error(plot_architecture(arch, f, highlight = rep("red", 5)),
+               "must be one to 4 colours")
+})
+
+test_that("the diff takes one highlight per model and one for what differs", {
+  hl <- c("#440154", "#21908c", "#8f7a00")
+  near <- function(a, b) arch_hue_distance(a, b) < 0.03
+  th <- arch_diff_colours(arch_diff_theme(),
+                          list(background = "#ffffff", highlight = hl))
+  for (i in seq_along(hl)) {
+    h <- c("a", "b", "diff")[i]
+    expect_true(near(th[[h]], hl[i]), label = h)
+  }
+  # B given, it is used as given rather than picked to stand apart.
+  th2 <- arch_diff_colours(arch_diff_theme(), list(highlight = hl[1:2]))
+  expect_true(near(th2$b, hl[2]))
+  expect_identical(th2$diff, arch_diff_colours(arch_diff_theme(),
+                                               list(highlight = hl[1]))$diff)
+  # What matches stays grey, darkened only to read on the new fills.
+  expect_lt(grDevices::rgb2hsv(grDevices::col2rgb(th$same))["s", 1], 0.1)
+  f <- file.path(withr::local_tempdir(), "d.svg")
+  arch <- arch_test_arch("tabicl")
+  expect_no_error(suppressMessages(
+    plot_architecture_diff(arch, arch_test_arch("mitra"), f, highlight = hl)))
+})
+
+test_that("the glyphs take one highlight per thing they pick out", {
+  arch <- arch_test_arch("kumo")
+  hl <- c("#440154", "#31688e", "#35b779", "#8f7a00")
+  near <- function(a, b) arch_hue_distance(a, b) < 0.03
+  th <- arch_glyphs_colours(arch_glyphs_theme(),
+                            list(background = "#ffffff", highlight = hl))
+  for (i in seq_along(hl)) {
+    h <- c("rows", "cols", "induce", "out")[i]
+    expect_true(near(th[[h]], hl[i]), label = h)
+  }
+  # Fewer than four leave the rest as the theme has them.
+  th2 <- arch_glyphs_colours(arch_glyphs_theme(), list(highlight = hl[1:2]))
+  expect_identical(th2$induce, arch_glyphs_colours(arch_glyphs_theme(),
+                                                   list(highlight = hl[1]))$induce)
+  expect_true(near(th2$cols, hl[2]))
+  # Tufte takes them as its phase colours, in stage order, and blends
+  # between them when there are more phases than colours.
+  surf <- arch_adapt_theme(arch_tufte_theme(), "#ffffff")
+  cols <- arch_tufte_phase_colours(3, surf, list(background = "#ffffff",
+                                                 highlight = hl))
+  for (i in 1:3) expect_true(near(cols[i], hl[i]), label = paste("phase", i))
+  more <- arch_tufte_phase_colours(6, surf, list(highlight = hl[1:2]))
+  expect_length(unique(more), 6)
+  expect_true(near(more[1], hl[1]))
+  expect_true(near(more[6], hl[2]))
+  # Colours you choose need not run dark to light, so the key says less.
+  tufte_text <- function(sc) paste(vapply(
+    Filter(function(e) e$type == "text", sc$items), `[[`, character(1), "text"),
+    collapse = "\n")
+  expect_match(tufte_text(arch_scene(arch, style = "tufte", highlight = hl)),
+               "one colour each in stage order")
+  expect_match(tufte_text(arch_scene(arch, style = "tufte")),
+               "from first (dark) to last (light)", fixed = TRUE)
+  # The schematic has one accent and draws the first, as if given alone.
+  expect_identical(arch_scene(arch, style = "schematic", highlight = hl),
+                   arch_scene(arch, style = "schematic", highlight = hl[1]))
+})
+
+test_that("cards and icicle take one highlight per coloured kind", {
+  arch <- arch_test_arch("tabicl")
+  hl <- c("#440154", "#31688e", "#35b779", "#8f7a00")
+  near <- function(a, b) arch_hue_distance(a, b) < 0.03
+  th <- arch_cards_colours(arch_theme(), list(background = "#ffffff",
+                                              highlight = hl))
+  ice <- arch_scene(arch, style = "icicle", highlight = hl)
+  fills <- vapply(Filter(function(e) e$type == "rect", ice$items),
+                  function(e) e$fill %||% NA_character_, character(1))
+  for (i in seq_along(hl)) {
+    k <- ARCH_HIGHLIGHT_KINDS[i]
+    expect_true(near(th$hue[[k]], hl[i]), label = paste("cards", k))
+    expect_gte(arch_contrast(th$hue[[k]], th$surface), 3)
+  }
+  # TabICL has attention, embedding and feed-forward blocks to colour.
+  expect_true(all(hl[1:3] %in% fills))
+  # Fewer leave the rest as the theme has them.
+  th1 <- arch_cards_colours(arch_theme(), list(highlight = hl[1]))
+  expect_identical(th1$hue[["embed"]], arch_theme()$hue[["embed"]])
+  # The neutral kinds stay neutral.
+  expect_identical(th$hue[["norm"]], arch_cards_colours(
+    arch_theme(), list(background = "#ffffff"))$hue[["norm"]])
 })
