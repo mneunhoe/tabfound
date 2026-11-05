@@ -84,8 +84,11 @@ arch_icicle_sublayers <- function(s, th) {
 # and `show_params` do not apply.
 # @keywords internal
 arch_scene_icicle <- function(arch, detail, theme, show_shapes, show_params,
-                              show_facts) {
-  th <- arch_icicle_theme(theme)
+                              show_facts, colours = list()) {
+  # Label text picks dark or light per fill, so any highlight stays
+  # readable on its own blocks.
+  th <- arch_adapt_theme(arch_icicle_theme(theme), colours$background)
+  if (!is.null(colours$highlight)) th$kind[["attention"]] <- colours$highlight
   g  <- arch_icicle_geom()
   W  <- g$width
   x0 <- g$pad + g$gutter

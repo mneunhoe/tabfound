@@ -49,6 +49,24 @@ arch_tufte_geom <- function() {
   )
 }
 
+# The phase colours: viridis in stage order, or, with a highlight, shades
+# of it from full strength to light. Either way each keeps 3:1 against
+# the background, which a viridis slice chosen for the theme's own
+# surface might not on another.
+# @keywords internal
+arch_tufte_phase_colours <- function(k, th, colours) {
+  if (!k) return(character())
+  cols <- if (is.null(colours$highlight)) {
+    arch_viridis(k, th$viridis[1], th$viridis[2])
+  } else {
+    w <- if (k == 1L) 1 else seq(1, 0.45, length.out = k)
+    vapply(w, function(x) arch_mix(colours$highlight, th$surface, x),
+           character(1))
+  }
+  if (is.null(colours$background) && is.null(colours$highlight)) return(cols)
+  vapply(cols, arch_readable, character(1), th$surface, 3, USE.NAMES = FALSE)
+}
+
 # @keywords internal
 arch_tufte_tags <- function(s) {
   tags <- c(arch_repeat_tag(s),
@@ -59,8 +77,8 @@ arch_tufte_tags <- function(s) {
 # The tufte scene builder, registered in `arch_styles()`.
 # @keywords internal
 arch_scene_tufte <- function(arch, detail, theme, show_shapes, show_params,
-                             show_facts) {
-  th <- arch_tufte_theme(theme)
+                             show_facts, colours = list()) {
+  th <- arch_adapt_theme(arch_tufte_theme(theme), colours$background)
   g  <- arch_tufte_geom()
   serif <- "serif"
 
@@ -88,7 +106,7 @@ arch_scene_tufte <- function(arch, detail, theme, show_shapes, show_params,
 
   groups <- unique(unlist(lapply(arch$stages, `[[`, "group")))
   phase_col <- stats::setNames(
-    arch_viridis(length(groups), th$viridis[1], th$viridis[2]), groups)
+    arch_tufte_phase_colours(length(groups), th, colours), groups)
   col_of <- function(s) if (is.null(s$group)) th$ink3 else phase_col[[s$group]]
 
   it <- list()

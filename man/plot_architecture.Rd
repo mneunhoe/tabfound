@@ -14,7 +14,9 @@ plot_architecture(
   scale = 1,
   show_shapes = TRUE,
   show_params = TRUE,
-  show_facts = TRUE
+  show_facts = TRUE,
+  background = NULL,
+  highlight = NULL
 )
 }
 \arguments{
@@ -52,6 +54,19 @@ plot and its axis.}
 
 \item{show_facts}{Draw the fact sheet under the diagram. The key is
 drawn either way.}
+
+\item{background}{A colour for the background, to match a house style
+or a slide template: a name such as \code{"navy"} or a hex code. The
+style's greys, rules and panels are re-made as shades of it, each as
+far from it as it was from the theme's own background, so the
+diagram reads the same. A dark background picks \code{theme = "dark"}
+unless \code{theme} is given.}
+
+\item{highlight}{A colour for what the style picks out: the accent of
+\code{"schematic"}, the phase colours of \code{"tufte"} (as shades of it), the
+attention colour of \code{"cards"} and \code{"icicle"}, and attention across
+rows in \code{"glyphs"}. Where it is drawn as text, or must stand out from
+a fill, it is darkened or lightened just enough to stay readable.}
 }
 \value{
 Invisibly: the output path when \code{file} is given, otherwise the
@@ -151,6 +166,9 @@ plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
 plot_architecture(clf, "tabpfn-glyphs.svg", style = "glyphs")
 plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 plot_architecture(clf, "tabpfn-schematic.svg", style = "schematic")
+# House colours.
+plot_architecture(clf, "tabpfn-brand.svg", style = "schematic",
+                  background = "#f4f1ea", highlight = "#1f4e79")
 }
 }
 \seealso{

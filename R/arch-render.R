@@ -327,6 +327,17 @@ arch_format_from_file <- function(file) {
 #'   plot and its axis.
 #' @param show_facts Draw the fact sheet under the diagram. The key is
 #'   drawn either way.
+#' @param background A colour for the background, to match a house style
+#'   or a slide template: a name such as `"navy"` or a hex code. The
+#'   style's greys, rules and panels are re-made as shades of it, each as
+#'   far from it as it was from the theme's own background, so the
+#'   diagram reads the same. A dark background picks `theme = "dark"`
+#'   unless `theme` is given.
+#' @param highlight A colour for what the style picks out: the accent of
+#'   `"schematic"`, the phase colours of `"tufte"` (as shades of it), the
+#'   attention colour of `"cards"` and `"icicle"`, and attention across
+#'   rows in `"glyphs"`. Where it is drawn as text, or must stand out from
+#'   a fill, it is darkened or lightened just enough to stay readable.
 #' @return Invisibly: the output path when `file` is given, otherwise the
 #'   `tabfound_arch` that was drawn.
 #' @examples
@@ -340,6 +351,9 @@ arch_format_from_file <- function(file) {
 #' plot_architecture(clf, "tabpfn-glyphs.svg", style = "glyphs")
 #' plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 #' plot_architecture(clf, "tabpfn-schematic.svg", style = "schematic")
+#' # House colours.
+#' plot_architecture(clf, "tabpfn-brand.svg", style = "schematic",
+#'                   background = "#f4f1ea", highlight = "#1f4e79")
 #' }
 #' @seealso [tabfound_architecture()] for the description behind the
 #'   picture; [plot_architecture_diff()] to compare two models.
@@ -349,16 +363,23 @@ plot_architecture <- function(object, file = NULL, format = NULL,
                               detail = c("overview", "full"),
                               theme = c("light", "dark"), scale = 1,
                               show_shapes = TRUE, show_params = TRUE,
-                              show_facts = TRUE) {
+                              show_facts = TRUE, background = NULL,
+                              highlight = NULL) {
   style  <- arch_match_style(style)
   detail <- match.arg(detail)
-  theme  <- match.arg(theme)
+  background <- arch_colour(background, "background")
+  highlight <- arch_colour(highlight, "highlight")
+  # A background of your own picks the theme that suits it, unless you
+  # say otherwise.
+  theme  <- if (missing(theme) && !is.null(background)) arch_theme_for(background)
+            else match.arg(theme)
   arch <- if (inherits(object, "tabfound_arch")) object
           else tabfound_architecture(object)
 
   scene <- arch_scene(arch, style = style, detail = detail, theme = theme,
                       show_shapes = show_shapes, show_params = show_params,
-                      show_facts = show_facts)
+                      show_facts = show_facts, background = background,
+                      highlight = highlight)
   out <- arch_write_scene(scene, file, format, scale)
   invisible(out %||% arch)
 }

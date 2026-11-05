@@ -11,7 +11,9 @@ arch_scene(
   theme = c("light", "dark"),
   show_shapes = TRUE,
   show_params = TRUE,
-  show_facts = TRUE
+  show_facts = TRUE,
+  background = NULL,
+  highlight = NULL
 )
 }
 \arguments{
@@ -26,6 +28,9 @@ arch_scene(
 \item{show_shapes, show_params}{Draw the right-margin annotations.}
 
 \item{show_facts}{Draw the fact sheet at the foot of the diagram.}
+
+\item{background, highlight}{Colours replacing the theme's background
+and the style's highlight; see \code{\link[=plot_architecture]{plot_architecture()}}.}
 }
 \value{
 A list with \code{width}, \code{height}, \code{bg} and \code{items}.

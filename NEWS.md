@@ -17,6 +17,15 @@
     against the network's parameter count.
   * `vignette("architecture-gallery")` shows TabICL in every style, and
     the schematic for four models that each show something different.
+  * `plot_architecture()` and `plot_architecture_diff()` take
+    `background =` and `highlight =`, to match a house style or a slide
+    template. The background carries the style's greys, rules and panels
+    with it, each kept as far from it as it was from the theme's own, and
+    a dark background picks the dark theme. The highlight replaces what
+    the style picks out -- the schematic's accent, tufte's phase colours,
+    the attention colour in cards and icicle, row attention in glyphs,
+    model A in the diff -- adjusted only as far as it must be to stay
+    readable.
   * New `plot_architecture_diff()` draws two models side by side, pairing
     their stages by kind and attention axis and their facts by name. It
     takes models, fits or `tabfound_arch` objects in any mix.

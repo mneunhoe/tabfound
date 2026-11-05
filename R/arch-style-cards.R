@@ -105,12 +105,27 @@ arch_stage_height <- function(s, detail, g) {
   base + if (s$repeats > 1L) 2 * g$deck else 0
 }
 
+# The theme with your own colours: the background carries the neutrals
+# with it; the highlight is the attention colour. On another background
+# every hue is kept at 3:1, so no kind of card fades into it.
+# @keywords internal
+arch_cards_colours <- function(th, colours) {
+  if (!is.null(colours$background)) {
+    th <- arch_adapt_theme(th, colours$background)
+    th$hue <- vapply(th$hue, arch_readable, character(1), th$surface, 3)
+  }
+  if (!is.null(colours$highlight)) {
+    th$hue[["attention"]] <- arch_readable(colours$highlight, th$surface, 3)
+  }
+  th
+}
+
 # The cards scene builder, registered in `arch_styles()`. `detail` and
 # `theme` arrive already matched.
 # @keywords internal
 arch_scene_cards <- function(arch, detail, theme, show_shapes, show_params,
-                             show_facts) {
-  th <- arch_theme(theme)
+                             show_facts, colours = list()) {
+  th <- arch_cards_colours(arch_theme(theme), colours)
   g  <- arch_geom()
 
   W  <- arch_canvas_width(g)
