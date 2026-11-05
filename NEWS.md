@@ -39,6 +39,12 @@
     figure shared on its own still reads. It replaces the fact sheet's
     symbol line, which was cut off at the panel's width. SVG output also
     carries the title and the key as `<title>` and `<desc>`.
+  * Labels no longer collide or get cut off. A key's terms and the
+    schematic's callout names are measured letter by letter, so a wide
+    one such as "RMSNorm" or "Embedding heads" no longer runs into what
+    follows it. A callout value too long for its line wraps under
+    itself, and the stage descriptions in glyphs and tufte are drawn in
+    full instead of being cut at two or three lines.
 * Architecture descriptions (`tabfound_architecture()`) are checked
   against each network's forward pass:
   * Corrections. Kumo Tabular's column and row blocks alternate, one of

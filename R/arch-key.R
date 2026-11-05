@@ -185,7 +185,7 @@ arch_key_items <- function(groups, x, y, w, th, family = "sans",
       terms <- names(g$items)
       mono <- isTRUE(g$mono)
       term_family <- if (mono) "mono" else family
-      term_w <- max(vapply(terms, arch_text_width, numeric(1), size = size,
+      term_w <- max(vapply(terms, arch_label_width, numeric(1), size = size,
                            bold = !mono, family = term_family)) + 14
       rows <- ceiling(n / ncol)
       wrapped <- lapply(unname(g$items), arch_wrap_text,
