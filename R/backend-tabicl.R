@@ -1090,7 +1090,7 @@ tabicl_describe <- function(config, task) {
     arch_stage(
       "col_tf", "Column set transformer", kind = "attention",
       group = "Stage 1 - per column", repeats = n_col, axis = "rows",
-      detail = sprintf("induced self-attention, %d inducing points drawn from the labelled rows only; %d heads",
+      detail = sprintf("induced self-attention: %d learned inducing points attend to the labelled rows only; %d heads",
                        n_ind, h_col),
       shape = "(B, n, F, E)", prefix = "col_embedder.tf_col",
       children = list(
@@ -1127,7 +1127,7 @@ tabicl_describe <- function(config, task) {
       "icl_y", "Target encoder (per row)", kind = "embed",
       group = "Stage 3 - in-context",
       detail = sprintf("added on the labelled rows at the flattened width %d", D),
-      prefix = c("icl_predictor.y_encoder", "icl_predictor.ln")),
+      prefix = "icl_predictor.y_encoder"),
     arch_stage(
       "icl", "In-context learning block", kind = "attention",
       group = "Stage 3 - in-context", repeats = n_icl, axis = "rows",
@@ -1148,8 +1148,9 @@ tabicl_describe <- function(config, task) {
       )),
     arch_stage(
       "dec", "Decoder MLP", kind = "decode", group = "Decode",
-      detail = sprintf("%d -> %d -> %d, GELU", D, D * 2L, n_out),
-      shape = sprintf("(n_test, %d)", n_out), prefix = "icl_predictor.decoder"),
+      detail = sprintf("LayerNorm, then %d -> %d -> %d, GELU", D, D * 2L, n_out),
+      shape = sprintf("(n_test, %d)", n_out),
+      prefix = c("icl_predictor.ln", "icl_predictor.decoder")),
     if (clf)
       arch_output_stage("Class logits",
                         detail = sprintf("%d slots; softmax over the classes seen", n_out))
