@@ -263,7 +263,7 @@ are evaluated by simulation instead (see above).
 - `vignette("advanced")`: ensembles, the matrix interface, reproducing the
   Python reference exactly, and known limitations per model
 - `vignette("architecture-gallery")`: diagrams of every architecture in
-  four styles, side-by-side comparisons of two models, and how to add a
+  five styles, side-by-side comparisons of two models, and how to add a
   new model
 
 ## Citation
