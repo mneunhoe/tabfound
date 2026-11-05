@@ -73,15 +73,33 @@ ARCH_AXES <- c("features", "columns", "rows", "cells", "inducing", "classes")
 #'   `"final"` for a step that runs once after the whole stack rather
 #'   than in every block, such as a stack's output norm.
 #' @param feeds For `role = "input"`: the id of the step child it feeds.
+#' @param join For a stage whose output joins the main stream rather than
+#'   transforming it: `"add"` (added to it, as a target encoder is),
+#'   `"concat"` (joined as an extra column) or `"prepend"` (learned rows or
+#'   columns put in front, as CLS tokens are).
+#' @param join_rows With `join`: the rows it applies to, when not all of
+#'   them -- `"training rows"` or `"context rows"`.
+#' @param attn For an attention child: an [arch_attn()] saying which rows
+#'   supply its keys and how it differs from plain attention.
 #' @return A `tabfound_arch_stage`.
 #' @keywords internal
 arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
                        shape = NULL, group = NULL, repeats = 1L,
                        prefix = character(), children = list(),
                        collapses = FALSE, interleave = NULL,
-                       role = c("step", "input", "final"), feeds = NULL) {
+                       role = c("step", "input", "final"), feeds = NULL,
+                       join = NULL, join_rows = NULL, attn = NULL) {
   kind <- match.arg(kind, names(ARCH_KINDS))
   role <- match.arg(role)
+  if (!is.null(join)) join <- match.arg(join, c("add", "concat", "prepend"))
+  if (!is.null(join_rows)) {
+    if (is.null(join)) cli::cli_abort("{.arg join_rows} needs {.arg join}.")
+    join_rows <- match.arg(join_rows, c("training rows", "context rows"))
+  }
+  if (!is.null(attn) && !(identical(kind, "attention") && inherits(attn, "arch_attn"))) {
+    cli::cli_abort("{.arg attn} is an {.fn arch_attn} on an attention child.")
+  }
+  children <- arch_flatten_residuals(children)
   if (identical(role, "input") != !is.null(feeds)) {
     cli::cli_abort("{.arg feeds} goes with {.code role = \"input\"}, and only with it.")
   }
@@ -91,7 +109,8 @@ arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
          shape = shape, group = group, repeats = as.integer(repeats),
          prefix = as.character(prefix), children = children,
          collapses = isTRUE(collapses), interleave = interleave,
-         role = role, feeds = feeds, params = NA_real_),
+         role = role, feeds = feeds, join = join, join_rows = join_rows,
+         attn = attn, residual = NA_integer_, params = NA_real_),
     class = "tabfound_arch_stage"
   )
 }
@@ -111,12 +130,156 @@ ARCH_FACT_NAMES <- c(
   "Attention scaling", "Train/test split", "Missing values", "KV cache"
 )
 
+# Where a fact's callout points in a diagram that draws callouts. Each
+# entry is a list of alternative specs, tried in turn; the first stage
+# (and child) matching every field of a spec wins:
+#
+# * `id`, `kind`, `axis`: the stage's own fields;
+# * `repeated`: the stage is stacked more than once;
+# * `shape`: the stage has a shape annotation;
+# * `weights`: the stage owns parameters (an embedding that is a fixed
+#   transform, like an ECDF or quantile ranks, is not where a width is);
+# * `child_id`, `child_kind`: a child of that stage, rather than the stage;
+# * `at`: `"box"` (the stage or child itself) or `"repeat"` (its "N x").
+#
+# Facts not listed here have no single place in a picture -- the
+# normalisation, the KV cache, the preprocessing -- and stay in the fact
+# table.
+ARCH_FACT_ANCHORS <- list(
+  "Layers"              = list(list(repeated = TRUE, at = "repeat")),
+  # The first attention over rows is the column stage, the first over
+  # columns the row stage: both come before the in-context stack.
+  "Column-stage blocks" = list(list(kind = "attention", axis = "rows",
+                                    at = "repeat")),
+  "Row-stage blocks"    = list(list(kind = "attention", axis = "columns",
+                                    at = "repeat")),
+  "ICL layers"          = list(list(id = "icl", at = "repeat")),
+  "Embedding width"     = list(list(kind = "embed", shape = TRUE, weights = TRUE,
+                                    at = "box")),
+  "ICL width"           = list(list(id = "icl", at = "box")),
+  "Attention heads"     = list(list(child_kind = "attention", at = "box")),
+  "ICL heads"           = list(list(id = "icl", child_kind = "attention",
+                                    at = "box")),
+  "Embedding heads"     = list(list(axis = "columns", child_kind = "attention",
+                                    at = "box")),
+  "Query KV heads"      = list(list(id = "icl", child_kind = "attention",
+                                    at = "box")),
+  "Inducing points"     = list(list(child_id = "iv", at = "box")),
+  "Features per group"  = list(list(kind = "embed", shape = TRUE, weights = TRUE,
+                                    at = "box")),
+  "Fourier frequencies" = list(list(kind = "embed", shape = TRUE, weights = TRUE,
+                                    at = "box")),
+  "Feed-forward"        = list(list(id = "icl", child_kind = "ffn", at = "box"),
+                               list(child_kind = "ffn", at = "box")),
+  "Thinking rows"       = list(list(id = "think", at = "box")),
+  "Cell channels"       = list(list(id = "x_embed", at = "box")),
+  "Output width"        = list(list(kind = "output", at = "box"))
+)
+
+# Resolve a fact's anchor in `arch`: a list with `stage`, `child` (or
+# NULL) and `at`, or NULL when the fact has no anchor or none matches.
+# @keywords internal
+arch_fact_anchor <- function(arch, fact) {
+  for (spec in ARCH_FACT_ANCHORS[[fact]] %||% list()) {
+    for (s in arch$stages) {
+      if (!is.null(spec$id) && !identical(s$id, spec$id)) next
+      if (!is.null(spec$kind) && !identical(s$kind, spec$kind)) next
+      if (!is.null(spec$axis) && !identical(s$axis, spec$axis)) next
+      if (isTRUE(spec$repeated) && s$repeats <= 1L) next
+      if (isTRUE(spec$shape) && is.null(s$shape)) next
+      if (isTRUE(spec$weights) && !(length(s$prefix) > 0L)) next
+      child <- NULL
+      if (!is.null(spec$child_id) || !is.null(spec$child_kind)) {
+        hit <- Filter(function(ch)
+          (is.null(spec$child_id) || identical(ch$id, spec$child_id)) &&
+            (is.null(spec$child_kind) || identical(ch$kind, spec$child_kind)),
+          s$children)
+        if (!length(hit)) next
+        child <- hit[[1L]]$id
+      }
+      return(list(stage = s$id, child = child, at = spec$at))
+    }
+  }
+  NULL
+}
+
 # A feed-forward width as a multiple of the width it expands, written the
 # same way everywhere so equal values compare equal: "4 x width (768)".
 # @keywords internal
 arch_ff_fact <- function(hidden, width) {
   ratio <- format(round(hidden / width, 2), trim = TRUE, drop0trailing = TRUE)
   sprintf("%s x width (%d)", ratio, as.integer(hidden))
+}
+
+#' Group the steps one residual connection skips
+#'
+#' Wraps consecutive children of a stage: the block adds what they
+#' compute back onto its input. Norms go inside when they run inside the
+#' connection (pre-norm, sandwich) and outside when they run after the
+#' add (post-norm):
+#'
+#' ```
+#' arch_residual(norm1, attn), arch_residual(norm2, mlp)  # pre-norm
+#' arch_residual(attn), norm1, arch_residual(mlp), norm2  # post-norm
+#' arch_residual(pre, attn, post)                         # sandwich
+#' ```
+#'
+#' @param ... Child [arch_stage()]s, in the order they run.
+#' @return An `arch_residual`, flattened by [arch_stage()] into its
+#'   children, which share a `residual` number.
+#' @keywords internal
+arch_residual <- function(...) {
+  structure(list(children = list(...)), class = "arch_residual")
+}
+
+# Flatten residual groups into the children list, numbering them in
+# order. Children outside any group keep `residual = NA`.
+# @keywords internal
+arch_flatten_residuals <- function(children) {
+  out <- list()
+  unit <- 0L
+  for (ch in children) {
+    if (inherits(ch, "arch_residual")) {
+      unit <- unit + 1L
+      for (k in ch$children) {
+        k$residual <- unit
+        out[[length(out) + 1L]] <- k
+      }
+    } else {
+      out[[length(out) + 1L]] <- ch
+    }
+  }
+  out
+}
+
+#' Describe how an attention step differs from plain attention
+#'
+#' @param keys The rows (or tokens) that supply its keys and values.
+#' @param queries When only some tokens query, in the last block of the
+#'   stack: `"CLS tokens"`, `"readout tokens"` or `"query rows"`.
+#' @param qk_norm Whether queries and keys are normalised per head.
+#' @param scaling How attention logits are scaled.
+#' @param kv_heads_test How many key/value heads the test rows read, when
+#'   fewer than the query heads; `1` is multi-query attention.
+#' @return An `arch_attn`.
+#' @keywords internal
+arch_attn <- function(keys = c("all", "training rows", "context rows",
+                                "support rows", "inducing points"),
+                      queries = NULL, qk_norm = FALSE,
+                      scaling = c("1/sqrt(d)", "scalable softmax",
+                                  "softmax-scaling MLP", "log-n",
+                                  "gated log-n", "learned per-dim"),
+                      kv_heads_test = NULL) {
+  keys <- match.arg(keys)
+  scaling <- match.arg(scaling)
+  if (!is.null(queries)) {
+    queries <- match.arg(queries, c("CLS tokens", "readout tokens", "query rows"))
+  }
+  structure(list(keys = keys, queries = queries, qk_norm = isTRUE(qk_norm),
+                 scaling = scaling,
+                 kv_heads_test = if (is.null(kv_heads_test)) NULL
+                                 else as.integer(kv_heads_test)),
+            class = "arch_attn")
 }
 
 # Convenience: the same stage list every backend starts and ends with.
@@ -415,7 +578,9 @@ ARCH_GLOSSARY <- c(
   KV        = "keys and values (as in KV cache, KV heads)",
   `NaN`     = "not-a-number: undefined values in the input",
   `NA`      = "missing values in the input",
-  ECDF      = "empirical cumulative distribution function"
+  ECDF      = "empirical cumulative distribution function",
+  GQA       = "grouped-query attention: several query heads share one set of keys and values",
+  MQA       = "multi-query attention: every query head shares one set of keys and values"
 )
 
 # Names that look like abbreviations but need no definition: models,

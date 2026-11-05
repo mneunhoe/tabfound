@@ -964,6 +964,7 @@ tabpfn26_describe <- function(config, task) {
     arch_stage(
       "y_embed", "Target embedder", kind = "embed", group = "Embed",
       detail = "Linear(2 -> E); the target rides along as its own column",
+      join = "concat",
       prefix = "target_embedder"),
     arch_stage(
       "pos", "Feature positional embedding", kind = "embed", group = "Embed",
@@ -971,10 +972,12 @@ tabpfn26_describe <- function(config, task) {
       # width of 192), as the network builds it.
       detail = sprintf("subspace: fixed %d-d per column, Linear(%d -> %d)",
                        E %/% 4L, E %/% 4L, E),
+      join = "add",
       prefix = "feature_positional_embedding_embeddings"),
     arch_stage(
       "think", "Thinking rows", kind = "embed", group = "Embed",
       detail = sprintf("%d learned rows prepended to the context", thk),
+      join = "prepend",
       shape = sprintf("(B, %d + n, F + 1, E)", thk),
       prefix = "add_thinking_rows"),
     arch_stage(
@@ -983,19 +986,24 @@ tabpfn26_describe <- function(config, task) {
       detail = sprintf("post-norm RMSNorm; %d heads of %d; MLP %d -> %d",
                        H, as.integer(E / H), E, ff),
       shape = sprintf("(B, %d + n, F + 1, E)", thk), prefix = "blocks",
+      # Post-norm: each norm runs after its residual add, outside it.
       children = list(
-        arch_stage("a_feat", "Attention between features", kind = "attention",
-                   axis = "features",
-                   prefix = paste0(blk, ".per_sample_attention_between_features")),
+        arch_residual(arch_stage(
+          "a_feat", "Attention between features", kind = "attention",
+          axis = "features", attn = arch_attn("all"),
+          prefix = paste0(blk, ".per_sample_attention_between_features"))),
         arch_stage("rms1", "RMSNorm", kind = "norm",
                    prefix = paste0(blk, ".layernorm_mha1")),
-        arch_stage("a_cell", "Attention between cells", kind = "attention",
-                   axis = "cells",
-                   prefix = paste0(blk, ".per_column_attention_between_cells")),
+        # Keys are the context rows (thinking and training); test rows
+        # read the first head's keys and values only.
+        arch_residual(arch_stage(
+          "a_cell", "Attention between cells", kind = "attention",
+          axis = "cells", attn = arch_attn("context rows", kv_heads_test = 1L),
+          prefix = paste0(blk, ".per_column_attention_between_cells"))),
         arch_stage("rms2", "RMSNorm", kind = "norm",
                    prefix = paste0(blk, ".layernorm_mha2")),
-        arch_stage("mlp", "MLP, GELU, no bias", kind = "ffn",
-                   prefix = paste0(blk, ".mlp")),
+        arch_residual(arch_stage("mlp", "MLP, GELU, no bias", kind = "ffn",
+                                 prefix = paste0(blk, ".mlp"))),
         arch_stage("rms3", "RMSNorm", kind = "norm",
                    prefix = paste0(blk, ".layernorm_mlp"))
       )),

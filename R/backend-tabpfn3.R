@@ -1510,6 +1510,97 @@ tabpfn3_detect <- function(config) {
 # Architecture description
 # ---------------------------------------------------------------------------
 
+# The children of TabPFN v3's (and v3.5's) blocks, in the order they run.
+# Every sublayer is pre-norm RMSNorm inside a residual connection. A
+# cross-attention block norms its queries and its keys/values apart.
+# v3.5 differs only in adding QK-norm to every attention.
+# @keywords internal
+tabpfn3_cross_children <- function(pfx, id, label, axis, attn) {
+  p <- function(x) paste0(pfx, ".", x)
+  list(
+    arch_residual(
+      arch_stage(paste0(id, "_nq"), "RMSNorm, queries", kind = "norm",
+                 prefix = p("layernorm_q")),
+      arch_stage(paste0(id, "_nkv"), "RMSNorm, keys and values", kind = "norm",
+                 prefix = p("layernorm_kv")),
+      arch_stage(id, label, kind = "attention", axis = axis, attn = attn,
+                 prefix = p("attn"))
+    ),
+    arch_residual(
+      arch_stage(paste0(id, "_n2"), "RMSNorm", kind = "norm",
+                 prefix = p("layernorm2")),
+      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn", prefix = p("mlp"))
+    )
+  )
+}
+
+# @keywords internal
+tabpfn3_dist_children <- function(qk_norm = FALSE,
+                                  pfx = "feature_distribution_embedder.layers.0") {
+  c(
+    list(arch_stage("iv", "Learned inducing vectors", kind = "embed",
+                    role = "input", feeds = "ind",
+                    prefix = paste0(pfx, ".inducing_vectors"))),
+    # Only the first half carries the softmax-scaling MLP.
+    tabpfn3_cross_children(paste0(pfx, ".cross_attn_block1"), "ind",
+                           "Inducing vectors attend to the training rows",
+                           axis = "rows",
+                           attn = arch_attn("training rows", qk_norm = qk_norm,
+                                            scaling = "softmax-scaling MLP")),
+    tabpfn3_cross_children(paste0(pfx, ".cross_attn_block2"), "back",
+                           "Rows attend back to the inducing vectors",
+                           axis = "inducing",
+                           attn = arch_attn("inducing points", qk_norm = qk_norm))
+  )
+}
+
+# @keywords internal
+tabpfn3_self_children <- function(pfx, id, label, axis, attn,
+                                  attn_module = "attention") {
+  p <- function(x) paste0(pfx, ".", x)
+  list(
+    arch_residual(
+      arch_stage(paste0(id, "_n1"), "RMSNorm", kind = "norm",
+                 prefix = p("layernorm")),
+      arch_stage(id, label, kind = "attention", axis = axis, attn = attn,
+                 prefix = p(attn_module))
+    ),
+    arch_residual(
+      arch_stage(paste0(id, "_n2"), "RMSNorm", kind = "norm",
+                 prefix = p("layernorm_mlp")),
+      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn", prefix = p("mlp"))
+    )
+  )
+}
+
+# @keywords internal
+tabpfn3_agg_children <- function(qk_norm = FALSE) {
+  c(
+    list(
+      arch_stage("rope", "RoPE frequencies (learned)", kind = "embed",
+                 role = "input", feeds = "attn", prefix = "column_aggregator.rope"),
+      arch_stage("cls", "CLS tokens", kind = "embed", role = "input",
+                 feeds = "attn", prefix = "column_aggregator.cls_tokens")
+    ),
+    tabpfn3_self_children("column_aggregator.blocks.0", "attn",
+                          "Attention over a row's columns", axis = "columns",
+                          attn = arch_attn("all", queries = "CLS tokens",
+                                           qk_norm = qk_norm)),
+    list(arch_stage("oln", "RMSNorm, after the stack", kind = "norm",
+                    role = "final", prefix = "column_aggregator.out_ln"))
+  )
+}
+
+# @keywords internal
+tabpfn3_icl_children <- function(kv_heads_test = NULL, qk_norm = FALSE) {
+  tabpfn3_self_children("icl_blocks.0", "iattn",
+                        "Attention over rows, training-only keys",
+                        axis = "rows", attn_module = "icl_attention",
+                        attn = arch_attn("training rows", qk_norm = qk_norm,
+                                         scaling = "softmax-scaling MLP",
+                                         kv_heads_test = kv_heads_test))
+}
+
 #' Stage list for the TabPFN v3 diagram
 #'
 #' v3 abandons the single stack that attends both ways and splits the
@@ -1522,75 +1613,6 @@ tabpfn3_detect <- function(config) {
 #' @param config The checkpoint's parsed `config.json`.
 #' @param task `"classification"` or `"regression"`.
 #' @keywords internal
-# The children of TabPFN v3's (and v3.5's) blocks, in the order they run.
-# Every sublayer is pre-norm RMSNorm inside a residual connection. A
-# cross-attention block norms its queries and its keys/values apart.
-# @keywords internal
-tabpfn3_cross_children <- function(pfx, id, label, axis) {
-  p <- function(x) paste0(pfx, ".", x)
-  list(
-    arch_stage(paste0(id, "_nq"), "RMSNorm, queries", kind = "norm",
-               prefix = p("layernorm_q")),
-    arch_stage(paste0(id, "_nkv"), "RMSNorm, keys and values", kind = "norm",
-               prefix = p("layernorm_kv")),
-    arch_stage(id, label, kind = "attention", axis = axis, prefix = p("attn")),
-    arch_stage(paste0(id, "_n2"), "RMSNorm", kind = "norm",
-               prefix = p("layernorm2")),
-    arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn", prefix = p("mlp"))
-  )
-}
-
-# @keywords internal
-tabpfn3_dist_children <- function(pfx = "feature_distribution_embedder.layers.0") {
-  c(
-    list(arch_stage("iv", "Learned inducing vectors", kind = "embed",
-                    role = "input", feeds = "ind",
-                    prefix = paste0(pfx, ".inducing_vectors"))),
-    tabpfn3_cross_children(paste0(pfx, ".cross_attn_block1"), "ind",
-                           "Inducing vectors attend to the training rows",
-                           axis = "rows"),
-    tabpfn3_cross_children(paste0(pfx, ".cross_attn_block2"), "back",
-                           "Rows attend back to the inducing vectors",
-                           axis = "inducing")
-  )
-}
-
-# @keywords internal
-tabpfn3_self_children <- function(pfx, id, label, axis, attn = "attention") {
-  p <- function(x) paste0(pfx, ".", x)
-  list(
-    arch_stage(paste0(id, "_n1"), "RMSNorm", kind = "norm",
-               prefix = p("layernorm")),
-    arch_stage(id, label, kind = "attention", axis = axis, prefix = p(attn)),
-    arch_stage(paste0(id, "_n2"), "RMSNorm", kind = "norm",
-               prefix = p("layernorm_mlp")),
-    arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn", prefix = p("mlp"))
-  )
-}
-
-# @keywords internal
-tabpfn3_agg_children <- function() {
-  c(
-    list(
-      arch_stage("rope", "RoPE frequencies (learned)", kind = "embed",
-                 role = "input", feeds = "attn", prefix = "column_aggregator.rope"),
-      arch_stage("cls", "CLS tokens", kind = "embed", role = "input",
-                 feeds = "attn", prefix = "column_aggregator.cls_tokens")
-    ),
-    tabpfn3_self_children("column_aggregator.blocks.0", "attn",
-                          "Attention over a row's columns", axis = "columns"),
-    list(arch_stage("oln", "RMSNorm, after the stack", kind = "norm",
-                    role = "final", prefix = "column_aggregator.out_ln"))
-  )
-}
-
-# @keywords internal
-tabpfn3_icl_children <- function() {
-  tabpfn3_self_children("icl_blocks.0", "iattn",
-                        "Attention over rows, training-only keys",
-                        axis = "rows", attn = "icl_attention")
-}
-
 tabpfn3_describe <- function(config, task) {
   E     <- as.integer(config$embed_dim %||% 128L)
   n_cls <- as.integer(config$feat_agg_num_cls_tokens %||% 4L)
@@ -1619,6 +1641,7 @@ tabpfn3_describe <- function(config, task) {
       "col_y", "Target encoder (per column)", kind = "embed", group = "Embed",
       detail = if (clf) sprintf("class embedding -> %d", E)
                else sprintf("Linear(1 -> %d)", E),
+      join = "add", join_rows = "training rows",
       prefix = "col_y_encoder"),
     arch_stage(
       "dist", "Feature-distribution embedder", kind = "attention",
@@ -1640,6 +1663,7 @@ tabpfn3_describe <- function(config, task) {
       group = "Stage 3 - in-context",
       detail = if (clf) sprintf("class embedding -> %d", D)
                else sprintf("Linear(1 -> %d)", D),
+      join = "add", join_rows = "training rows",
       prefix = "icl_y_encoder"),
     arch_stage(
       "icl", "In-context learning block", kind = "attention",
@@ -1648,7 +1672,7 @@ tabpfn3_describe <- function(config, task) {
                        h_icl, as.integer(D / h_icl), kv_t,
                        if (kv_t == 1L) "" else "s", D, D * ff),
       shape = sprintf("(B, n, %d)", D), prefix = "icl_blocks",
-      children = tabpfn3_icl_children()),
+      children = tabpfn3_icl_children(kv_t)),
     arch_stage(
       "onorm", "Output RMSNorm", kind = "norm", group = "Decode",
       prefix = "output_norm"),
