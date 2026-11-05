@@ -47,13 +47,20 @@ suppressMessages(library(tabfound))
 # `--background-light=<colour>` and `--background-dark=<colour>` give each
 # theme's figures a background, so they sit on the page they are shown
 # on rather than in a box of their own.
+#
+# `--highlight=<colour>,<colour>,...` gives every view the same
+# highlights, up to four. The side-by-side figures take the first three.
 args <- commandArgs(trailingOnly = TRUE)
 matrix_mode <- "--matrix" %in% args
 bg_args <- grep("^--background-(light|dark)=", args, value = TRUE)
 MATRIX_BACKGROUNDS <- c(light = NA_character_, dark = NA_character_)
 MATRIX_BACKGROUNDS[sub("^--background-(light|dark)=.*", "\\1", bg_args)] <-
   sub("^--background-(light|dark)=", "", bg_args)
-args <- setdiff(args, c("--matrix", bg_args))
+hl_args <- grep("^--highlight=", args, value = TRUE)
+MATRIX_HIGHLIGHT <- if (length(hl_args)) {
+  strsplit(sub("^--highlight=", "", hl_args[[1]]), ",", fixed = TRUE)[[1]]
+}
+args <- setdiff(args, c("--matrix", bg_args, hl_args))
 outdir <- if (length(args)) args[[1]] else "vignettes/figures"
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 
@@ -199,7 +206,8 @@ render_matrix <- function(arch, key) {
         suppressMessages(plot_architecture(
           arch, files[[i]], style = style, detail = detail,
           theme = MATRIX_THEMES[[i]],
-          background = matrix_background(MATRIX_THEMES[[i]])
+          background = matrix_background(MATRIX_THEMES[[i]]),
+          highlight = MATRIX_HIGHLIGHT
         ))
       }
       first <- file.path(outdir, key, sprintf("%s-overview-light.svg", style))
@@ -289,7 +297,8 @@ if (matrix_mode) {
       suppressMessages(plot_architecture_diff(
         archs[[pair[1]]], archs[[pair[2]]], files[[i]],
         theme = MATRIX_THEMES[[i]],
-        background = matrix_background(MATRIX_THEMES[[i]])
+        background = matrix_background(MATRIX_THEMES[[i]]),
+        highlight = utils::head(MATRIX_HIGHLIGHT, 3)
       ))
     }
     c(list(a = pair[1], b = pair[2]), svg_size(files[[1]]))
@@ -299,6 +308,7 @@ if (matrix_mode) {
       tabfound = as.character(utils::packageVersion("tabfound")),
       styles = MATRIX_STYLES, themes = MATRIX_THEMES,
       backgrounds = as.list(MATRIX_BACKGROUNDS),
+      highlight = if (length(MATRIX_HIGHLIGHT)) I(MATRIX_HIGHLIGHT),
       models = manifest_models, compare = compare
     ),
     file.path(outdir, "manifest.json"),
