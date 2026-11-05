@@ -29,8 +29,8 @@ description can be inspected and then drawn.}
 \item{format}{\code{"svg"}, \code{"png"} or \code{"pdf"}. Inferred from \code{file} when
 not given.}
 
-\item{style}{How to draw it: \code{"cards"} (the default), \code{"tufte"} or
-\code{"icicle"}.
+\item{style}{How to draw it: \code{"cards"} (the default), \code{"tufte"},
+\code{"glyphs"} or \code{"icicle"}.
 See the Styles section. Set \code{options(tabfound.arch_style = )} to
 change the default for a session.}
 
@@ -89,6 +89,15 @@ beside what they name, a range-frame axis -- and Cleveland and
 McGill's (1984) finding that position on a common scale is read
 more accurately than length or area. Phases are coloured with
 viridis in stage order, in serif type.
+\item \code{"glyphs"} draws each stage as a small table -- training rows above,
+test rows below, columns across -- with the part its attention runs
+over picked out: a column for attention across rows, a row for
+attention across columns or features, dots for inducing points.
+Once a stage merges a row's columns into one vector, later glyphs
+are a single wide column. Colours are the Okabe-Ito palette (Okabe
+and Ito, 2008), shifted just enough to keep 3:1 contrast against
+the table in each theme. \code{detail = "full"} lists the sublayers as
+text.
 \item \code{"icicle"} shows where the parameters are as lengths: three bands on
 one linear scale -- phases, stages, and each stage's sublayers
 summed over all its blocks -- after Kruskal and Landwehr's (1983)
@@ -97,6 +106,10 @@ their counts. Colours are the Okabe-Ito palette. It draws no shapes
 and always shows the sublayers, so \code{detail}, \code{show_shapes} and
 \code{show_params} do not apply.
 }
+
+Okabe, M., & Ito, K. (2008). \emph{Color Universal Design (CUD): How to
+make figures and presentations that are friendly to colorblind
+people}. J*Fly. \url{https://jfly.uni-koeln.de/color/}
 
 Kruskal, J. B., & Landwehr, J. M. (1983). Icicle plots: Better displays
 for hierarchical clustering. \emph{The American Statistician}, 37(2),
@@ -119,6 +132,7 @@ plot_architecture(clf, "tabpfn.svg")
 plot_architecture(clf, "tabpfn.pdf", detail = "full")
 plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
 plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
+plot_architecture(clf, "tabpfn-glyphs.svg", style = "glyphs")
 plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 }
 }

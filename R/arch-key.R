@@ -103,9 +103,12 @@ arch_unexplained_terms <- function(arch, extra = character()) {
 # ---------------------------------------------------------------------------
 
 # One line of a style's "How to read" group. `swatch` draws a colour chip
-# before it, for notes that explain a colour.
+# before it, for notes that explain a colour; `outline = TRUE` draws the
+# chip as an outline, for a colour the diagram uses on edges.
 # @keywords internal
-arch_note <- function(text, swatch = NULL) list(text = text, swatch = swatch)
+arch_note <- function(text, swatch = NULL, outline = FALSE) {
+  list(text = text, swatch = swatch, outline = outline)
+}
 
 # The three groups of a single model's key. `notes` is the style's list
 # of `arch_note()`s; `extra` is any other text the style draws (its
@@ -161,7 +164,12 @@ arch_key_items <- function(groups, x, y, w, th, family = "sans",
       tx <- x + if (swatches) 16 else 0
       for (nt in g$notes) {
         if (!is.null(nt$swatch)) {
-          add(sc_rect(x, y - 5, 10, 10, fill = nt$swatch, stroke = NA, r = 2))
+          add(if (isTRUE(nt$outline)) {
+            sc_rect(x + 0.5, y - 4.5, 9, 9, fill = NA, stroke = nt$swatch,
+                    lwd = 1.2, r = 2)
+          } else {
+            sc_rect(x, y - 5, 10, 10, fill = nt$swatch, stroke = NA, r = 2)
+          })
         }
         lines <- arch_wrap_text(nt$text, x + w - tx, size, family = family)
         for (k in seq_along(lines)) {

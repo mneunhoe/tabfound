@@ -254,6 +254,15 @@ arch_format_from_file <- function(file) {
 #'   McGill's (1984) finding that position on a common scale is read
 #'   more accurately than length or area. Phases are coloured with
 #'   viridis in stage order, in serif type.
+#' * `"glyphs"` draws each stage as a small table -- training rows above,
+#'   test rows below, columns across -- with the part its attention runs
+#'   over picked out: a column for attention across rows, a row for
+#'   attention across columns or features, dots for inducing points.
+#'   Once a stage merges a row's columns into one vector, later glyphs
+#'   are a single wide column. Colours are the Okabe-Ito palette (Okabe
+#'   and Ito, 2008), shifted just enough to keep 3:1 contrast against
+#'   the table in each theme. `detail = "full"` lists the sublayers as
+#'   text.
 #' * `"icicle"` shows where the parameters are as lengths: three bands on
 #'   one linear scale -- phases, stages, and each stage's sublayers
 #'   summed over all its blocks -- after Kruskal and Landwehr's (1983)
@@ -261,6 +270,10 @@ arch_format_from_file <- function(file) {
 #'   their counts. Colours are the Okabe-Ito palette. It draws no shapes
 #'   and always shows the sublayers, so `detail`, `show_shapes` and
 #'   `show_params` do not apply.
+#'
+#' Okabe, M., & Ito, K. (2008). *Color Universal Design (CUD): How to
+#' make figures and presentations that are friendly to colorblind
+#' people*. J*Fly. <https://jfly.uni-koeln.de/color/>
 #'
 #' Kruskal, J. B., & Landwehr, J. M. (1983). Icicle plots: Better displays
 #' for hierarchical clustering. *The American Statistician*, 37(2),
@@ -282,8 +295,8 @@ arch_format_from_file <- function(file) {
 #'   (the default) the diagram is drawn on the current graphics device.
 #' @param format `"svg"`, `"png"` or `"pdf"`. Inferred from `file` when
 #'   not given.
-#' @param style How to draw it: `"cards"` (the default), `"tufte"` or
-#'   `"icicle"`.
+#' @param style How to draw it: `"cards"` (the default), `"tufte"`,
+#'   `"glyphs"` or `"icicle"`.
 #'   See the Styles section. Set `options(tabfound.arch_style = )` to
 #'   change the default for a session.
 #' @param detail `"overview"` draws each repeated stack as one block;
@@ -308,6 +321,7 @@ arch_format_from_file <- function(file) {
 #' plot_architecture(clf, "tabpfn.pdf", detail = "full")
 #' plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
 #' plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
+#' plot_architecture(clf, "tabpfn-glyphs.svg", style = "glyphs")
 #' plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 #' }
 #' @seealso [tabfound_architecture()] for the description behind the

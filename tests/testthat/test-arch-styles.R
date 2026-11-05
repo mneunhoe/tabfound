@@ -577,3 +577,74 @@ test_that("icicle label text keeps 4.5:1 contrast on every fill", {
   expect_identical(arch_text_on("#ffffff"), "#111111")
   expect_identical(arch_text_on("#0072B2"), "#ffffff")
 })
+
+
+# ---------------------------------------------------------------------------
+# glyphs
+# ---------------------------------------------------------------------------
+
+# The glyph rects drawn for each stage, found by the stage label's row.
+glyph_rects <- function(arch, sc) {
+  g <- arch_glyphs_geom()
+  txt <- Filter(function(e) e$type == "text" && isTRUE(all.equal(e$x, g$x_text)) &&
+                  isTRUE(e$bold), sc$items)
+  tops <- vapply(txt, `[[`, numeric(1), "y") - 7
+  cells <- Filter(function(e) e$type == "rect" && e$x < g$x_text &&
+                    e$h < g$cell_h + 0.5 && e$w > 7.5, sc$items)
+  lapply(seq_along(tops), function(i) {
+    hi <- if (i < length(tops)) tops[i + 1L] else Inf
+    Filter(function(e) e$y >= tops[i] - 1 && e$y < hi - 1, cells)
+  })
+}
+
+test_that("glyphs collapse to one wide column after the collapsing stage", {
+  g <- arch_glyphs_geom()
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    sc <- arch_scene(arch, style = "glyphs")
+    rects <- glyph_rects(arch, sc)
+    expect_length(rects, length(arch$stages))
+    wide <- vapply(rects, function(r)
+      length(r) > 0L && all(vapply(r, `[[`, numeric(1), "w") > g$wide_w - 2),
+      logical(1))
+    at <- which(vapply(arch$stages, function(s) isTRUE(s$collapses), logical(1)))
+    expected <- if (length(at)) seq_along(arch$stages) > at else
+      logical(length(arch$stages))
+    # The prediction glyph keeps only its test rows, so judge it by
+    # width like the rest.
+    expect_identical(wide, expected, info = nm)
+  }
+})
+
+
+test_that("a glyph shows every axis its sublayers attend over", {
+  th <- arch_glyphs_theme()
+  arch <- arch_test_arch("mitra")
+  layer <- Filter(function(s) identical(s$id, "layers"), arch$stages)[[1]]
+  expect_null(layer$axis)
+  ax <- arch_glyph_axes(layer)
+  expect_true(ax$rows && ax$cols && !ax$induce)
+  fills <- vapply(arch_glyph_items(layer, 0, 0, FALSE, arch_glyphs_geom(),
+                                   th)$items, function(e)
+    if (e$type == "rect") e$fill else NA_character_, character(1))
+  expect_true(all(c(th$rows, th$cols) %in% fills))
+
+  tabicl <- arch_test_arch("tabicl")
+  col_tf <- Filter(function(s) identical(s$id, "col_tf"), tabicl$stages)[[1]]
+  expect_true(arch_glyph_axes(col_tf)$induce)
+  # TabPFN v2.6's attention between cells runs down a column.
+  expect_true(arch_glyph_axes(list(axis = "cells", children = list()))$rows)
+})
+
+
+test_that("glyph highlights keep 3:1 contrast against the table", {
+  for (theme in c("light", "dark")) {
+    th <- arch_glyphs_theme(theme)
+    for (h in c("rows", "cols", "induce", "out", "embed")) {
+      for (f in c("train", "test", "surface")) {
+        expect_gte(arch_contrast(th[[h]], th[[f]]), 3,
+                   label = paste(theme, h, "on", f))
+      }
+    }
+  }
+})
