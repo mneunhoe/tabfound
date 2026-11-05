@@ -842,3 +842,109 @@ test_that("TabPFN v2.x describe their encoders and embeddings as built", {
   expect_identical(
     net$feature_positional_embedding_embeddings$weight$size(2), 3L)
 })
+
+
+# ---------------------------------------------------------------------------
+# schematic
+# ---------------------------------------------------------------------------
+
+schematic_plus_count <- function(sc) {
+  r <- arch_schematic_geom()$plus_r
+  sum(vapply(sc$items, function(e) e$type == "rect" &&
+               isTRUE(all.equal(e$w, 2 * r)) && isTRUE(all.equal(e$r, r)),
+             logical(1)))
+}
+
+test_that("the schematic draws one plus per residual connection and per added stage", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    sc <- arch_scene(arch, style = "schematic")
+    units <- sum(vapply(arch$stages, function(s) {
+      r <- vapply(s$children, `[[`, integer(1), "residual")
+      length(unique(r[!is.na(r)]))
+    }, integer(1)))
+    adds <- sum(vapply(arch$stages, function(s) identical(s$join, "add"),
+                       logical(1)))
+    expect_identical(schematic_plus_count(sc), units + adds, info = nm)
+  }
+})
+
+test_that("the schematic marks each repeated container once", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    sc <- arch_scene(arch, style = "schematic")
+    txt <- vapply(Filter(function(e) e$type == "text", sc$items), `[[`,
+                  character(1), "text")
+    marks <- sum(grepl("^[0-9]+ ×$", txt))
+    # A container per stage with sublayers, interleaved ones sharing one;
+    # only stacks of more than one are marked.
+    with_kids <- Filter(function(s) length(s$children) > 0L, arch$stages)
+    groups <- unique(vapply(with_kids, function(s) s$interleave %||% s$id,
+                            character(1)))
+    reps <- vapply(groups, function(g) {
+      s <- Filter(function(s) identical(s$interleave %||% s$id, g), with_kids)[[1]]
+      s$repeats
+    }, integer(1))
+    expect_identical(marks, sum(reps > 1L), info = nm)
+  }
+})
+
+test_that("schematic side inputs sit left of the flow and callouts right of it", {
+  g <- arch_schematic_geom()
+  left_of_flow <- g$xc - g$box_w / 2 - g$cpad - 10 - 20
+  arch <- arch_test_variant_arch(arch_test_variants()[["kumo classification"]])
+  sc <- arch_scene(arch, style = "schematic")
+  side <- Filter(function(e) e$type == "rect" && isTRUE(all.equal(e$x, g$side_x)),
+                 sc$items)
+  expect_gt(length(side), 0L)
+  expect_true(all(vapply(side, function(e) e$x + e$w, numeric(1)) < left_of_flow))
+  calls <- Filter(function(e) e$type == "text" && e$x >= g$call_x, sc$items)
+  expect_gt(length(calls), 0L)
+  flow_right <- g$xc + g$box_w / 2 + g$skip + 16
+  expect_true(g$call_x > flow_right)
+})
+
+test_that("attention steps carry their variant in the schematic", {
+  arch <- arch_test_arch("tabpfn")
+  sc <- arch_scene(arch, style = "schematic")
+  txt <- vapply(Filter(function(e) e$type == "text", sc$items), `[[`,
+                character(1), "text")
+  expect_true("keys: context rows · test rows: 1 KV head (MQA)" %in% txt)
+  expect_identical(arch_attn_line(arch_attn()), NULL)
+  expect_identical(arch_attn_line(arch_attn("training rows", kv_heads_test = 2)),
+                   "keys: training rows · test rows: 2 KV heads (GQA)")
+})
+
+test_that("a description without residual connections is drawn, and says so", {
+  arch <- arch_test_arch("tabicl")
+  arch$stages <- lapply(arch$stages, function(s) {
+    s$children <- lapply(s$children, function(ch) { ch$residual <- NULL; ch })
+    s
+  })
+  sc <- arch_scene(arch, style = "schematic")
+  notes <- vapply(sc$key[[3]]$notes, `[[`, character(1), "text")
+  expect_true(any(grepl("not recorded", notes, fixed = TRUE)))
+  expect_identical(schematic_plus_count(sc),
+                   sum(vapply(arch$stages, function(s) identical(s$join, "add"),
+                              logical(1))))
+})
+
+test_that("every backend's accent is readable in both themes", {
+  for (theme in c("light", "dark")) {
+    th <- arch_schematic_theme(theme)
+    for (b in names(ARCH_ACCENTS)) {
+      arch <- list(backend = b, title = "x", subtitle = NULL, facts = character(),
+                   stages = list(arch_stage("in", "Input", kind = "input")),
+                   symbols = character(), glossary = ARCH_GLOSSARY)
+      sc <- arch_scene(arch, style = "schematic", theme = theme)
+      title <- Filter(function(e) e$type == "text" && identical(e$text, "x"),
+                      sc$items)[[1]]
+      expect_gte(arch_contrast(title$col, th$surface), 4.5,
+                 label = paste(theme, b))
+      expect_gte(arch_contrast(arch_readable(title$col, th$attn), th$attn), 4.5,
+                 label = paste(theme, b, "on attention"))
+    }
+  }
+  expect_identical(arch_readable("#000000", "#ffffff"), "#000000")
+  expect_gte(arch_contrast(arch_readable("#ffff00", "#ffffff"), "#ffffff"), 4.5)
+})
