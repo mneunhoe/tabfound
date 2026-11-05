@@ -64,7 +64,7 @@ The vignette ships the SVGs rather than building them, because
 instantiating all eight networks at their published widths allocates
 about 2 billion parameters and takes a couple of minutes — too much
 to pay on every `R CMD build`. The script that made them is
-[`inst/gallery/make-gallery.R`](https://github.com/marcel-neunhoeffer/tabfound/blob/main/inst/gallery/make-gallery.R):
+[`inst/gallery/make-gallery.R`](https://github.com/mneunhoe/tabfound/blob/main/inst/gallery/make-gallery.R):
 
 ```bash
 Rscript inst/gallery/make-gallery.R vignettes/figures
