@@ -71,7 +71,8 @@ test_that("every style's scene fits its canvas in both themes", {
 
 # Refactoring a style must not move a single byte of its output. A
 # deliberate change to the cards look regenerates these fixtures (the
-# last one: adding the key).
+# last one: measuring the key's terms letter by letter, which moved its
+# meanings 10 px right).
 test_that("cards output is byte-identical to its fixtures", {
   skip_on_cran()
   arch <- arch_test_arch("tabicl")
@@ -1168,4 +1169,50 @@ test_that("cards and icicle take one highlight per coloured kind", {
   # The neutral kinds stay neutral.
   expect_identical(th$hue[["norm"]], arch_cards_colours(
     arch_theme(), list(background = "#ffffff"))$hue[["norm"]])
+})
+
+# ---------------------------------------------------------------------------
+# Labels
+# ---------------------------------------------------------------------------
+
+test_that("a short label is never measured narrower than Helvetica sets it", {
+  expect_identical(lengths(ARCH_SANS_W), c(regular = 95L, bold = 95L))
+  # The PDF device sets "sans" in Helvetica from its own metrics.
+  grDevices::pdf(NULL)
+  on.exit(grDevices::dev.off())
+  real <- function(s, bold) {
+    graphics::strwidth(s, units = "inches", family = "sans",
+                       font = if (bold) 2L else 1L, cex = 11 / 12) * 72
+  }
+  ascii <- intToUtf8(32:126)
+  for (bold in c(FALSE, TRUE)) {
+    expect_equal(arch_label_width(ascii, 11, bold) / 1.05, real(ascii, bold),
+                 tolerance = 0.01, label = paste("bold", bold))
+  }
+  for (s in c("RMSNorm", "LayerNorm", "Embedding heads", "Query KV heads")) {
+    expect_gte(arch_label_width(s, 11, bold = TRUE), real(s, TRUE))
+  }
+})
+
+test_that("stage details and callout values are drawn whole", {
+  texts <- function(sc) paste(vapply(Filter(function(e) e$type == "text",
+                                            sc$items), `[[`, character(1), "text"),
+                              collapse = " ")
+  for (nm in c("kumo", "tabpfn35")) {
+    arch <- arch_test_arch(nm)
+    for (style in c("glyphs", "tufte")) {
+      drawn <- texts(arch_scene(arch, style = style))
+      for (s in arch$stages) {
+        if (is.null(s$detail)) next
+        last <- utils::tail(strsplit(s$detail, " ")[[1]], 1)
+        expect_true(grepl(last, drawn, fixed = TRUE),
+                    label = paste(nm, style, s$label))
+      }
+    }
+    sch <- texts(arch_scene(arch, style = "schematic"))
+    for (f in names(arch$facts)) {
+      last <- utils::tail(strsplit(as.character(arch$facts[[f]]), " ")[[1]], 1)
+      expect_true(grepl(last, sch, fixed = TRUE), label = paste(nm, f))
+    }
+  }
 })

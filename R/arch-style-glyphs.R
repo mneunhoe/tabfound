@@ -188,7 +188,7 @@ arch_scene_glyphs <- function(arch, detail, theme, show_shapes, show_params,
                    col = th$ink2, anchor = "end"))
     }
     ty <- y + 7
-    for (d in arch_wrap_text(s$detail, g$text_w, 11, max_lines = 2)) {
+    for (d in arch_wrap_text(s$detail, g$text_w, 11)) {
       ty <- ty + 16
       push(sc_text(g$x_text, ty, d, size = 11, col = th$ink2))
     }

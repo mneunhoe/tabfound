@@ -411,19 +411,27 @@ arch_scene_schematic <- function(arch, detail, theme, show_shapes,
   # in order up the page and pushed apart where they would overlap.
   blocks <- list()
   zoom_keys <- vapply(zooms, `[[`, character(1), "key")
+  # Each fact's value, wrapped under itself where it is too long for the
+  # line, so none is cut off; 10 px keeps it clear of its name.
+  fact_lines <- function(cl) {
+    lapply(names(cl$facts), function(nm) {
+      nm_w <- arch_label_width(nm, 11, bold = TRUE)
+      lines <- arch_wrap_text(cl$facts[[nm]], W - g$pad - g$call_x - nm_w - 10,
+                              11, bold = TRUE)
+      list(name = nm, x = g$call_x + nm_w + 10,
+           lines = if (length(lines)) lines else "")
+    })
+  }
   text_block <- function(cl, centre_top) {
-    n <- length(cl$facts)
-    for (k in seq_len(n)) {
-      yk <- centre_top - 7.5 - 15 * (k - 1L)
-      nm <- names(cl$facts)[k]
-      nm_w <- arch_text_width(nm, 11, bold = TRUE)
-      emit(text_u(g$call_x, yk, nm, size = 11, col = th$ink, bold = TRUE))
-      # Bold sans runs a little wider than its estimate; 10 px keeps the
-      # value clear of its name.
-      emit(text_u(g$call_x + nm_w + 10, yk,
-                  arch_fit_text(cl$facts[[k]], W - g$pad - g$call_x - nm_w - 10,
-                                11, bold = TRUE),
-                  size = 11, col = accent, bold = TRUE))
+    row <- 0L
+    for (fl in fact_lines(cl)) {
+      yk <- centre_top - 7.5 - 15 * row
+      emit(text_u(g$call_x, yk, fl$name, size = 11, col = th$ink, bold = TRUE))
+      for (j in seq_along(fl$lines)) {
+        emit(text_u(fl$x, yk - 15 * (j - 1L), fl$lines[j], size = 11,
+                    col = accent, bold = TRUE))
+      }
+      row <- row + length(fl$lines)
     }
   }
   zoom_block <- function(z, bottom) {
@@ -436,7 +444,8 @@ arch_scene_schematic <- function(arch, detail, theme, show_shapes,
     cl <- callouts[[key]]
     z <- zooms[zoom_keys == key]
     z <- if (length(z)) z[[1L]] else NULL
-    th_text <- 15 * length(cl$facts)
+    th_text <- 15 * sum(vapply(fact_lines(cl), function(fl) length(fl$lines),
+                               integer(1)))
     zh <- if (is.null(z)) 0 else arch_zoom_height(z$ffn) + 8
     blocks[[length(blocks) + 1L]] <<- list(
       u = cl$pos$u, x_from = cl$pos$x, h = th_text + zh,

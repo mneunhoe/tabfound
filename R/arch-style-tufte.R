@@ -160,8 +160,7 @@ arch_scene_tufte <- function(arch, detail, theme, show_shapes, show_params,
       push(sc_text(x_text + g$text_w, ly, tags, size = 12, col = th$ink2,
                    italic = TRUE, anchor = "end", family = serif))
     }
-    for (d in arch_wrap_text(s$detail, g$text_w, 11.5, family = serif,
-                             max_lines = 3)) {
+    for (d in arch_wrap_text(s$detail, g$text_w, 11.5, family = serif)) {
       ly <- ly + 16
       push(sc_text(x_text, ly, d, size = 11.5, col = th$ink2, family = serif))
     }

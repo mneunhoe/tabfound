@@ -293,6 +293,53 @@ arch_text_width <- function(text, size, bold = FALSE, mono = FALSE,
                                                     italic = italic)
 }
 
+# Helvetica's advance widths (Arial shares them) for printable ASCII, 32
+# to 126, in thousandths of an em. The average above is right over a
+# sentence but not over a short bold label: "RMSNorm" is all wide
+# letters and runs a third past it, enough to swallow the gap after a
+# key's term.
+# @keywords internal
+ARCH_SANS_W <- list(
+  regular = c(
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556,
+    278, 278, 584, 584, 584, 556, 1015,
+    667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833,
+    722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611,
+    278, 278, 278, 469, 556, 333,
+    556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833,
+    556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500,
+    334, 260, 334, 584),
+  bold = c(
+    278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278,
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556,
+    333, 333, 584, 584, 584, 611, 975,
+    722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833,
+    722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611,
+    333, 278, 333, 584, 556, 333,
+    556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889,
+    611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500,
+    389, 280, 389, 584)
+)
+
+# The width of a short label -- a key's term, a callout's name -- that
+# something is set right after, so it must not be underestimated. Sans
+# is summed letter by letter, with the same 5% margin as the averages
+# (the SVG's system stack runs a little wider than Helvetica); a
+# character outside ASCII counts as 0.6 em. Serif and mono keep their
+# averages: mono is exact, and the serif keys have room to spare.
+# @keywords internal
+arch_label_width <- function(text, size, bold = FALSE, family = "sans") {
+  if (!identical(arch_match_family(family), "sans")) {
+    return(arch_text_width(text, size, bold, family = family))
+  }
+  cp <- utf8ToInt(text)
+  w <- ARCH_SANS_W[[if (bold) "bold" else "regular"]]
+  ascii <- cp >= 32L & cp <= 126L
+  em <- ifelse(ascii, w[pmin(pmax(cp - 31L, 1L), 95L)], 600)
+  sum(em) / 1000 * size * 1.05
+}
+
 # @keywords internal
 arch_fit_text <- function(text, max_px, size, bold = FALSE, mono = FALSE,
                           family = if (mono) "mono" else "sans",
