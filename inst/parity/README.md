@@ -71,11 +71,28 @@ checkout:
 | `TABFOUND_KUMO_CLF_CKPT` / `_REG_CKPT` | raw `small/{classifier,regressor}.pt`, only for `--regenerate` |
 | `TABFOUND_REF_PYTHON_KUMO` | python with `structured-data-models` (default `.venvs/sdm/bin/python`) |
 | `TABFOUND_REF_PYTHON` | python with the reference packages (default `.venvs/ref/bin/python`) |
+| `TABFOUND_REF_PYTHON_ESTIMATOR` | python with `tabpfn` 9.2.0, for the full-estimator TabPFN references (default `.venvs/ref92/bin/python`) |
 
 Set up the reference environment with:
 
 ```bash
 uv venv --python 3.12 .venvs/ref && uv pip install --python .venvs/ref/bin/python torch safetensors numpy scikit-learn pandas tabpfn "tabicl==2.2.0" tabfm
+```
+
+The full-estimator TabPFN references -- `tabpfn_reference.py`, which cuts
+the v2.5 tree and the v2.6 ensemble tree, and `remap_reference.py` -- run
+against `tabpfn` 9.2.0 instead, in a venv of their own. 9.1 replaced the
+regressor's border translation (PriorLabs/TabPFN#1288), and R ports the
+new one. On these fixtures every member's inputs and logits are bit for
+bit what 8.2.0 produced, and so are the classifiers' probabilities; the
+regressor's finals also moved because 9.x decodes on the z-space grid and
+un-normalises in float64, where 8.2.0 (and R) decode on the raw-scale
+grid -- 4e-5 at most on the means, inside `predict_mean`'s tolerance. The
+bare-network v2.6 and v3 references stay on 8.2.0,
+because their scripts reach into network attributes 9.x removed:
+
+```bash
+uv venv --python 3.12 .venvs/ref92 && uv pip install --python .venvs/ref92/bin/python "torch==2.13.0" "numpy==2.5.1" "pandas==3.0.5" "safetensors==0.8.0" "scikit-learn==1.9.0" "scipy==1.18.0" "tabpfn==9.2.0"
 ```
 
 ### TabPFN v2.6
@@ -431,17 +448,31 @@ two rows).
 
 ## Current status
 
-### TabPFN v2.5 vs `tabpfn` 8.2.0 / torch 2.13.0
+### TabPFN v2.5 vs `tabpfn` 9.2.0 / torch 2.13.0
 
 ```
-38/44 checks within tolerance (6 known fingerprint-sensitive)
+69/75 checks within tolerance (6 known fingerprint-sensitive)
 ```
 
-- All four `_nofp` fixtures: every stage passes, with member inputs
-  bit-identical (`max_abs == 0`).
-- Both classifier fixtures pass with fingerprints on as well.
+- All five `_nofp` fixtures: every stage passes, with member inputs
+  bit-identical (`max_abs == 0`). Regression means agree to 3.4e-5 and
+  quantiles to 5.4e-6; the mean's gap is 9.x decoding on the z-space grid
+  where R decodes on the raw-scale one.
+- The classifier fixtures pass with fingerprints on as well.
 - The two regressor fixtures with fingerprints on differ on 2 of 200 and
   4 of 480 rows respectively, for the reason above.
+
+### TabPFN v2.6 vs `tabpfn` 8.2.0 (network) / 9.2.0 (ensemble)
+
+```
+114/133 checks within tolerance (19 known fingerprint-sensitive)
+```
+
+- Every `_nofp` ensemble fixture passes every stage. Regression means
+  agree to 4.4e-5 and quantiles to 3.8e-5, through the border translation
+  `tabpfn` 9.1 introduced.
+- The 19 known rows are the fingerprinted ensemble fixtures, whose
+  `_nofp` twins pass the same stages.
 
 ### TabPFN v3 vs `tabpfn` 8.2.0 / torch 2.13.0
 
@@ -813,12 +844,12 @@ small checkpoints, plus weight-free and end-to-end grading:
   absent class. The KV cache and the row, column and
   `save_peak_memory_factor` chunking stay within the same bounds.
 
-Headline for the TabPFN backend, against `tabpfn` 8.2.0:
+Headline for the TabPFN backend, against `tabpfn` 9.2.0:
 
 - Per-member model inputs are **bit-identical** (`max_abs == 0`) on all
   four fixtures — including one with missing values, a constant column,
   and infinities.
-- `predict_proba` agrees to ~2e-6; regression `predict` to ~2e-5 and
+- `predict_proba` agrees to ~2e-6; regression `predict` to ~3e-5 and
   quantiles to ~6e-6.
 - The one caveat is TabPFN's row-fingerprint feature, which is a SHA-256
   of the row's float64 bytes and therefore flips wholesale on a 1-ULP

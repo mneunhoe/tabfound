@@ -1,13 +1,15 @@
 {
-  "tabpfn_version": "8.2.0",
+  "tabpfn_version": "9.2.0",
   "torch_version": "2.13.0",
   "fixture": "reg_iris",
   "task": "regression",
   "n_estimators": 4,
   "seed": 0,
-  "ckpt": "reg26.ckpt",
+  "ckpt": "tabpfn-v2.6-regressor-v2.6_default.ckpt",
   "fingerprint_feature": true,
   "softmax_temperature": 0.9,
+  "declared_categorical": null,
+  "inferred_categorical": [],
   "quantiles": [
     0.1,
     0.5,
