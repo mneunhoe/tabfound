@@ -6,9 +6,22 @@
 \alias{transform_categorical_encoding}
 \title{Apply a member's categorical encoding}
 \usage{
-apply_categorical_encoding(X_train, X_test, cat_ix, cfg, draw_missing = FALSE)
+apply_categorical_encoding(
+  X_train,
+  X_test,
+  cat_ix,
+  cfg,
+  draw_missing = FALSE,
+  cat_cols = cat_ix
+)
 
-fit_categorical_encoding(X_train, cat_ix, cfg, draw_missing = FALSE)
+fit_categorical_encoding(
+  X_train,
+  cat_ix,
+  cfg,
+  draw_missing = FALSE,
+  cat_cols = cat_ix
+)
 
 transform_categorical_encoding(X, fitted)
 }
@@ -18,20 +31,40 @@ transform_categorical_encoding(X, fitted)
 \item{cat_ix}{Integer vector of 1-based categorical columns.}
 
 \item{cfg}{The member config; reads \code{categorical_name} and, for the
-\verb{_shuffled} variants, \code{cat_mappings}.}
+\verb{_shuffled} variants, \code{cat_mappings} and \code{cat_mapping_columns}.}
 
 \item{draw_missing}{When the member shuffles codes but carries no
 mappings, draw them with R's RNG instead of refusing. Only
 \code{\link[=generate_ensemble_configs_native]{generate_ensemble_configs_native()}} does this -- it is how the
 generator learns which columns the encoder selects and how many
 categories each has, without reimplementing the pipeline.}
+
+\item{cat_cols}{The original predictor behind each entry of \code{cat_ix},
+which is how a member's mappings are found when its config says
+which predictor each belongs to (\code{cat_mapping_columns}). Defaults to
+\code{cat_ix}, for callers whose columns have not moved.}
 }
 \value{
-\code{list(X_train, X_test, cat_ix, cat_mappings)}.
+\code{list(X_train, X_test, cat_ix, cat_mappings, cat_mapping_columns)}.
 
 For \code{fit_categorical_encoding()}, the encoder plus the column
 indices \code{\link[=transform_categorical_encoding]{transform_categorical_encoding()}} needs; the fit reads the
 training rows (level counts, category sets) and nothing else.
+
+Which columns the \verb{_common_categories} filters take depends on the
+row count, so a member fitted on fewer rows than it was generated on
+can encode fewer columns. A config that records which predictor each
+mapping belongs to (\code{cat_mapping_columns}, written by
+\code{\link[=generate_ensemble_configs_native]{generate_ensemble_configs_native()}}) has its mappings picked by
+predictor, and those for columns not encoded here go unused. A Python
+dump records no such thing, so its mappings are positional and have
+to line up one for one with the encoded columns.
+
+A column can also have fewer levels on these rows than its mapping
+was drawn for. The reference draws \code{rng.permutation(k)} over the \code{k}
+categories it sees, so its codes are always \verb{0..k-1}; a longer
+mapping is cut down to that, keeping the order it gives the first \code{k}
+codes.
 }
 \description{
 \code{numeric} and \code{none} leave the matrix alone -- the difference between

@@ -180,6 +180,25 @@ test_that("the encoders' selection filters match their names", {
 })
 
 
+test_that("a mapping drawn for more levels than the rows have stays a permutation", {
+  # Unchanged at full length; otherwise the order of the first `k` codes.
+  expect_identical(.restrict_code_mapping(c(2L, 0L, 3L, 1L), 4L), c(2L, 0L, 3L, 1L))
+  expect_identical(.restrict_code_mapping(c(2L, 0L, 3L, 1L), 3L), c(1L, 0L, 2L))
+  expect_identical(.restrict_code_mapping(c(3L, 0L, 2L, 1L), 2L), c(1L, 0L))
+
+  # On rows missing a level the codes stay below the level count, as the
+  # reference's own `rng.permutation(k)` would leave them.
+  X <- cbind(rep(1:3, 40), rnorm(120))
+  cfg <- list(preset = "none", append_original = FALSE,
+              max_features_per_estimator = 500L, shuffle_perm = NULL,
+              categorical_name = "ordinal_shuffled",
+              cat_mappings = list(c(4L, 1L, 3L, 0L, 2L)))
+  out <- apply_member_pipeline(X, X, cfg, 1L)
+  expect_setequal(out$X_train[, 1], 0:2)
+  expect_identical(out$cat_mappings, list(c(2L, 0L, 1L)))
+})
+
+
 test_that("shuffled category codes need mappings that fit", {
   set.seed(3)
   n <- 120

@@ -149,30 +149,54 @@ select_encoded_categoricals <- function(X_train, cat_ix, name) {
 #' @param X_train,X_test Numeric matrices.
 #' @param cat_ix Integer vector of 1-based categorical columns.
 #' @param cfg The member config; reads `categorical_name` and, for the
-#'   `_shuffled` variants, `cat_mappings`.
+#'   `_shuffled` variants, `cat_mappings` and `cat_mapping_columns`.
 #' @param draw_missing When the member shuffles codes but carries no
 #'   mappings, draw them with R's RNG instead of refusing. Only
 #'   [generate_ensemble_configs_native()] does this -- it is how the
 #'   generator learns which columns the encoder selects and how many
 #'   categories each has, without reimplementing the pipeline.
-#' @return `list(X_train, X_test, cat_ix, cat_mappings)`.
+#' @param cat_cols The original predictor behind each entry of `cat_ix`,
+#'   which is how a member's mappings are found when its config says
+#'   which predictor each belongs to (`cat_mapping_columns`). Defaults to
+#'   `cat_ix`, for callers whose columns have not moved.
+#' @return `list(X_train, X_test, cat_ix, cat_mappings,
+#'   cat_mapping_columns)`.
 #' @keywords internal
 apply_categorical_encoding <- function(X_train, X_test, cat_ix, cfg,
-                                       draw_missing = FALSE) {
-  fitted <- fit_categorical_encoding(X_train, cat_ix, cfg, draw_missing)
+                                       draw_missing = FALSE,
+                                       cat_cols = cat_ix) {
+  fitted <- fit_categorical_encoding(X_train, cat_ix, cfg, draw_missing,
+                                     cat_cols)
   list(X_train = transform_categorical_encoding(X_train, fitted),
        X_test  = transform_categorical_encoding(X_test, fitted),
        cat_ix  = fitted$cat_ix,
-       cat_mappings = fitted$cat_mappings)
+       cat_mappings = fitted$cat_mappings,
+       cat_mapping_columns = fitted$cat_mapping_columns)
 }
 
 #' @rdname apply_categorical_encoding
 #' @return For `fit_categorical_encoding()`, the encoder plus the column
 #'   indices [transform_categorical_encoding()] needs; the fit reads the
 #'   training rows (level counts, category sets) and nothing else.
+#'
+#'   Which columns the `_common_categories` filters take depends on the
+#'   row count, so a member fitted on fewer rows than it was generated on
+#'   can encode fewer columns. A config that records which predictor each
+#'   mapping belongs to (`cat_mapping_columns`, written by
+#'   [generate_ensemble_configs_native()]) has its mappings picked by
+#'   predictor, and those for columns not encoded here go unused. A Python
+#'   dump records no such thing, so its mappings are positional and have
+#'   to line up one for one with the encoded columns.
+#'
+#'   A column can also have fewer levels on these rows than its mapping
+#'   was drawn for. The reference draws `rng.permutation(k)` over the `k`
+#'   categories it sees, so its codes are always `0..k-1`; a longer
+#'   mapping is cut down to that, keeping the order it gives the first `k`
+#'   codes.
 #' @keywords internal
 fit_categorical_encoding <- function(X_train, cat_ix, cfg,
-                                     draw_missing = FALSE) {
+                                     draw_missing = FALSE,
+                                     cat_cols = cat_ix) {
   name <- cfg$categorical_name %||% "numeric"
   if (name %in% c("numeric", "none")) {
     return(list(kind = "identity", cat_ix = cat_ix, cat_mappings = NULL))
@@ -192,8 +216,10 @@ fit_categorical_encoding <- function(X_train, cat_ix, cfg,
   }
 
   sel <- select_encoded_categoricals(X_train, cat_ix, name)
+  sel_cols <- as.integer(cat_cols)[match(sel, cat_ix)]
   if (!length(sel)) {
-    return(list(kind = "identity", cat_ix = integer(), cat_mappings = list()))
+    return(list(kind = "identity", cat_ix = integer(), cat_mappings = list(),
+                cat_mapping_columns = integer()))
   }
 
   enc <- fit_ordinal_encoder(X_train, sel)
@@ -202,6 +228,28 @@ fit_categorical_encoding <- function(X_train, cat_ix, cfg,
     mappings <- cfg$cat_mappings
     if (is.null(mappings) && isTRUE(draw_missing)) {
       mappings <- lapply(enc$n_categories, function(k) sample.int(k) - 1L)
+    } else if (!is.null(mappings) && !is.null(cfg$cat_mapping_columns)) {
+      have <- as.integer(cfg$cat_mapping_columns)
+      if (length(have) != length(mappings)) {
+        cli::cli_abort(c(
+          "This member carries {length(mappings)} code mapping{?s} but \\
+           names the predictors of {length(have)}.",
+          i = "Its config directory is damaged; regenerate it."
+        ))
+      }
+      # As text, so cli counts them rather than reading one as a quantity.
+      unmapped <- as.character(setdiff(sel_cols, have))
+      if (length(unmapped)) {
+        cli::cli_abort(c(
+          "This member encodes predictor{?s} {unmapped} on these training \\
+           rows, but carries no code mapping for {?it/them}.",
+          i = "The encoder takes a column only when its levels are common \\
+               enough on the rows it is fitted on, so other rows can take \\
+               a column the configs' rows did not.",
+          .config_schema_hint()
+        ))
+      }
+      mappings <- mappings[match(sel_cols, have)]
     }
     if (is.null(mappings)) {
       cli::cli_abort(c(
@@ -225,6 +273,8 @@ fit_categorical_encoding <- function(X_train, cat_ix, cfg,
            mapping is {length(mappings[[k]])} long."
         ))
       }
+      mappings[[k]] <- .restrict_code_mapping(mappings[[k]],
+                                              enc$n_categories[k])
     }
   }
 
@@ -234,8 +284,30 @@ fit_categorical_encoding <- function(X_train, cat_ix, cfg,
     enc = enc, mappings = mappings,
     rest = setdiff(seq_len(ncol(X_train)), sel),
     cat_ix = seq_along(sel),
-    cat_mappings = mappings
+    cat_mappings = mappings,
+    cat_mapping_columns = sel_cols
   )
+}
+
+# A code mapping drawn for more categories than these rows have, cut down
+# to a permutation of `0..k-1`.
+#
+# The reference never has to do this: it draws `rng.permutation(k)` over
+# the `k` categories it sees on the rows it fits, so a shuffled code is
+# always below `k`. Applying a longer mapping as it stands would hand the
+# network codes up to the length it was drawn for, with gaps -- inputs
+# the reference never produces. Keeping the relative order of the first
+# `k` entries gives a permutation of `0..k-1` instead: the stored mapping
+# itself when the rows have every level, and its restriction when the
+# levels missing here are the highest ones. A uniform permutation stays
+# uniform under this, so the member is still a draw from the reference's
+# distribution.
+# @keywords internal
+.restrict_code_mapping <- function(mapping, k) {
+  mapping <- as.integer(mapping)
+  if (length(mapping) == k) return(mapping)
+  first <- mapping[seq_len(k)]
+  match(first, sort(first)) - 1L
 }
 
 # What to do when a member's config and the training rows disagree. A
@@ -294,7 +366,8 @@ apply_member_pipeline <- function(X_train, X_test, cfg,
                                 draw_missing)
   list(X_train = fitted$X_train,
        X_test  = transform_member_pipeline(X_test, fitted),
-       cat_mappings = fitted$cat_mappings)
+       cat_mappings = fitted$cat_mappings,
+       cat_mapping_columns = fitted$cat_mapping_columns)
 }
 
 #' @rdname apply_member_pipeline
@@ -306,6 +379,10 @@ fit_member_pipeline <- function(X_train, cfg,
                                 draw_missing = FALSE) {
   X_tr <- as.matrix(X_train)
   cat_ix <- as.integer(categorical_features)
+  # The original predictor behind each entry of `cat_ix`, carried through
+  # every step that moves the columns. The encoder's mappings are keyed by
+  # it, because which columns the encoder takes depends on the rows.
+  cat_cols <- cat_ix
   steps <- list()
 
   # --- Polynomial features (TabPFN v2.6's regressor; "no" elsewhere).
@@ -333,6 +410,7 @@ fit_member_pipeline <- function(X_train, cfg,
   # keep their identity, at their new positions.
   keep_cols <- remove_constant_features_fit(X_tr)
   X_tr <- X_tr[, keep_cols, drop = FALSE]
+  cat_cols <- cat_cols[cat_ix %in% keep_cols]
   cat_ix <- match(cat_ix[cat_ix %in% keep_cols], keep_cols)
   steps$keep_cols <- keep_cols
 
@@ -368,6 +446,9 @@ fit_member_pipeline <- function(X_train, cfg,
 
   trans_ix <- if (apply_to_cat) c(cat_ix, num_ix) else num_ix
   pass_ix  <- if (append) seq_len(n_in) else if (apply_to_cat) integer() else cat_ix
+  # Every layout keeps the categorical columns in their order, so
+  # `cat_cols` only has to follow `cat_ix` where it empties.
+  if (!append && apply_to_cat) cat_cols <- integer()
   cat_ix   <- if (append) cat_ix
               else if (apply_to_cat) integer()
               else seq_along(cat_ix)
@@ -381,7 +462,7 @@ fit_member_pipeline <- function(X_train, cfg,
                                           steps$reshape))
 
   # --- EncodeCategorical.
-  enc <- fit_categorical_encoding(X_tr, cat_ix, cfg, draw_missing)
+  enc <- fit_categorical_encoding(X_tr, cat_ix, cfg, draw_missing, cat_cols)
   X_tr <- transform_categorical_encoding(X_tr, enc)
   steps$encode <- enc
 
@@ -404,8 +485,8 @@ fit_member_pipeline <- function(X_train, cfg,
                                           is_test = FALSE))
   }
 
-  # --- Shuffle. `cat_mappings` comes back out so the generator can record
-  # what it drew; the network itself is not told which columns are
+  # --- Shuffle. `cat_mappings` comes back out, with the predictor each
+  # belongs to, so the generator can record what it drew; the network itself is not told which columns are
   # categorical (both architectures ignore that argument), so the schema
   # stops mattering here.
   steps$shuffle_perm <- cfg$shuffle_perm
@@ -430,7 +511,8 @@ fit_member_pipeline <- function(X_train, cfg,
     X_tr <- apply_feature_shift(X_tr, cfg$shuffle_perm)
   }
 
-  c(list(X_train = X_tr, cat_mappings = enc$cat_mappings), steps)
+  c(list(X_train = X_tr, cat_mappings = enc$cat_mappings,
+         cat_mapping_columns = enc$cat_mapping_columns), steps)
 }
 
 #' @rdname apply_member_pipeline
@@ -514,7 +596,9 @@ inverse_target_transform_borders <- function(znorm_borders, tt_state) {
 #'   (0-indexed) and `target_transform_lambda`. Configs written by
 #'   [generate_ensemble_configs_native()] also carry
 #'   `categorical_features` (1-based) and `n_features_in`, the schema they
-#'   were sized for; a Python dump records neither, and both are `NULL`.
+#'   were sized for, and `cat_mapping_columns` (1-based), the predictor
+#'   behind each of `cat_mappings`; a Python dump records none of these,
+#'   and they are `NULL`.
 #' @keywords internal
 load_ensemble_configs_from_dump <- function(dump_dir) {
   require_suggested("jsonlite")
@@ -540,10 +624,16 @@ load_ensemble_configs_from_dump <- function(dump_dir) {
       preset                     = pc$name,
       categorical_name           = pc$categorical_name %||% "numeric",
       # Keyed `col_00`, `col_01`, ... in encoded-column order, so sorting
-      # the names recovers that order.
+      # the names by their number recovers that order (`col_100` would
+      # come before `col_11` as text).
       cat_mappings               = if (is.null(cat_maps)) NULL else
-                                    lapply(sort(names(cat_maps)),
+                                    lapply(names(cat_maps)[order(as.integer(
+                                             sub("^col_", "", names(cat_maps))))],
                                            function(k) as.integer(cat_maps[[k]]$cpu())),
+      # The predictor each of those belongs to, 1-based. Native configs
+      # only: a Python dump's mappings stay positional.
+      cat_mapping_columns        = if (is.null(c$`_cat_mapping_columns`)) NULL
+                                    else as.integer(unlist(c$`_cat_mapping_columns`)) + 1L,
       append_original            = pc$append_original %||% FALSE,
       max_features_per_estimator = as.integer(pc$max_features_per_estimator %||% 500L),
       global_transformer_name    = pc$global_transformer_name,

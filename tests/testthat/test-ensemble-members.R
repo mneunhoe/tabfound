@@ -197,6 +197,71 @@ test_that("a member that does not fit the rows says why, not stopifnot", {
   }), 3L), "carries no code mappings")
 })
 
+# Two categorical columns the encoder takes on the whole table. On the
+# slice, `a`'s fourth level is down to five rows, so the encoder's
+# least-common-level filter drops it there; `b`'s third level is gone
+# altogether, but the two left are common enough to keep it.
+encoder_data <- function() {
+  set.seed(4)
+  n <- 480L
+  X <- cbind(x1 = rnorm(n), x2 = runif(n),
+             a = rep(1:4, length.out = n), b = sample(rep(1:3, n / 3L)))
+  win <- c(which(X[, "a"] != 4 & X[, "b"] != 3)[1:200],
+           which(X[, "a"] == 4 & X[, "b"] != 3)[1:5])
+  list(X = X, y = X[, "x1"] + 0.5 * X[, "a"] + rnorm(n), win = win)
+}
+
+test_that("a member's mappings follow their columns onto a slice", {
+  skip_if_not_installed("safetensors")
+  skip_if_not_installed("jsonlite")
+  dat <- encoder_data()
+  X_win <- dat$X[dat$win, ]
+  name <- "ordinal_very_common_categories_shuffled"
+  expect_identical(select_encoded_categoricals(dat$X, 3:4, name), 3:4)
+  expect_identical(select_encoded_categoricals(X_win, 3:4, name), 4L)
+
+  for (variant in c("v2.5", "v2.6")) {
+    cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 2L,
+                                            head = "regressor",
+                                            categorical_features = 3:4,
+                                            variant = variant)
+    ord <- Filter(function(m) identical(m$categorical_name, name), cfg)
+    expect_length(ord, 1L)
+    m <- ord[[1]]
+    expect_identical(m$cat_mapping_columns, 3:4)
+    expect_identical(lengths(m$cat_mappings), c(4L, 3L))
+
+    state <- stub_tabpfn_regressor(ensemble_configs = cfg)$fit(X_win,
+                                                               dat$y[dat$win])
+    expect_identical(state$categorical_features, 3:4)
+    for (mm in cfg) {
+      expect_no_error(fit_member_pipeline(X_win, mm, 3:4))
+    }
+
+    # `b`'s mapping, not the first one: picked by predictor, not position,
+    # and cut to the two levels these rows have.
+    fitted <- fit_member_pipeline(X_win, m, 3:4)
+    expect_identical(fitted$cat_mapping_columns, 4L)
+    expect_identical(fitted$cat_mappings,
+                     list(.restrict_code_mapping(m$cat_mappings[[2]], 2L)))
+    expect_setequal(fitted$cat_mappings[[1]], 0:1)
+  }
+})
+
+test_that("a column with no mapping says which, on rows that take it", {
+  skip_if_not_installed("safetensors")
+  skip_if_not_installed("jsonlite")
+  dat <- encoder_data()
+  cfg <- generate_ensemble_configs_native(dat$X, dat$y, n_estimators = 2L,
+                                          head = "regressor",
+                                          categorical_features = 3:4)
+  m <- cfg[[2]]
+  m$cat_mappings <- m$cat_mappings[2]
+  m$cat_mapping_columns <- 4L
+  expect_error(fit_member_pipeline(dat$X, m, 3:4),
+               "encodes predictor 3 .* no code mapping for it")
+})
+
 
 # ---------------------------------------------------------------------------
 # Against real weights

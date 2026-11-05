@@ -401,6 +401,7 @@ generate_ensemble_configs_native <- function(X_train, y_train,
                                    draw_missing = TRUE)
     n_post <- ncol(sized$X_train)
     cfg_i$cat_mappings <- sized$cat_mappings
+    cfg_i$cat_mapping_columns <- sized$cat_mapping_columns
     shuffle_perm_0idx <- sample.int(n_post) - 1L
 
     member_dir <- file.path(output_dir, sprintf("member_%02d", i - 1L))
@@ -457,6 +458,13 @@ generate_ensemble_configs_native <- function(X_train, y_train,
       `_categorical_features` = I(as.integer(cat_ix) - 1L),
       `_n_features_in`        = n_features
     )
+    # Which predictor each of `cat_mappings.safetensors` belongs to, in its
+    # `col_NN` order. The encoder's selection depends on the rows, so a fit
+    # on a slice can take fewer columns than these, and finds its mappings
+    # by predictor rather than by position.
+    if (length(cfg_i$cat_mappings %||% list())) {
+      out_i$`_cat_mapping_columns` <- I(as.integer(cfg_i$cat_mapping_columns) - 1L)
+    }
 
     if (head == "classifier") {
       class_perm_0idx <- sample.int(n_classes) - 1L
