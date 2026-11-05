@@ -1,35 +1,60 @@
 # tabfound (development version)
 
-* New architecture style, `plot_architecture(style = "schematic")`: how
-  each block runs, in the convention of the papers and Sebastian Raschka's
-  LLM Architecture Gallery. The data flows upwards; every repeated block
-  is opened into its steps in the order they run, with residual
-  connections drawn where each network adds them; attention steps say
-  where their keys come from and how they differ from plain attention;
-  inputs such as RoPE tables, inducing points and QK-norm feed their step
-  from the side; and facts point at the part they describe. Each backend
-  has its own accent colour, kept readable in both themes.
-* Architecture descriptions record how each block computes, not only
-  what it contains: `arch_residual()` groups the steps each residual
-  connection skips (pre-norm, post-norm or sandwich, as each network
-  runs it); `arch_attn()` says which rows supply an attention step's
-  keys, which tokens query in the last block, and whether it uses
-  QK-norm, a scaling variant or fewer key/value heads for the test rows;
-  and stages that join the stream rather than transform it say so
-  (`join`: added, concatenated or prepended, and to which rows). Facts
-  can be placed in a diagram through `ARCH_FACT_ANCHORS`. No diagram
-  draws these yet; the schematic style will. The glossary gains GQA and
-  MQA.
-* A stage's sublayers are now the steps of its forward pass, in the order
-  they run, checked against each network by a test that traces one
-  forward pass. Norms are listed one by one where they run (no more
-  "LayerNorm x2" or "RMSNorm x4"), whole attention-and-MLP blocks are
-  split into their norms, attention and feed-forward, and both halves of
-  every induced-attention block are shown in full. Sublayers gain `role`:
-  `"input"` for what a step consumes (RoPE tables, inducing points, CLS
-  tokens, named by `feeds`) and `"final"` for a step run once after the
-  stack (a stack's output norm). This changes `detail = "full"` diagrams
-  and the icicle's sublayer band.
+* Architecture diagrams:
+  * `plot_architecture(style = )` draws the same description five ways:
+    `"cards"` (the default), `"tufte"` (a table with a dot per stage on a
+    log scale shared by every diagram), `"glyphs"` (each stage as a small
+    table showing the axis its attention runs over), `"icicle"` (where the
+    parameters are, as lengths) and `"schematic"` (how each block runs, in
+    the convention of the papers and Sebastian Raschka's LLM Architecture
+    Gallery: data flowing upwards, residual connections drawn, attention
+    steps saying where their keys come from, facts pointing at their
+    part). `options(tabfound.arch_style = )` sets the default.
+  * New `plot_architecture_diff()` draws two models side by side, pairing
+    their stages by kind and attention axis and their facts by name. It
+    takes models, fits or `tabfound_arch` objects in any mix.
+  * Every diagram ends in a key that defines each symbol in its shapes,
+    each abbreviation in its text and the notation of its style, so a
+    figure shared on its own still reads. It replaces the fact sheet's
+    symbol line, which was cut off at the panel's width. SVG output also
+    carries the title and the key as `<title>` and `<desc>`.
+* Architecture descriptions (`tabfound_architecture()`) are checked
+  against each network's forward pass:
+  * Corrections. Kumo Tabular's column and row blocks alternate, one of
+    each per layer, rather than running as two stacks; its readout tokens
+    skip the column blocks. TabFM's CLS columns join after the first
+    column stage. TabICL's and TabFM's final norm belongs to the decoder
+    (`decoder(ln(x))`), not the target encoder; TabICL's inducing points
+    are learned vectors whose keys are the labelled rows. TabPFN v2.5's
+    target joins as an extra column on every row, and its regressor's
+    encoder is an MLP; TabPFN v2.6's positional subspace is a quarter of
+    the model width (48 only at the published width).
+  * A stage's sublayers are the steps of its forward pass in the order
+    they run, which a test checks by tracing each network. Norms are
+    listed one by one where they run, whole attention-and-MLP blocks are
+    split into their steps, and both halves of every induced-attention
+    block are shown. This changes `detail = "full"` diagrams and the
+    icicle's sublayer band.
+  * Descriptions record how each block computes: `arch_residual()` groups
+    the steps each residual connection skips; `arch_attn()` says which rows
+    supply an attention step's keys, which tokens query in the last block,
+    and its QK-norm, scaling and test key/value heads; `join` and
+    `join_rows` say how a stage joins the stream; `role` and `feeds` mark
+    a sublayer's inputs (RoPE tables, inducing points, CLS tokens) and the
+    steps run once after a stack. Stages also gain `collapses` and
+    `interleave`, and sublayers `params_all`, their count over every block
+    of a stack.
+  * Fact names are shared across backends, so the same fact has the same
+    name everywhere: "Column-stage blocks", "Row-stage blocks" and "ICL
+    layers" replace "Column blocks", "Row blocks", "Aggregator blocks" and
+    "ICL blocks"; "Features per group" replaces "Feature group size" and
+    Kumo's "Cell group"; "Feed-forward" (as "2 x width (1024)") replaces
+    "MLP width"; "Embedding width" replaces Mitra's "Width" and Kumo's
+    "Cell width"; Kumo's "Heads" is split into "ICL heads" and "Embedding
+    heads". This changes `print()` output and the fact sheet.
+  * The `n_test` symbol is defined for every backend and Mitra defines `n`
+    and `p`; each description carries a `glossary`, which explains every
+    abbreviation a diagram draws.
 * Hooks for reweighting and selecting a TabPFN ensemble after the fact,
   for add-on packages such as `tabfound.thinking`:
   * `tabular_classifier()` / `tabular_regressor()` take the ensemble as
@@ -45,52 +70,6 @@
   * New `native_ensemble_presets()` returns the checkpoint's member menu,
     and `generate_ensemble_configs_native(presets = )` draws members from
     an edited one.
-
-* Architecture descriptions corrected against the networks' forward
-  passes, so every diagram style shows what the models run:
-  * Kumo Tabular's column and row blocks alternate, one of each per layer;
-    they were drawn as two stacks run one after the other. Stages gain
-    `interleave`, and the diagrams tag such blocks "x N, alternating".
-    Its readout tokens are noted as skipping the column blocks.
-  * TabFM's CLS columns join after the first column stage, not before it,
-    and its cell embedder's target embedding is now mentioned.
-  * TabICL's and TabFM's final norm moves from the target encoder to the
-    decoder, where it runs (`decoder(ln(x))`); TabICL's inducing points
-    are learned vectors whose keys are the labelled rows.
-  * TabPFN v2.5's target encoder joins as an extra column on every row,
-    not added on the training rows, and its regressor's encoder is an
-    MLP. TabPFN v2.6's positional subspace is a quarter of the model
-    width (48 only at the published width).
-* Architecture diagrams come in four styles: `plot_architecture(style = )`
-  takes `"cards"` (the default, unchanged apart from the key below),
-  `"tufte"` (a table with a dot per stage on a log scale shared by every
-  diagram), `"glyphs"` (each stage as a small table showing the axis its
-  attention runs over) and `"icicle"` (where the parameters are, as
-  lengths). `options(tabfound.arch_style = )` sets the default.
-* New `plot_architecture_diff()` draws two models side by side, pairing
-  their stages by kind and attention axis and their facts by name. It
-  takes models, fits or `tabfound_arch` objects in any mix.
-* Every architecture diagram ends in a key that defines each symbol in
-  its shapes, each abbreviation in its text and the notation of its
-  style, so a figure shared on its own still reads. It replaces the fact
-  sheet's symbol line, which was cut off at the panel's width. SVG output
-  also carries the title and the key as `<title>` and `<desc>`.
-* Architecture descriptions:
-  * Fact names are shared across backends, so the same fact has the same
-    name everywhere: "Column-stage blocks", "Row-stage blocks" and "ICL
-    layers" replace "Column blocks", "Row blocks", "Aggregator blocks"
-    and "ICL blocks"; "Features per group" replaces "Feature group size"
-    and Kumo's "Cell group"; "Feed-forward" (as "2 x width (1024)")
-    replaces "MLP width"; "Embedding width" replaces Mitra's "Width" and
-    Kumo's "Cell width"; Kumo's "Heads" is split into "ICL heads" and
-    "Embedding heads". This changes `print()` output and the fact sheet.
-  * Stages gain `collapses`, marking the stage after which a model works
-    on one vector per row.
-  * Sublayers gain `params_all`, their count over every block of a stack,
-    which unlike per-block count times repeats is right for parts shared
-    by the whole stack (RoPE tables, output norms).
-  * The `n_test` symbol is defined for every backend, and Mitra defines
-    `n` and `p`; each description carries a `glossary`.
 * Fixed wrong predictions from Kumo Tabular medium and large on Apple's
   `mps` device. libtorch's fused attention kernel on MPS returns wrong
   values for non-contiguous inputs when the query is shorter than the keys
