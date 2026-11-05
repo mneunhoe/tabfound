@@ -8,6 +8,7 @@ plot_architecture(
   object,
   file = NULL,
   format = NULL,
+  style = getOption("tabfound.arch_style", "cards"),
   detail = c("overview", "full"),
   theme = c("light", "dark"),
   scale = 1,
@@ -27,6 +28,10 @@ description can be inspected and then drawn.}
 
 \item{format}{\code{"svg"}, \code{"png"} or \code{"pdf"}. Inferred from \code{file} when
 not given.}
+
+\item{style}{How to draw it. \code{"cards"} (the default) stacks one card
+per stage. Set \code{options(tabfound.arch_style = )} to change the
+default for a session.}
 
 \item{detail}{\code{"overview"} draws each repeated stack as one block;
 \code{"full"} expands it into its sublayers.}

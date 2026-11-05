@@ -6,6 +6,7 @@
 \usage{
 arch_scene(
   arch,
+  style = "cards",
   detail = c("overview", "full"),
   theme = c("light", "dark"),
   show_shapes = TRUE,
@@ -15,6 +16,8 @@ arch_scene(
 }
 \arguments{
 \item{arch}{A \code{tabfound_arch} from \code{\link[=tabfound_architecture]{tabfound_architecture()}}.}
+
+\item{style}{A style registered in \code{arch_styles()}.}
 
 \item{detail}{\code{"overview"} or \code{"full"}.}
 

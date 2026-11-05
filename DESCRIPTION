@@ -39,6 +39,7 @@ Suggests:
     synthpop,
     testthat (>= 3.0.0),
     tibble,
+    viridisLite,
     withr,
     knitr,
     quarto,

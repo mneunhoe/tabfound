@@ -22,6 +22,12 @@ ARCH_FONT <- paste(
   "Arial, sans-serif", sep = ", "
 )
 ARCH_FONT_MONO <- "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+# ET Book first, for the Tufte look where it is installed; Palatino is
+# the closest face most systems ship.
+ARCH_FONT_SERIF <- paste(
+  "'ETBembo', 'ET Book', Palatino, 'Palatino Linotype', 'Book Antiqua'",
+  "Georgia, serif", sep = ", "
+)
 
 # @keywords internal
 svg_esc <- function(x) {
@@ -72,7 +78,8 @@ arch_svg_item <- function(e) {
     ), "/>"),
     text = paste0("  <text ", svg_attr(
       x = svg_num(e$x), y = svg_num(e$y), dy = "0.35em",
-      `font-family` = if (isTRUE(e$mono)) ARCH_FONT_MONO else ARCH_FONT,
+      `font-family` = switch(e$family, mono = ARCH_FONT_MONO,
+                             serif = ARCH_FONT_SERIF, ARCH_FONT),
       `font-size` = paste0(svg_num(e$size), "px"),
       `font-weight` = if (isTRUE(e$bold)) "600" else NULL,
       `font-style` = if (isTRUE(e$italic)) "italic" else NULL,
@@ -185,7 +192,10 @@ arch_grid_item <- function(e, H) {
         fontface = if (isTRUE(e$bold) && isTRUE(e$italic)) "bold.italic"
                    else if (isTRUE(e$bold)) "bold"
                    else if (isTRUE(e$italic)) "italic" else "plain",
-        fontfamily = if (isTRUE(e$mono)) "mono" else "sans"
+        # grid's own generic families. "serif" is Times on most devices
+        # rather than the SVG's Palatino, which is accepted: registering a
+        # font would add a dependency for one face.
+        fontfamily = e$family
       )
     ),
     invisible(NULL)
@@ -230,6 +240,9 @@ arch_format_from_file <- function(file) {
 #'   (the default) the diagram is drawn on the current graphics device.
 #' @param format `"svg"`, `"png"` or `"pdf"`. Inferred from `file` when
 #'   not given.
+#' @param style How to draw it. `"cards"` (the default) stacks one card
+#'   per stage. Set `options(tabfound.arch_style = )` to change the
+#'   default for a session.
 #' @param detail `"overview"` draws each repeated stack as one block;
 #'   `"full"` expands it into its sublayers.
 #' @param theme `"light"` or `"dark"`.
@@ -253,25 +266,34 @@ arch_format_from_file <- function(file) {
 #'   picture.
 #' @export
 plot_architecture <- function(object, file = NULL, format = NULL,
+                              style = getOption("tabfound.arch_style", "cards"),
                               detail = c("overview", "full"),
                               theme = c("light", "dark"), scale = 1,
                               show_shapes = TRUE, show_params = TRUE,
                               show_facts = TRUE) {
+  style  <- arch_match_style(style)
   detail <- match.arg(detail)
   theme  <- match.arg(theme)
   arch <- if (inherits(object, "tabfound_arch")) object
           else tabfound_architecture(object)
 
-  scene <- arch_scene(arch, detail = detail, theme = theme,
+  scene <- arch_scene(arch, style = style, detail = detail, theme = theme,
                       show_shapes = show_shapes, show_params = show_params,
                       show_facts = show_facts)
+  out <- arch_write_scene(scene, file, format, scale)
+  invisible(out %||% arch)
+}
 
+# Draw a scene on the current device (`file = NULL`) or write it to a
+# file. Returns the path, or `NULL` when it drew on the device.
+# @keywords internal
+arch_write_scene <- function(scene, file = NULL, format = NULL, scale = 1) {
   if (is.null(file)) {
     if (!is.null(format) && !identical(format, "device")) {
       cli::cli_abort("{.arg format} needs a {.arg file} to write to.")
     }
     arch_render_grid(scene)
-    return(invisible(arch))
+    return(NULL)
   }
 
   fmt <- format %||% arch_format_from_file(file)
@@ -297,7 +319,7 @@ plot_architecture <- function(object, file = NULL, format = NULL,
     }
   )
   cli::cli_alert_success("Wrote {.file {file}} ({scene$width} x {scene$height} px).")
-  invisible(file)
+  file
 }
 
 #' Draw a model's architecture
