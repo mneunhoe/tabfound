@@ -859,7 +859,7 @@ mitra_describe <- function(config, task) {
       detail = if (clf)
         sprintf("a learned vector per class, plus one \"unknown\" for the query rows; prepended as feature column 1")
       else "Linear(1 -> D) on the support rows, a learned vector on the query rows",
-      shape = "(B, S + Q, F + 1, D)", prefix = "y_embedding"),
+      shape = "(B, S + Q, F + 1, D)", prefix = "y_embedding", join = "prepend"),
     arch_stage(
       "layers", "Layer", kind = "attention", group = "Transformer",
       repeats = L,
@@ -867,20 +867,29 @@ mitra_describe <- function(config, task) {
                        H, as.integer(D / H), D, 4L * D),
       shape = "(B, S + Q, F + 1, D)", prefix = "layers",
       children = list(
-        arch_stage("ln1", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm1"),
-        arch_stage("a_row", "Attention across rows - query rows read the support",
-                   kind = "attention", axis = "rows",
-                   prefix = "layers.0.attention1"),
-        arch_stage("ln2", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm2"),
-        arch_stage("mlp1", "MLP, GELU", kind = "ffn",
-                   prefix = c("layers.0.linear1", "layers.0.linear2")),
-        arch_stage("ln3", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm3"),
-        arch_stage("a_feat", "Attention across features - self-attention",
-                   kind = "attention", axis = "features",
-                   prefix = "layers.0.attention2"),
-        arch_stage("ln4", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm4"),
-        arch_stage("mlp2", "MLP, GELU", kind = "ffn",
-                   prefix = c("layers.0.linear3", "layers.0.linear4"))
+        arch_residual(
+          arch_stage("ln1", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm1"),
+          arch_stage("a_row", "Attention across rows - query rows read the support",
+                     kind = "attention", axis = "rows",
+                     attn = arch_attn("support rows"),
+                     prefix = "layers.0.attention1")
+        ),
+        arch_residual(
+          arch_stage("ln2", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm2"),
+          arch_stage("mlp1", "MLP, GELU", kind = "ffn",
+                     prefix = c("layers.0.linear1", "layers.0.linear2"))
+        ),
+        arch_residual(
+          arch_stage("ln3", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm3"),
+          arch_stage("a_feat", "Attention across features - self-attention",
+                     kind = "attention", axis = "features", attn = arch_attn("all"),
+                     prefix = "layers.0.attention2")
+        ),
+        arch_residual(
+          arch_stage("ln4", "LayerNorm", kind = "norm", prefix = "layers.0.layer_norm4"),
+          arch_stage("mlp2", "MLP, GELU", kind = "ffn",
+                     prefix = c("layers.0.linear3", "layers.0.linear4"))
+        )
       )),
     arch_stage(
       "final_ln", "Final LayerNorm", kind = "norm", group = "Decode",

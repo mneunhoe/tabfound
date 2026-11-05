@@ -1107,6 +1107,33 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
 # Architecture description
 # ---------------------------------------------------------------------------
 
+# The children of one TabFM attention block, in the order it runs them.
+# Both sublayers are sandwiched: a norm before and a norm after, inside
+# the residual connection.
+# @keywords internal
+tabfm_block_children <- function(pfx, id, label, axis, keys = "all") {
+  p <- function(x) paste0(pfx, ".", x)
+  list(
+    arch_residual(
+      arch_stage(paste0(id, "_pre"), "RMSNorm", kind = "norm",
+                 prefix = p("pre_attn_ln")),
+      arch_stage(id, label, kind = "attention", axis = axis, prefix = p("attn"),
+                 attn = arch_attn(keys, qk_norm = TRUE,
+                                  scaling = "learned per-dim")),
+      arch_stage(paste0(id, "_post"), "RMSNorm", kind = "norm",
+                 prefix = p("post_attn_ln"))
+    ),
+    arch_residual(
+      arch_stage(paste0(id, "_ffpre"), "RMSNorm", kind = "norm",
+                 prefix = p("pre_ff_ln")),
+      arch_stage(paste0(id, "_ff"), "SwiGLU feed-forward", kind = "ffn",
+                 prefix = p(c("linear1_gate", "linear1", "linear2"))),
+      arch_stage(paste0(id, "_ffpost"), "RMSNorm", kind = "norm",
+                 prefix = p("post_ff_ln"))
+    )
+  )
+}
+
 #' Stage list for the TabFM diagram
 #'
 #' TabFM alternates: summarise the columns, mix the row, summarise the
@@ -1118,27 +1145,6 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
 #' @param config The checkpoint's parsed `config.json`.
 #' @param task `"classification"` or `"regression"`.
 #' @keywords internal
-# The children of one TabFM attention block, in the order it runs them.
-# Both sublayers are sandwiched: a norm before and a norm after, inside
-# the residual connection.
-# @keywords internal
-tabfm_block_children <- function(pfx, id, label, axis) {
-  p <- function(x) paste0(pfx, ".", x)
-  list(
-    arch_stage(paste0(id, "_pre"), "RMSNorm", kind = "norm",
-               prefix = p("pre_attn_ln")),
-    arch_stage(id, label, kind = "attention", axis = axis, prefix = p("attn")),
-    arch_stage(paste0(id, "_post"), "RMSNorm", kind = "norm",
-               prefix = p("post_attn_ln")),
-    arch_stage(paste0(id, "_ffpre"), "RMSNorm", kind = "norm",
-               prefix = p("pre_ff_ln")),
-    arch_stage(paste0(id, "_ff"), "SwiGLU feed-forward", kind = "ffn",
-               prefix = p(c("linear1_gate", "linear1", "linear2"))),
-    arch_stage(paste0(id, "_ffpost"), "RMSNorm", kind = "norm",
-               prefix = p("post_ff_ln"))
-  )
-}
-
 tabfm_describe <- function(config, task) {
   E     <- as.integer(config$embed_dim)
   n_cls <- as.integer(config$row_num_cls)
@@ -1164,10 +1170,10 @@ tabfm_describe <- function(config, task) {
                       prefix = paste0(blk, ".ind_vectors"))),
       tabfm_block_children(paste0(blk, ".mab1"), "ind",
                            "Inducing points attend to the training rows",
-                           axis = "rows"),
+                           axis = "rows", keys = "training rows"),
       tabfm_block_children(paste0(blk, ".mab2"), "back",
                            "Rows attend back to the inducing points",
-                           axis = "inducing"),
+                           axis = "inducing", keys = "inducing points"),
       list(
         arch_stage("out", "Output projection, after the stack", kind = "embed",
                    role = "final", prefix = paste0(pfx, ".out_w")),
@@ -1207,6 +1213,7 @@ tabfm_describe <- function(config, task) {
       "cls", "CLS columns", kind = "embed", group = "Pass 1",
       detail = sprintf("%d learned columns prepended to every row, after the first column stage",
                        n_cls),
+      join = "prepend",
       prefix = "cls_tokens"),
     arch_stage(
       "row1", "Row encoder", kind = "attention", group = "Pass 1",
@@ -1234,6 +1241,7 @@ tabfm_describe <- function(config, task) {
       group = "In-context",
       detail = if (clf) sprintf("one-hot over %d classes -> Linear(%d)", n_out, D)
                else sprintf("MLP(1 -> %d)", D),
+      join = "add", join_rows = "training rows",
       prefix = "icl_predictor.y_encoder"),
     arch_stage(
       "icl", "In-context learning block", kind = "attention",
@@ -1243,7 +1251,7 @@ tabfm_describe <- function(config, task) {
       shape = sprintf("(B, n, %d)", D), prefix = "icl_predictor.tf_icl",
       children = tabfm_block_children("icl_predictor.tf_icl.blocks.0", "iattn",
                                       "Attention over rows, training-row keys",
-                                      axis = "rows")),
+                                      axis = "rows", keys = "training rows")),
     arch_stage(
       "dec", "Decoder MLP", kind = "decode", group = "Decode",
       detail = sprintf("RMSNorm, then %d -> %s -> %d, GELU", D,

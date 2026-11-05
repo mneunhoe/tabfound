@@ -1,5 +1,16 @@
 # tabfound (development version)
 
+* Architecture descriptions record how each block computes, not only
+  what it contains: `arch_residual()` groups the steps each residual
+  connection skips (pre-norm, post-norm or sandwich, as each network
+  runs it); `arch_attn()` says which rows supply an attention step's
+  keys, which tokens query in the last block, and whether it uses
+  QK-norm, a scaling variant or fewer key/value heads for the test rows;
+  and stages that join the stream rather than transform it say so
+  (`join`: added, concatenated or prepended, and to which rows). Facts
+  can be placed in a diagram through `ARCH_FACT_ANCHORS`. No diagram
+  draws these yet; the schematic style will. The glossary gains GQA and
+  MQA.
 * A stage's sublayers are now the steps of its forward pass, in the order
   they run, checked against each network by a test that traces one
   forward pass. Norms are listed one by one where they run (no more
