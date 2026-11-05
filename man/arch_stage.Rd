@@ -18,7 +18,10 @@ arch_stage(
   collapses = FALSE,
   interleave = NULL,
   role = c("step", "input", "final"),
-  feeds = NULL
+  feeds = NULL,
+  join = NULL,
+  join_rows = NULL,
+  attn = NULL
 )
 }
 \arguments{
@@ -66,6 +69,17 @@ RoPE table, inducing points, CLS tokens -- named by \code{feeds}; or
 than in every block, such as a stack's output norm.}
 
 \item{feeds}{For \code{role = "input"}: the id of the step child it feeds.}
+
+\item{join}{For a stage whose output joins the main stream rather than
+transforming it: \code{"add"} (added to it, as a target encoder is),
+\code{"concat"} (joined as an extra column) or \code{"prepend"} (learned rows or
+columns put in front, as CLS tokens are).}
+
+\item{join_rows}{With \code{join}: the rows it applies to, when not all of
+them -- \code{"training rows"} or \code{"context rows"}.}
+
+\item{attn}{For an attention child: an \code{\link[=arch_attn]{arch_attn()}} saying which rows
+supply its keys and how it differs from plain attention.}
 }
 \value{
 A \code{tabfound_arch_stage}.

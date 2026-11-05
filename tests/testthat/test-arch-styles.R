@@ -250,8 +250,8 @@ test_that("every abbreviation drawn is in the glossary or is a proper name", {
     expect_identical(arch_unexplained_terms(arch, unname(ARCH_KINDS)),
                      character(), info = nm)
   }
-  fake <- list(title = "A GQA model", facts = character(), stages = list())
-  expect_identical(arch_unexplained_terms(fake), "GQA")
+  fake <- list(title = "A MoE model", facts = character(), stages = list())
+  expect_identical(arch_unexplained_terms(fake), "MoE")
   fake$title <- "MLPs over RoPE, then TabPFN"
   expect_identical(arch_unexplained_terms(fake), character())
   expect_named(arch_used_terms(fake), c("RoPE", "MLP"))
