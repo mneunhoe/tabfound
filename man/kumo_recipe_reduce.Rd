@@ -4,14 +4,21 @@
 \alias{kumo_recipe_reduce}
 \title{Combine member outputs as the reference's output recipe does}
 \usage{
-kumo_recipe_reduce(outs, classification, trim = 0.2)
+kumo_recipe_reduce(outs, classification, trim = 0.2, weights = NULL)
 }
 \arguments{
 \item{outs}{List of float32 tensors \verb{[n, K]} or \verb{[n, Q]}.}
+
+\item{weights}{Optional weight per element of \code{outs}.}
 }
 \description{
 Classification: mean of the logits, then a softmax. Regression: a
 per-coordinate trimmed mean, dropping \code{floor(trim * E)} members from
 each tail.
+}
+\details{
+With \code{weights}, both means become weighted means. Regression then
+drops the trimming: trimming discards members by rank, and a weighted
+version of it is not something the reference defines.
 }
 \keyword{internal}

@@ -681,12 +681,19 @@ mitra_task_of <- function(config) {
 #'   that attends across rows *and* columns, so its activation carries
 #'   every row at full embedding width on both axes and is the steepest
 #'   in the package.
+#' @param member_weights Optional non-negative weight per member
+#'   (`n_estimators` of them). The members' probabilities are combined
+#'   with a weighted mean instead of the plain one, and a member weighted
+#'   zero is never run. `NULL` (the default) is the reference's combine,
+#'   unchanged.
 #' @keywords internal
 mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
                              random_state = 42L, predict_chunk_size = 1024L,
                              kv_cache = FALSE,
-                             save_peak_memory_factor = NULL) {
+                             save_peak_memory_factor = NULL,
+                             member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
+  member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
@@ -709,10 +716,11 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
          preps = preps, n_train = nrow(X_train))
   }
 
-  .chunk <- function(state, X_test_chunk, caches) {
+  .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
     n_cls <- length(state$class_levels)
     acc <- NULL
-    for (i in seq_along(state$preps)) {
+    raw <- list()
+    for (i in .members_to_run(length(state$preps), member_weights)) {
       # Between members: a whole forward pass' worth of torch
       # allocations, which R's collector cannot see.
       if (i > 1L) collect_between_chunks()
@@ -721,11 +729,17 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
                                save_peak_memory_factor)
       # The head always emits `dim_output` logits; the reference slices to
       # the classes actually present before the softmax.
+      if (return_members) {
+        raw[[length(raw) + 1L]] <- as.matrix(out[1, , 1:n_cls]$cpu())
+        next
+      }
       probs <- as.matrix(torch::nnf_softmax(out[1, , 1:n_cls],
                                             dim = -1L)$cpu())
+      if (!is.null(member_weights)) probs <- probs * member_weights[[i]]
       acc <- if (is.null(acc)) probs else acc + probs
     }
-    acc / length(state$preps)
+    if (return_members) return(raw)
+    acc / (if (is.null(member_weights)) length(state$preps) else sum(member_weights))
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
@@ -740,6 +754,19 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
+  # Each member's logits over the classes present. Mitra applies no
+  # temperature. See [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+    logits <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                   function(chunk) .chunk(state, chunk, caches,
+                                                          return_members = TRUE))
+    .classifier_members(logits, state$class_levels,
+                        .members_to_run(length(state$preps), member_weights),
+                        member_weights, 1, "mean_of_softmax")
+  }
+
   # Building every member's cache is exactly what one forward pass over a
   # single query row does, so ask for that rather than duplicating the
   # builders: the store comes back full.
@@ -751,6 +778,7 @@ mitra_classifier <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
   }
 
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = .build_all_caches)
 }
 
@@ -768,8 +796,10 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
                             random_mirror_regression = TRUE,
                             random_state = 42L, predict_chunk_size = 1024L,
                             kv_cache = FALSE,
-                            save_peak_memory_factor = NULL) {
+                            save_peak_memory_factor = NULL,
+                            member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
+  member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
@@ -781,9 +811,10 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
          n_train = nrow(X_train))
   }
 
-  .chunk <- function(state, X_test_chunk, caches) {
+  .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
     acc <- NULL
-    for (i in seq_along(state$preps)) {
+    raw <- list()
+    for (i in .members_to_run(length(state$preps), member_weights)) {
       # Between members: a whole forward pass' worth of torch
       # allocations, which R's collector cannot see.
       if (i > 1L) collect_between_chunks()
@@ -792,9 +823,13 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
                                X_test_chunk, caches, i,
                                save_peak_memory_factor)
       preds <- mitra_preprocessor_invert_y(as.numeric(out[1, , 1]$cpu()), pp)
+      if (return_members) { raw[[length(raw) + 1L]] <- preds; next }
+      if (!is.null(member_weights)) preds <- preds * member_weights[[i]]
       acc <- if (is.null(acc)) preds else acc + preds
     }
-    matrix(acc / length(state$preps), ncol = 1L)
+    if (return_members) return(raw)
+    n <- if (is.null(member_weights)) length(state$preps) else sum(member_weights)
+    matrix(acc / n, ncol = 1L)
   }
 
   predict_fn <- function(state, newdata, type = "mean", ...) {
@@ -804,6 +839,20 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
       (if (isTRUE(kv_cache)) member_cache_store() else NULL)
     as.numeric(chunk_apply(as.matrix(newdata), predict_chunk_size,
                            function(chunk) .chunk(state, chunk, caches)))
+  }
+
+  # Each member's point prediction on the raw y scale. See
+  # [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- member_cache_store_from(state$kv_caches) %||%
+      (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+    mean <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                 function(chunk) .chunk(state, chunk, caches,
+                                                        return_members = TRUE))
+    index <- .members_to_run(length(state$preps), member_weights)
+    list(mean = mean, member_index = index,
+         member_weights = if (is.null(member_weights)) NULL else member_weights[index],
+         combine = "mean")
   }
 
   # Building every member's cache is exactly what one forward pass over a
@@ -817,6 +866,7 @@ mitra_regressor <- function(ctx, n_estimators = 1L, random_mirror_x = TRUE,
   }
 
   list(fit = fit_fn, predict = predict_fn, types = "mean",
+       predict_members = predict_members_fn,
        build_cache = .build_all_caches)
 }
 

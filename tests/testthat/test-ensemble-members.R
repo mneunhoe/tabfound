@@ -234,3 +234,183 @@ test_that("regressor: unit weights change nothing, and predict_members() reprodu
                as.numeric(bar_logits_to_mean(as_logits(wavg), borders)),
                tolerance = 1e-4)
 })
+
+
+# ---------------------------------------------------------------------------
+# The other backends: TabICL, TabFM, Mitra, Kumo
+# ---------------------------------------------------------------------------
+#
+# Their members are generated from the backend's own settings, so the
+# hooks are `member_weights =` and `predict_members()` alone. Randomly
+# initialised networks answer every question here: the arithmetic that
+# combines members does not depend on the weights being trained.
+
+softmax_rows_ref <- function(l) {
+  e <- exp(l - apply(l, 1L, max))
+  e / rowSums(e)
+}
+
+# The model's own combine, redone from `predict_members()`, so a test can
+# check that the members are the pieces the prediction is made of.
+combine_members <- function(m, w = NULL) {
+  n <- length(m$member_index)
+  w <- if (is.null(w)) rep(1 / n, n) else w / sum(w)
+  wsum <- function(xs) Reduce(`+`, Map(`*`, xs, w))
+  stat <- function(g) quantile_grid_stat(g, m$quantile_levels, "mean")
+  switch(m$combine,
+    mean_of_softmax = wsum(lapply(m$logits, function(l)
+      softmax_rows_ref(l / m$softmax_temperature))),
+    softmax_of_mean_logits = softmax_rows_ref(wsum(m$logits) / m$softmax_temperature),
+    mean_of_grid_stats = wsum(lapply(m$grids, stat)),
+    trimmed_mean_grid = {
+      a <- simplify2array(m$grids)                    # n x levels x members
+      cut <- floor(0.2 * n)
+      stat(apply(a, c(1L, 2L), function(v) mean(sort(v)[(cut + 1L):(n - cut)])))
+    },
+    mean_grid = stat(wsum(m$grids)),
+    mean = wsum(m$mean))
+}
+
+# One entry per backend and head: a predictor from a tiny network, and
+# what its prediction is compared on.
+backend_cases <- function() {
+  list(
+    tabicl_clf = list(make = function(...) tabicl_classifier(
+      fake_ctx(tiny_tabicl()), n_estimators = 4L, predict_chunk_size = 9L, ...),
+      task = "classification"),
+    tabicl_reg = list(make = function(...) tabicl_regressor(
+      fake_ctx(tiny_tabicl("regressor"), config = list(num_quantiles = 9L)),
+      n_estimators = 4L, predict_chunk_size = 9L, ...),
+      task = "regression"),
+    tabfm_clf = list(make = function(...) tabfm_classifier(
+      fake_ctx(tiny_tabfm()), n_estimators = 4L, predict_chunk_size = 9L, ...),
+      task = "classification"),
+    tabfm_reg = list(make = function(...) tabfm_regressor(
+      fake_ctx(tiny_tabfm(FALSE)), n_estimators = 4L, predict_chunk_size = 9L, ...),
+      task = "regression"),
+    mitra_clf = list(make = function(...) mitra_classifier(
+      fake_ctx(tiny_mitra(n_layers = 2L)), n_estimators = 4L,
+      predict_chunk_size = 9L, ...),
+      task = "classification"),
+    mitra_reg = list(make = function(...) mitra_regressor(
+      fake_ctx(tiny_mitra("REGRESSION", n_layers = 2L)), n_estimators = 4L,
+      predict_chunk_size = 9L, ...),
+      task = "regression"),
+    kumo_clf = list(make = function(...) kumo_classifier(
+      fake_ctx(tiny_kumo(), config = list(num_classes = 10L)),
+      n_estimators = 5L, predict_chunk_size = 9L, ...),
+      task = "classification"),
+    # Five members, so the trimmed mean drops one from each tail.
+    kumo_reg = list(make = function(...) kumo_regressor(
+      fake_ctx(tiny_kumo("regressor"), config = list(num_quantiles = 9L)),
+      n_estimators = 5L, predict_chunk_size = 9L, ...),
+      task = "regression")
+  )
+}
+
+backend_data <- function(task, seed = 51L) {
+  set.seed(seed)
+  X <- matrix(stats::rnorm(30L * 4L), ncol = 4L)
+  y <- if (task == "classification") {
+    factor(rep(c("a", "b", "c"), length.out = 30L))
+  } else {
+    as.numeric(X[, 1] * 2 + stats::rnorm(30L, sd = 0.3))
+  }
+  list(X = X, y = y, X_new = matrix(stats::rnorm(20L * 4L), ncol = 4L))
+}
+
+.pred <- function(spec, st, X, task) {
+  if (task == "classification") spec$predict(st, X, type = "prob") else
+    spec$predict(st, X)
+}
+
+predict_members_spec <- function(spec, d) {
+  spec$predict_members(spec$fit(d$X, d$y), d$X_new)
+}
+
+test_that("every backend: unit weights leave the prediction unchanged", {
+  for (nm in names(backend_cases())) {
+    case <- backend_cases()[[nm]]
+    d <- backend_data(case$task)
+    plain <- case$make()
+    n <- length(predict_members_spec(plain, d)$member_index)
+    unit <- case$make(member_weights = rep(1, n))
+    # Kumo's regressor is the exception: with weights its trimmed mean
+    # becomes a plain one, so unit weights change it by design.
+    if (nm == "kumo_reg") next
+    a <- .pred(unit, unit$fit(d$X, d$y), d$X_new, case$task)
+    b <- .pred(plain, plain$fit(d$X, d$y), d$X_new, case$task)
+    # Kumo combines on the device, in float32: a weighted sum is not the
+    # same reduction as `mean()`, so unit weights agree to rounding only.
+    # Without weights its combine is the unchanged `mean()`. Every other
+    # backend scales by exactly 1 and divides by the same count.
+    if (nm == "kumo_clf") expect_equal(a, b, tolerance = 1e-6, label = nm) else
+      expect_identical(a, b, label = nm)
+  }
+})
+
+test_that("every backend: predict_members() reproduces predict()", {
+  for (nm in names(backend_cases())) {
+    case <- backend_cases()[[nm]]
+    d <- backend_data(case$task)
+    spec <- case$make()
+    st <- spec$fit(d$X, d$y)
+    m <- spec$predict_members(st, d$X_new)
+    expect_null(m$member_weights, label = nm)
+    by_hand <- combine_members(m)
+    expect_equal(unname(as.matrix(by_hand)),
+                 unname(as.matrix(.pred(spec, st, d$X_new, case$task))),
+                 tolerance = 1e-5, label = nm)
+    if (case$task == "classification") {
+      expect_identical(colnames(m$logits[[1]]), levels(d$y), label = nm)
+    }
+  }
+})
+
+test_that("every backend: weights give the weighted combine, and zero-weight members are not run", {
+  for (nm in names(backend_cases())) {
+    case <- backend_cases()[[nm]]
+    d <- backend_data(case$task)
+    plain <- case$make()
+    m <- plain$predict_members(plain$fit(d$X, d$y), d$X_new)
+    n <- length(m$member_index)
+    w <- c(3, 0, 1, rep(2, n - 3L))
+
+    weighted <- case$make(member_weights = w)
+    st <- weighted$fit(d$X, d$y)
+    wm <- weighted$predict_members(st, d$X_new)
+    expect_identical(wm$member_index, which(w > 0), label = nm)
+    expect_equal(wm$member_weights, w[w > 0], label = nm)
+
+    # The weighted model's own members are the unweighted model's, minus
+    # the one weighted zero; and its prediction is their weighted combine.
+    field <- intersect(c("logits", "grids", "mean"), names(m))
+    expect_equal(wm[[field]], m[[field]][w > 0], tolerance = 1e-5, label = nm)
+    expect_equal(unname(as.matrix(.pred(weighted, st, d$X_new, case$task))),
+                 unname(as.matrix(combine_members(wm, wm$member_weights))),
+                 tolerance = 1e-5, label = nm)
+  }
+})
+
+test_that("every backend: member weights are checked against the ensemble size", {
+  for (nm in names(backend_cases())) {
+    case <- backend_cases()[[nm]]
+    expect_error(case$make(member_weights = c(1, 1)), "one per member", label = nm)
+    expect_error(case$make(member_weights = rep(0, 5)), "positive sum", label = nm)
+  }
+})
+
+test_that("predict_members() goes through the model API for every backend", {
+  # The exported generic: fitted-state checks, newdata preparation, and
+  # weights normalised to sum to one.
+  d <- backend_data("classification")
+  ctx <- fake_ctx(tiny_tabicl())
+  ctx$backend <- list(name = "tabicl"); ctx$model_ref <- "tiny"
+  spec <- tabicl_classifier(ctx, n_estimators = 3L, member_weights = c(2, 1, 1))
+  model <- .new_tabfound_model(ctx, spec, "classification", list())
+  fitted <- fit(model, d$X, d$y)
+  m <- predict_members(fitted, d$X_new)
+  expect_equal(m$member_weights, c(0.5, 0.25, 0.25))
+  expect_length(m$logits, 3L)
+  expect_identical(m$combine, "softmax_of_mean_logits")
+})

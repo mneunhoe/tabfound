@@ -157,3 +157,26 @@ quantile_dist_stat <- function(grid, alpha, type = "mean",
     cli::cli_abort("Unknown output type: {.val {type}}.")
   )
 }
+
+#' Summarise a predicted quantile grid
+#'
+#' How the TabICL and Kumo regressors turn a grid of predicted quantiles
+#' into a mean, a median or other quantiles. The grid is sorted to remove
+#' crossings, interpolated between its levels, and extended past the
+#' outermost ones with exponential tails. Use it on the grids
+#' [predict_members()] returns, or on a combination of them.
+#'
+#' @param grid Numeric matrix `(n_rows, n_levels)` of predicted quantiles.
+#' @param levels The grid's level probabilities, e.g. `$quantile_levels`
+#'   from [predict_members()].
+#' @param type `"mean"` (the mean of the sorted grid), `"median"` or
+#'   `"quantiles"`.
+#' @param quantiles Probabilities for `type = "quantiles"`.
+#' @return A numeric vector (`"mean"`, `"median"`) or a matrix with one
+#'   column per quantile.
+#' @export
+quantile_grid_stat <- function(grid, levels, type = c("mean", "median", "quantiles"),
+                               quantiles = c(0.1, 0.5, 0.9)) {
+  type <- match.arg(type)
+  quantile_dist_stat(as.matrix(grid), levels, type, quantiles)
+}

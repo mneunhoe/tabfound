@@ -55,18 +55,27 @@
   * The `n_test` symbol is defined for every backend and Mitra defines `n`
     and `p`; each description carries a `glossary`, which explains every
     abbreviation a diagram draws.
-* Hooks for reweighting and selecting a TabPFN ensemble after the fact,
-  for add-on packages such as `tabfound.thinking`:
-  * `tabular_classifier()` / `tabular_regressor()` take the ensemble as
-    an in-memory list, `ensemble_configs =`, in place of
-    `ensemble_configs_dir =`, and `generate_ensemble_configs_native()`
-    returns that list when `output_dir` is left out.
+* Hooks for reweighting and selecting an ensemble after the fact, for
+  add-on packages such as `tabfound.thinking`. Every backend has them:
   * `member_weights =` combines the members with a weighted mean. Members
-    weighted zero are never run. Without it the combine is the
-    reference's unweighted mean, bit for bit.
+    weighted zero are never run. Without it, every combine is the
+    reference's, bit for bit. Kumo's regressor, whose reference combine
+    is a trimmed mean, uses a plain weighted mean under weights.
   * New `predict_members()` returns each member's output before it is
-    combined: the raw logits for a classifier, the bucket probabilities on
-    the shared grid for a regressor.
+    combined, and names how the backend combines them (`$combine`):
+    * classifiers: raw logits, with each member's class permutation or
+      shift undone;
+    * TabPFN regressors: bucket probabilities on the shared grid;
+    * TabICL and Kumo regressors: quantile grids;
+    * TabFM and Mitra regressors: point predictions.
+  * New `quantile_grid_stat()` summarises a TabICL or Kumo quantile grid
+    the way those regressors do.
+  * TabPFN members are the configs, so `tabular_classifier()` /
+    `tabular_regressor()` take them as an in-memory list,
+    `ensemble_configs =`, in place of `ensemble_configs_dir =`, and
+    `generate_ensemble_configs_native()` returns that list when
+    `output_dir` is left out. The other backends generate their members
+    from their own settings and seed.
   * New `native_ensemble_presets()` returns the checkpoint's member menu,
     and `generate_ensemble_configs_native(presets = )` draws members from
     an edited one.

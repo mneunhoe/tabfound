@@ -24,7 +24,8 @@ tabfm_classifier(
   kv_cache = FALSE,
   row_chunk_size = NULL,
   col_chunk_size = NULL,
-  trace_dir = NULL
+  trace_dir = NULL,
+  member_weights = NULL
 )
 }
 \arguments{
@@ -75,6 +76,12 @@ architecture lets a training row see a test row -- to within float32
 rounding. See \code{\link[=tabfm_kv_cache]{tabfm_kv_cache()}}.}
 
 \item{trace_dir}{Optional directory for the parity harness.}
+
+\item{member_weights}{Optional non-negative weight per member, in the
+order the ensemble generates them (\code{n_estimators} of them). The
+members' contributions are combined with a weighted mean instead of
+the plain one, and a member weighted zero is never run. \code{NULL} (the
+default) is the reference's combine, unchanged.}
 }
 \description{
 Reproduces \code{TabFMClassifier} under its default preset: an ensemble of

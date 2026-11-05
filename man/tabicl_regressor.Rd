@@ -16,7 +16,8 @@ tabicl_regressor(
   kv_cache = FALSE,
   row_chunk_size = NULL,
   save_peak_memory_factor = NULL,
-  col_chunk_size = NULL
+  col_chunk_size = NULL,
+  member_weights = NULL
 )
 }
 \arguments{
@@ -50,6 +51,12 @@ labelled rows out, so a labelled row never sees a test row and
 nothing the cache holds could have depended on one. The arithmetic
 differs only by the float32 noise a change in batch shape already
 produces -- see \code{\link[=tabicl_kv_cache]{tabicl_kv_cache()}}.}
+
+\item{member_weights}{Optional non-negative weight per member, in the
+order the ensemble generates them (\code{n_estimators} of them). The
+members' contributions are combined with a weighted mean instead of
+the plain one, and a member weighted zero is never run. \code{NULL} (the
+default) is the reference's combine, unchanged.}
 }
 \description{
 TabICL's regression head emits a whole quantile grid (999 levels for

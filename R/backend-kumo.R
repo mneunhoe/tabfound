@@ -607,13 +607,22 @@ print.kumo_kv_cache <- function(x, ...) {
 #'   query rows stream through against it.
 #' @param col_chunk_size Columns per pass through each column block.
 #' @param categorical_features 1-based indices of categorical columns.
+#' @param member_weights Optional non-negative weight per member, in the
+#'   order the recipe builds them (`n_estimators` of them). The members
+#'   are combined with a weighted mean instead of the plain one, and a
+#'   member weighted zero is never run. For the regressor this replaces
+#'   the trimmed mean with a weighted mean: trimming drops members by
+#'   rank, which has no weighted counterpart in the reference. `NULL` (the
+#'   default) is the reference's combine, unchanged.
 #' @keywords internal
 kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
                             predict_chunk_size = 1024L, kv_cache = FALSE,
                             save_peak_memory_factor = NULL,
                             row_chunk_size = NULL, col_chunk_size = NULL,
-                            categorical_features = NULL) {
+                            categorical_features = NULL,
+                            member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
+  member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
   max_classes <- as.integer(ctx$config$num_classes)
   chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
                  save_peak_memory_factor = save_peak_memory_factor)
@@ -634,16 +643,28 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
          n_train = nrow(X), categorical = categorical, recipe = rec)
   }
 
-  .chunk <- function(state, X_query, caches) {
+  .chunk <- function(state, X_query, caches, return_members = FALSE) {
     rec <- state$recipe
     K <- length(rec$target$classes)
-    outs <- lapply(seq_len(rec$n_members), function(m) {
+    run <- .members_to_run(rec$n_members, member_weights)
+    outs <- lapply(run, function(m) {
       if (m > 1L) collect_between_chunks()
       o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train_int,
                             X_query, m, caches, chunks)
       kumo_recipe_unshift(rec, o[, 1:K, drop = FALSE], m)
     })
-    p <- as.matrix(kumo_recipe_reduce(outs, TRUE))
+    if (return_members) {
+      # Classes absent from the training rows cannot be predicted; as
+      # logits they are -Inf, which a softmax turns into the zero the
+      # combined prediction gives them.
+      return(lapply(outs, function(o) {
+        full <- matrix(-Inf, nrow(X_query), length(state$class_levels))
+        full[, rec$target$classes + 1L] <- as.matrix(o)
+        full
+      }))
+    }
+    p <- as.matrix(kumo_recipe_reduce(
+      outs, TRUE, weights = if (!is.null(member_weights)) member_weights[run]))
     full <- matrix(0, nrow(X_query), length(state$class_levels))
     full[, rec$target$classes + 1L] <- p
     full
@@ -658,7 +679,21 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
+  # Each member's class scores in class order: logits, or above 10
+  # classes the folded ECOC scores, which the ensemble treats the same
+  # way. Kumo applies no temperature. See [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- .kumo_store(state, kv_cache)
+    logits <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                   function(chunk) .chunk(state, chunk, caches,
+                                                          return_members = TRUE))
+    .classifier_members(logits, state$class_levels,
+                        .members_to_run(state$recipe$n_members, member_weights),
+                        member_weights, 1, "softmax_of_mean_logits")
+  }
+
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = function(state) .kumo_build_all(state, function(st, one, store) {
          .chunk(st, one, store)
        }))
@@ -699,8 +734,10 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
                            predict_chunk_size = 1024L, kv_cache = FALSE,
                            save_peak_memory_factor = NULL,
                            row_chunk_size = NULL, col_chunk_size = NULL,
-                           categorical_features = NULL) {
+                           categorical_features = NULL,
+                           member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
+  member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
   n_q <- as.integer(ctx$config$num_quantiles)
   chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
                  save_peak_memory_factor = save_peak_memory_factor)
@@ -718,15 +755,18 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
          categorical = categorical, recipe = rec)
   }
 
-  .grid <- function(state, X_query, caches = NULL) {
+  .grid <- function(state, X_query, caches = NULL, return_members = FALSE) {
     rec <- state$recipe
-    outs <- lapply(seq_len(rec$n_members), function(m) {
+    run <- .members_to_run(rec$n_members, member_weights)
+    outs <- lapply(run, function(m) {
       if (m > 1L) collect_between_chunks()
       o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train,
                             X_query, m, caches, chunks)
       kumo_recipe_inverse(rec, o, m)
     })
-    as.matrix(kumo_recipe_reduce(outs, FALSE))
+    if (return_members) return(lapply(outs, as.matrix))
+    as.matrix(kumo_recipe_reduce(
+      outs, FALSE, weights = if (!is.null(member_weights)) member_weights[run]))
   }
 
   predict_fn <- function(state, newdata, type = "mean",
@@ -744,7 +784,22 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
     res
   }
 
+  # Each member's sorted quantile grid on the raw y scale. The ensemble
+  # combines the grids level by level (a trimmed mean, or a weighted mean
+  # with weights) and summarises the result. See [predict_members()].
+  predict_members_fn <- function(state, newdata) {
+    caches <- .kumo_store(state, kv_cache)
+    grids <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
+                                  function(chunk) .grid(state, chunk, caches,
+                                                        return_members = TRUE))
+    index <- .members_to_run(state$recipe$n_members, member_weights)
+    list(grids = grids, quantile_levels = levels_, member_index = index,
+         member_weights = if (is.null(member_weights)) NULL else member_weights[index],
+         combine = if (is.null(member_weights)) "trimmed_mean_grid" else "mean_grid")
+  }
+
   list(fit = fit_fn, predict = predict_fn,
+       predict_members = predict_members_fn,
        build_cache = function(state) .kumo_build_all(state, function(st, one, store) {
          .grid(st, one, store)
        }),
