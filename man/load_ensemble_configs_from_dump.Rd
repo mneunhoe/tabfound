@@ -15,7 +15,9 @@ settings (\code{\link[=apply_member_pipeline]{apply_member_pipeline()}} reads th
 (0-indexed) and \code{target_transform_lambda}. Configs written by
 \code{\link[=generate_ensemble_configs_native]{generate_ensemble_configs_native()}} also carry
 \code{categorical_features} (1-based) and \code{n_features_in}, the schema they
-were sized for; a Python dump records neither, and both are \code{NULL}.
+were sized for, and \code{cat_mapping_columns} (1-based), the predictor
+behind each of \code{cat_mappings}; a Python dump records none of these,
+and they are \code{NULL}.
 }
 \description{
 The directory must contain \code{ensemble_configs.json} and one

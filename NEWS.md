@@ -125,6 +125,18 @@
   it, and a mismatch, or a member that does not fit the rows (a column
   constant on them, say), is an error naming the problem. Python dumps
   record no set and infer as before.
+* Fixed the same TabPFN ensembles failing on a slice where a member's
+  ordinal encoder takes fewer categorical columns than it did on the
+  whole table. The `_common_categories` encoders keep a column only when
+  its rarest level has at least ten rows (and, for
+  `_very_common_categories`, it has fewer than n/10 levels), so a fold
+  could drop one, and the fit stopped with "carries N code mappings, but
+  encodes M". Configs now record which predictor each category-code
+  mapping belongs to, and a fit picks the mappings by predictor. A column
+  with fewer levels on the slice than its mapping was drawn for gets the
+  mapping cut to a permutation of the codes it has, as the reference's
+  own draw on those rows would give. Python dumps carry no such record
+  and stay positional.
 * Fixed wrong predictions from Kumo Tabular medium and large on Apple's
   `mps` device. libtorch's fused attention kernel on MPS returns wrong
   values for non-contiguous inputs when the query is shorter than the keys
