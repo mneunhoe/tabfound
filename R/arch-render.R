@@ -325,7 +325,7 @@ arch_format_from_file <- function(file) {
 #' plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 #' }
 #' @seealso [tabfound_architecture()] for the description behind the
-#'   picture.
+#'   picture; [plot_architecture_diff()] to compare two models.
 #' @export
 plot_architecture <- function(object, file = NULL, format = NULL,
                               style = getOption("tabfound.arch_style", "cards"),

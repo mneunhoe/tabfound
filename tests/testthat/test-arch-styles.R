@@ -267,56 +267,61 @@ test_that("a backend's glossary entries win over the shared ones", {
 })
 
 
+# What a scene draws above its key must be in it -- every glossary term
+# in its text, every symbol in its monospaced shapes -- and the key must
+# draw each entry whole.
+expect_key_whole <- function(sc, gl, info) {
+  items <- Filter(function(e) e$type == "text", sc$items)
+  txt <- vapply(items, `[[`, character(1), "text")
+  at <- match("Key", txt)
+  expect_false(is.na(at), info = info)
+  body <- txt[seq_len(at - 1L)]
+  key <- txt[seq(at, length(txt))]
+
+  terms <- names(gl)[vapply(names(gl), function(t)
+    any(grepl(arch_term_pattern(t), body, perl = TRUE)), logical(1))]
+  listed <- unlist(lapply(sc$key, function(g) names(g$items)))
+  # A diff lists a symbol whose meanings differ as "F (A)" and "F (B)".
+  listed <- c(listed, sub(" \\([AB]\\)$", "", listed))
+  expect_true(all(terms %in% listed),
+              info = paste(info, setdiff(terms, listed)))
+  mono <- vapply(items[seq_len(at - 1L)], `[[`, character(1),
+                 "family") == "mono"
+  shape_syms <- setdiff(arch_tokens(body[mono]), ARCH_SHAPE_WORDS)
+  expect_true(all(shape_syms %in% listed),
+              info = paste(info, setdiff(shape_syms, listed)))
+
+  # Never truncated; wrapped lines are consecutive items, so joining
+  # them restores every meaning.
+  expect_false(any(grepl("...", key, fixed = TRUE)), info = info)
+  joined <- paste(key, collapse = " ")
+  for (g in sc$key) {
+    for (t in names(g$items)) {
+      expect_true(t %in% key, info = paste(info, t))
+      expect_true(grepl(g$items[[t]], joined, fixed = TRUE),
+                  info = paste(info, t))
+    }
+    for (nt in g$notes) {
+      expect_true(grepl(nt$text, joined, fixed = TRUE),
+                  info = paste(info, nt$text))
+    }
+  }
+  svg <- arch_render_svg(sc)
+  expect_identical(sum(startsWith(svg, "  <title>")), 1L, info = info)
+  expect_identical(sum(startsWith(svg, "  <desc>")), 1L, info = info)
+}
+
 test_that("the key is drawn whole on every style, theme and setting", {
   for (nm in names(arch_test_variants())) {
     arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
-    gl <- arch$glossary
     for (style in names(arch_styles())) {
       for (theme in c("light", "dark")) {
         for (detail in c("overview", "full")) {
           for (facts in c(TRUE, FALSE)) {
-            info <- paste(nm, style, theme, detail, facts)
             sc <- arch_scene(arch, style = style, detail = detail,
                              theme = theme, show_facts = facts)
-            items <- Filter(function(e) e$type == "text", sc$items)
-            txt <- vapply(items, `[[`, character(1), "text")
-            at <- match("Key", txt)
-            expect_false(is.na(at), info = info)
-            body <- txt[seq_len(at - 1L)]
-            key <- txt[seq(at, length(txt))]
-
-            # What the diagram draws above the key must be in it: every
-            # glossary term in its text, every symbol in its shapes.
-            terms <- names(gl)[vapply(names(gl), function(t)
-              any(grepl(arch_term_pattern(t), body, perl = TRUE)), logical(1))]
-            listed <- unlist(lapply(sc$key, function(g) names(g$items)))
-            expect_true(all(terms %in% listed),
-                        info = paste(info, setdiff(terms, listed)))
-            mono <- vapply(items[seq_len(at - 1L)], `[[`, character(1),
-                           "family") == "mono"
-            shape_syms <- setdiff(arch_tokens(body[mono]), ARCH_SHAPE_WORDS)
-            expect_true(all(shape_syms %in% listed),
-                        info = paste(info, setdiff(shape_syms, listed)))
-
-            # And the key draws each entry whole: never truncated, and
-            # wrapped lines are consecutive items, so joining them
-            # restores every meaning.
-            expect_false(any(grepl("...", key, fixed = TRUE)), info = info)
-            joined <- paste(key, collapse = " ")
-            for (g in sc$key) {
-              for (t in names(g$items)) {
-                expect_true(t %in% key, info = paste(info, t))
-                expect_true(grepl(g$items[[t]], joined, fixed = TRUE),
-                            info = paste(info, t))
-              }
-              for (nt in g$notes) {
-                expect_true(grepl(nt$text, joined, fixed = TRUE),
-                            info = paste(info, nt$text))
-              }
-            }
-            svg <- arch_render_svg(sc)
-            expect_identical(sum(startsWith(svg, "  <title>")), 1L, info = info)
-            expect_identical(sum(startsWith(svg, "  <desc>")), 1L, info = info)
+            expect_key_whole(sc, arch$glossary,
+                             paste(nm, style, theme, detail, facts))
           }
         }
       }
@@ -647,4 +652,104 @@ test_that("glyph highlights keep 3:1 contrast against the table", {
       }
     }
   }
+})
+
+
+
+# ---------------------------------------------------------------------------
+# plot_architecture_diff()
+# ---------------------------------------------------------------------------
+
+test_that("a model diffed with itself is matched and shared throughout", {
+  arch <- arch_test_arch("tabpfn35")
+  pairs <- arch_align_stages(arch$stages, arch$stages)
+  expect_length(pairs, length(arch$stages))
+  expect_true(all(vapply(pairs, arch_pair_status, character(1)) == "matched"))
+  facts <- arch_diff_facts(arch$facts, arch$facts)
+  expect_true(all(vapply(facts, `[[`, character(1), "status") == "shared"))
+})
+
+
+test_that("TabICL against TabPFN v3 pairs the stages that correspond", {
+  cs <- arch_test_configs()
+  icl <- tabfound_architecture(arch_test_model(
+    utils::modifyList(cs$tabicl$config, list(icl_num_blocks = 3L)),
+    "tabicl", cs$tabicl$task))
+  pfn <- arch_test_arch("tabpfn3")
+  pairs <- arch_align_stages(icl$stages, pfn$stages)
+  id <- function(p, side) if (is.null(p[[side]])) NA_character_ else p[[side]]$id
+  status <- stats::setNames(vapply(pairs, arch_pair_status, character(1)),
+                            vapply(pairs, function(p)
+                              paste(id(p, "a"), id(p, "b")), character(1)))
+  expect_identical(status[["cls NA"]], "only A")
+  expect_identical(status[["NA onorm"]], "only B")
+  expect_identical(status[["icl icl"]], "3 vs 2")
+  expect_identical(status[["dec dec"]], "matched")
+  # Every stage of each model appears once, in its own order.
+  a_ids <- Filter(Negate(is.na), vapply(pairs, id, character(1), "a"))
+  b_ids <- Filter(Negate(is.na), vapply(pairs, id, character(1), "b"))
+  expect_identical(unname(a_ids), vapply(icl$stages, `[[`, character(1), "id"))
+  expect_identical(unname(b_ids), vapply(pfn$stages, `[[`, character(1), "id"))
+
+  facts <- arch_diff_facts(icl$facts, pfn$facts)
+  st <- stats::setNames(vapply(facts, `[[`, character(1), "status"),
+                        vapply(facts, `[[`, character(1), "name"))
+  expect_identical(st[["ICL layers"]], "different")
+  expect_identical(st[["Embedding width"]], "shared")
+  expect_identical(st[["Train/test split"]], "one side")
+  # Shared and differing facts first, then A's own, then B's.
+  first_one_side <- match("one side", st)
+  expect_true(all(st[seq_len(first_one_side - 1L)] != "one side"))
+})
+
+
+test_that("a symbol the two models define differently is keyed once per model", {
+  th <- arch_diff_theme()
+  sym <- arch_diff_symbols(c(B = "batch", F = "feature groups"),
+                           c(B = "batch", F = "features", S = "support rows"),
+                           th)
+  expect_identical(names(sym$items), c("B", "F (A)", "F (B)", "S"))
+  expect_identical(unname(sym$cols), c(th$a, th$b))
+
+  sc <- arch_diff_scene(arch_test_arch("tabicl"), arch_test_arch("mitra"))
+  syms <- names(sc$key[[1]]$items)
+  expect_true(all(c("F (A)", "F (B)") %in% syms))
+  expect_false("F" %in% syms)
+})
+
+
+test_that("the diff draws its key whole, and its text is readable", {
+  for (pr in list(c("tabicl", "tabpfn3"), c("tabicl", "mitra"),
+                  c("kumo", "tabfm"))) {
+    A <- arch_test_arch(pr[1])
+    B <- arch_test_arch(pr[2])
+    for (theme in c("light", "dark")) {
+      sc <- arch_diff_scene(A, B, theme)
+      expect_key_whole(sc, arch_merge_glossary(), paste(pr, collapse = " "))
+    }
+  }
+  for (theme in c("light", "dark")) {
+    th <- arch_diff_theme(theme)
+    for (col in c("a", "b", "diff", "same", "ink2", "ink3")) {
+      for (bg in c("surface", "a_bg", "b_bg")) {
+        expect_gte(arch_contrast(th[[col]], th[[bg]]), 4.5,
+                   label = paste(theme, col, "on", bg))
+      }
+    }
+  }
+})
+
+
+test_that("plot_architecture_diff takes models and descriptions in any mix", {
+  skip_on_cran()
+  cs <- arch_test_configs()$mitra
+  m <- arch_test_model(cs$config, "mitra", cs$task)
+  arch <- arch_test_arch("tabicl")
+  f <- file.path(withr::local_tempdir(), "diff.svg")
+  expect_identical(suppressMessages(plot_architecture_diff(arch, m, f)), f)
+  svg <- readLines(f, warn = FALSE, encoding = "UTF-8")
+  expect_match(svg[3], "<title>TabICL v2 vs Mitra</title>", fixed = TRUE)
+  expect_true(any(grepl("only A", svg, fixed = TRUE)))
+  expect_error(plot_architecture_diff(arch, "nope"), "Cannot describe")
+  expect_error(plot_architecture_diff(arch, m, format = "png"), "needs a .*file")
 })

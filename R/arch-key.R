@@ -200,7 +200,10 @@ arch_key_items <- function(groups, x, y, w, th, family = "sans",
       for (i in seq_len(n)) {
         cx <- x + col_of[i] * (colw + gap)
         ty <- tops[row_of[i]]
-        add(sc_text(cx, ty, terms[i], size = size, col = th$ink,
+        # A diff colours a term that belongs to one model only.
+        term_col <- if (terms[i] %in% names(g$term_col)) g$term_col[[terms[i]]]
+                    else th$ink
+        add(sc_text(cx, ty, terms[i], size = size, col = term_col,
                     bold = !mono, family = term_family))
         for (k in seq_along(wrapped[[i]])) {
           add(sc_text(cx + term_w, ty + (k - 1L) * line_h, wrapped[[i]][k],

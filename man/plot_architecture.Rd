@@ -138,5 +138,5 @@ plot_architecture(clf, "tabpfn-icicle.svg", style = "icicle")
 }
 \seealso{
 \code{\link[=tabfound_architecture]{tabfound_architecture()}} for the description behind the
-picture.
+picture; \code{\link[=plot_architecture_diff]{plot_architecture_diff()}} to compare two models.
 }
