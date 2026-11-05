@@ -156,6 +156,11 @@ parity_tabpfn <- function(reference_dir, fixture_dir, fixture, label = fixture,
   } else {
     fx$categorical_features
   }
+  # Nothing declared is `NULL`, not `integer()`: the reference infers
+  # either way, but here `integer()` declares no categoricals and turns
+  # inference off, which would grade the `_auto` fixtures against a
+  # schema the reference never had.
+  if (!length(declared)) declared <- NULL
 
   # Which columns each side then decided were categorical. Everything
   # downstream is conditional on this, so a disagreement here would show
