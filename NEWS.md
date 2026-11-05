@@ -25,7 +25,12 @@
     the style picks out -- the schematic's accent, tufte's phase colours,
     the attention colour in cards and icicle, row attention in glyphs,
     model A in the diff -- adjusted only as far as it must be to stay
-    readable.
+    readable. Up to four highlights can be given: cards and icicle take
+    them for attention, embeddings, feed-forward layers and the decoder;
+    the glyphs for row attention, column attention, inducing points and
+    the prediction; tufte as its phase colours; and the schematic uses
+    the first, so one vector serves every style. The diff takes up to
+    three: model A, model B and what differs.
   * New `plot_architecture_diff()` draws two models side by side, pairing
     their stages by kind and attention axis and their facts by name. It
     takes models, fits or `tabfound_arch` objects in any mix.

@@ -39,8 +39,10 @@ far from it as it was from the theme's own background, so the
 diagram reads the same. A dark background picks \code{theme = "dark"}
 unless \code{theme} is given.}
 
-\item{highlight}{A colour for model A, which is teal by default.
-Model B takes amber or teal, whichever is further from it.}
+\item{highlight}{Up to three colours, in this order: model A (teal by
+default), model B (amber) and what differs (red). Given one, model B
+takes amber or teal, whichever is further from it. Matched stages
+and shared facts stay grey.}
 }
 \value{
 Invisibly: the output path when \code{file} is given, otherwise a
@@ -60,6 +62,9 @@ that explains its symbols, abbreviations and notation.
 icl <- tabular_classifier("tabicl-v2-classifier")
 pfn <- tabular_classifier("tabpfn-v3-classifier")
 plot_architecture_diff(icl, pfn, "tabicl-vs-tabpfn3.svg")
+plot_architecture_diff(icl, pfn, "tabicl-vs-tabpfn3-viridis.svg",
+                       background = "white",
+                       highlight = grDevices::hcl.colors(3, "viridis"))
 }
 }
 \seealso{

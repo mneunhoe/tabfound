@@ -49,19 +49,24 @@ arch_tufte_geom <- function() {
   )
 }
 
-# The phase colours: viridis in stage order, or, with a highlight, shades
-# of it from full strength to light. Either way each keeps 3:1 against
-# the background, which a viridis slice chosen for the theme's own
-# surface might not on another.
+# The phase colours: viridis in stage order; with one highlight, shades
+# of it from full strength to light; with several, those colours in
+# stage order, blended between when there are more phases than colours.
+# Each keeps 3:1 against the background, which a viridis slice chosen
+# for the theme's own surface might not on another.
 # @keywords internal
 arch_tufte_phase_colours <- function(k, th, colours) {
   if (!k) return(character())
-  cols <- if (is.null(colours$highlight)) {
+  hl <- colours$highlight
+  cols <- if (is.null(hl)) {
     arch_viridis(k, th$viridis[1], th$viridis[2])
-  } else {
+  } else if (length(hl) == 1L) {
     w <- if (k == 1L) 1 else seq(1, 0.45, length.out = k)
-    vapply(w, function(x) arch_mix(colours$highlight, th$surface, x),
-           character(1))
+    vapply(w, function(x) arch_mix(hl, th$surface, x), character(1))
+  } else if (k <= length(hl)) {
+    hl[seq_len(k)]
+  } else {
+    tolower(grDevices::colorRampPalette(hl)(k))
   }
   if (is.null(colours$background) && is.null(colours$highlight)) return(cols)
   vapply(cols, arch_readable, character(1), th$surface, 3, USE.NAMES = FALSE)
@@ -234,7 +239,7 @@ arch_scene_tufte <- function(arch, detail, theme, show_shapes, show_params,
 
   # --- key ----------------------------------------------------------------
   notes <- arch_tufte_notes(arch, detail, show_shapes, show_params,
-                            shared_scale)
+                            shared_scale, colours)
   groups_key <- arch_key_groups(arch, notes, show_shapes = show_shapes)
   # Whitespace, not a second rule, separates it from the fact table.
   key <- arch_key_items(groups_key, x_text, y + 22, W - g$pad - x_text, th,
@@ -282,7 +287,7 @@ arch_tufte_phase_items <- function(spans, phase_col, x_text, g, th) {
 # The notation tufte draws, and only what this diagram actually uses.
 # @keywords internal
 arch_tufte_notes <- function(arch, detail, show_shapes, show_params,
-                             shared_scale) {
+                             shared_scale, colours = list()) {
   full <- identical(detail, "full")
   axes <- unlist(lapply(arch$stages, function(s)
     c(s$axis, if (full) unlist(lapply(s$children, `[[`, "axis")))))
@@ -305,7 +310,9 @@ arch_tufte_notes <- function(arch, detail, show_shapes, show_params,
     if (has_children) list(arch_note(
       "hollow dot: one sublayer's parameters; \"/ block\" counts one copy of a stacked block")),
     if (has_groups) list(arch_note(
-      "margin colour: the phase, from first (dark) to last (light)")),
+      if (length(colours$highlight) > 1L)
+        "margin colour: the phase, one colour each in stage order"
+      else "margin colour: the phase, from first (dark) to last (light)")),
     if (has_shape) list(arch_note(
       "output shape: the tensor each stage emits, in the symbols above"))
   )

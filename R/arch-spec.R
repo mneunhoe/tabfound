@@ -34,6 +34,11 @@ ARCH_KINDS <- c(
   output    = "Prediction"
 )
 
+# The kinds that cards and icicle colour by, in the order your
+# highlights replace them. Attention comes first, so one highlight is
+# the attention colour; the rest are neutral greys.
+ARCH_HIGHLIGHT_KINDS <- c("attention", "embed", "ffn", "decode")
+
 # The axis an attention sublayer runs over. This is the one thing that
 # most distinguishes tabular foundation models from each other and from
 # language models, so it gets its own slot rather than being buried in

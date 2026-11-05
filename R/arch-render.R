@@ -338,6 +338,14 @@ arch_format_from_file <- function(file) {
 #'   attention colour of `"cards"` and `"icicle"`, and attention across
 #'   rows in `"glyphs"`. Where it is drawn as text, or must stand out from
 #'   a fill, it is darkened or lightened just enough to stay readable.
+#'   Up to four colours can be given, and any left out keep the style's
+#'   own. `"cards"` and `"icicle"` use them for attention, embeddings,
+#'   feed-forward layers and the decoder, in that order. `"glyphs"` uses
+#'   them for attention across rows, attention across columns or
+#'   features, inducing points, and the prediction. `"tufte"` uses them as
+#'   its phase colours in stage order, blended between when there are
+#'   more phases than colours. `"schematic"` has one accent and uses the
+#'   first, so one vector can be passed to every style.
 #' @return Invisibly: the output path when `file` is given, otherwise the
 #'   `tabfound_arch` that was drawn.
 #' @examples
@@ -354,6 +362,9 @@ arch_format_from_file <- function(file) {
 #' # House colours.
 #' plot_architecture(clf, "tabpfn-brand.svg", style = "schematic",
 #'                   background = "#f4f1ea", highlight = "#1f4e79")
+#' # One colour per highlight in the glyphs.
+#' plot_architecture(clf, "tabpfn-glyphs-viridis.svg", style = "glyphs",
+#'                   highlight = grDevices::hcl.colors(4, "viridis"))
 #' }
 #' @seealso [tabfound_architecture()] for the description behind the
 #'   picture; [plot_architecture_diff()] to compare two models.
@@ -368,7 +379,7 @@ plot_architecture <- function(object, file = NULL, format = NULL,
   style  <- arch_match_style(style)
   detail <- match.arg(detail)
   background <- arch_colour(background, "background")
-  highlight <- arch_colour(highlight, "highlight")
+  highlight <- arch_colour(highlight, "highlight", n = 4L)
   # A background of your own picks the theme that suits it, unless you
   # say otherwise.
   theme  <- if (missing(theme) && !is.null(background)) arch_theme_for(background)

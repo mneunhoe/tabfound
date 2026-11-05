@@ -88,7 +88,8 @@ arch_scene_icicle <- function(arch, detail, theme, show_shapes, show_params,
   # Label text picks dark or light per fill, so any highlight stays
   # readable on its own blocks.
   th <- arch_adapt_theme(arch_icicle_theme(theme), colours$background)
-  if (!is.null(colours$highlight)) th$kind[["attention"]] <- colours$highlight
+  hl <- colours$highlight
+  th$kind[ARCH_HIGHLIGHT_KINDS[seq_along(hl)]] <- hl
   g  <- arch_icicle_geom()
   W  <- g$width
   x0 <- g$pad + g$gutter

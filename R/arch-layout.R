@@ -65,7 +65,10 @@ arch_scene <- function(arch, style = "cards", detail = c("overview", "full"),
                        highlight = NULL) {
   build <- arch_styles()[[arch_match_style(style)]]
   background <- arch_colour(background, "background")
-  highlight <- arch_colour(highlight, "highlight")
+  highlight <- arch_colour(highlight, "highlight", n = 4L)
+  # The schematic has one accent; the other styles pick out several
+  # things and take a colour for each.
+  if (identical(style, "schematic")) highlight <- highlight[1]
   theme <- if (missing(theme) && !is.null(background)) arch_theme_for(background)
            else match.arg(theme)
   build(arch, detail = match.arg(detail), theme = theme,
@@ -130,19 +133,23 @@ arch_readable <- function(col, bg, ratio = 4.5) {
 # Your own colours
 # ---------------------------------------------------------------------------
 
-# Any R colour -- a name, "#rrggbb", "#rrggbbaa" -- as "#rrggbb", or an
-# error naming the argument. Transparency is dropped: the diagrams are
-# drawn on an opaque surface.
+# Any R colours -- names, "#rrggbb", "#rrggbbaa" -- as "#rrggbb", or an
+# error naming the argument. At most `n` of them. Transparency is
+# dropped: the diagrams are drawn on an opaque surface.
 # @keywords internal
-arch_colour <- function(x, arg) {
+arch_colour <- function(x, arg, n = 1L) {
   if (is.null(x)) return(NULL)
   rgb <- tryCatch(grDevices::col2rgb(x), error = function(e) NULL)
-  if (length(x) != 1L || is.null(rgb) || is.na(x)) {
-    cli::cli_abort("{.arg {arg}} must be one colour, such as {.val #1f4e79} or {.val navy}.",
+  if (!length(x) || length(x) > n || is.null(rgb) || anyNA(x)) {
+    if (n == 1L) {
+      cli::cli_abort("{.arg {arg}} must be one colour, such as {.val #1f4e79} or {.val navy}.",
+                     call = NULL)
+    }
+    cli::cli_abort("{.arg {arg}} must be one to {n} colours, such as {.val #1f4e79} or {.val navy}.",
                    call = NULL)
   }
   # Lower case, as every colour the package writes is.
-  tolower(grDevices::rgb(t(rgb[, 1]), maxColorValue = 255))
+  tolower(grDevices::rgb(t(rgb), maxColorValue = 255))
 }
 
 # The theme a background calls for: light text on a dark one.
