@@ -338,3 +338,122 @@ test_that("the key wraps long entries instead of cutting them", {
   expect_match(desc, "^Symbols in shapes: B: a fairly")
   expect_match(desc, "How to read: ")
 })
+
+
+# ---------------------------------------------------------------------------
+# tufte
+# ---------------------------------------------------------------------------
+
+tufte_dots <- function(sc) {
+  Filter(function(e) e$type == "rect" && isTRUE(all.equal(e$w, 7)) &&
+           isTRUE(all.equal(e$r, 3.5)), sc$items)
+}
+
+test_that("tufte places one dot per stage, further right for more parameters", {
+  for (nm in c("tabicl", "mitra", "tabpfn35")) {
+    arch <- arch_test_arch(nm)
+    sc <- arch_scene(arch, style = "tufte")
+    params <- vapply(arch$stages, function(s)
+      if (is.na(s$params)) 0 else s$params, numeric(1))
+    params <- params[params > 0]
+    dots <- tufte_dots(sc)
+    expect_length(dots, length(params))
+    x <- vapply(dots, `[[`, numeric(1), "x")
+    # Position is monotone in log10(params): equal counts share an x.
+    o <- order(params)
+    expect_true(all(diff(x[o]) >= -1e-9), info = nm)
+    expect_equal(diff(x[o]) > 1e-9, diff(log10(params[o])) > 1e-9,
+                 info = nm)
+  }
+})
+
+
+test_that("the tufte axis is a range frame over the data's decades", {
+  expect_identical(arch_axis_decades(c(512, 25.7e6)), 3:7)
+  expect_identical(arch_axis_decades(c(1000, 1e6)), 3:6)
+  expect_identical(arch_axis_decades(c(300, 900)), integer())
+  expect_identical(arch_decade_label(c(0, 2, 3, 5, 6, 9)),
+                   c("1", "100", "1k", "100k", "1M", "1B"))
+
+  px <- function(n) log10(n) * 100
+  th <- arch_tufte_theme()
+  items <- arch_log_axis_items(c(512, 25.7e6), px, 0, th)
+  frame <- items[[1]]
+  expect_equal(c(frame$x1, frame$x2), px(c(512, 25.7e6)))
+  ticks <- Filter(function(e) e$type == "line" && e$y2 > e$y1, items)
+  expect_equal(vapply(ticks, `[[`, numeric(1), "x1"), px(10^(3:7)))
+  # Decades 100 px apart all get a label; one value range with no
+  # decade inside it labels its ends instead.
+  labels <- vapply(Filter(function(e) e$type == "text", items), `[[`,
+                   character(1), "text")
+  expect_identical(labels, c("1k", "10k", "100k", "1M", "10M"))
+  ends <- arch_log_axis_items(c(300, 900), px, 0, th)
+  expect_identical(vapply(Filter(function(e) e$type == "text", ends), `[[`,
+                          character(1), "text"), c("300", "900"))
+  # Crowded decades are labelled every other one.
+  tight <- arch_log_axis_items(c(1e3, 1e7), function(n) log10(n) * 20, 0, th)
+  expect_identical(vapply(Filter(function(e) e$type == "text", tight), `[[`,
+                          character(1), "text"), c("1k", "100k", "10M"))
+})
+
+
+test_that("tufte stage labels stay clear of their tags", {
+  g <- arch_tufte_geom()
+  x_text <- g$pad + g$phase_w + g$gap
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    for (detail in c("overview", "full")) {
+      sc <- arch_scene(arch, style = "tufte", detail = detail)
+      txt <- Filter(function(e) e$type == "text", sc$items)
+      tags <- Filter(function(e) identical(e$anchor, "end") &&
+                       isTRUE(all.equal(e$x, x_text + g$text_w)), txt)
+      for (tg in tags) {
+        left <- tg$x - arch_text_width(tg$text, tg$size, family = "serif",
+                                       italic = TRUE)
+        same_row <- Filter(function(e) identical(e$anchor, "start") &&
+                             e$x >= x_text && e$x < tg$x &&
+                             abs(e$y - tg$y) < 1, txt)
+        for (lab in same_row) {
+          right <- lab$x + arch_text_width(lab$text, lab$size,
+                                           family = lab$family)
+          expect_lte(right, left, label = paste(nm, detail, lab$text))
+        }
+      }
+    }
+  }
+})
+
+
+test_that("tufte drops the dot plot without parameters, and sets serif type", {
+  arch <- arch_test_arch("tabicl")
+  sc <- arch_scene(arch, style = "tufte", show_params = FALSE)
+  expect_length(tufte_dots(sc), 0L)
+  txt <- vapply(Filter(function(e) e$type == "text", sc$items), `[[`,
+                character(1), "text")
+  expect_false(any(grepl("total$|log scale", txt)))
+
+  sc <- arch_scene(arch, style = "tufte", detail = "full")
+  fam <- vapply(Filter(function(e) e$type == "text", sc$items), `[[`,
+                character(1), "family")
+  expect_setequal(unique(fam), c("serif", "mono"))
+  # Shapes are the only monospaced text outside the key's symbols.
+  shapes <- unlist(lapply(arch$stages, `[[`, "shape"))
+  mono <- vapply(Filter(function(e) e$type == "text" && e$family == "mono",
+                        sc$items), `[[`, character(1), "text")
+  expect_true(all(mono %in% c(shapes, names(arch$symbols))))
+  expect_true(any(grepl("Palatino", arch_render_svg(sc), fixed = TRUE)))
+})
+
+
+test_that("tufte colours each phase in stage order from the viridis slice", {
+  arch <- arch_test_arch("tabicl")
+  groups <- unique(unlist(lapply(arch$stages, `[[`, "group")))
+  for (theme in c("light", "dark")) {
+    th <- arch_tufte_theme(theme)
+    sc <- arch_scene(arch, style = "tufte", theme = theme)
+    rules <- Filter(function(e) e$type == "line" && isTRUE(all.equal(e$lwd, 2.5)),
+                    sc$items)
+    expect_identical(vapply(rules, `[[`, character(1), "col"),
+                     arch_viridis(length(groups), th$viridis[1], th$viridis[2]))
+  }
+})

@@ -27,7 +27,7 @@
 # `detail` and `theme` already matched, and ignores what it cannot draw.
 # @keywords internal
 arch_styles <- function() {
-  list(cards = arch_scene_cards)
+  list(cards = arch_scene_cards, tufte = arch_scene_tufte)
 }
 
 # @keywords internal
@@ -227,4 +227,101 @@ arch_wrap_text <- function(text, max_px, size, family = "sans", bold = FALSE,
     lines <- c(lines[seq_len(max_lines - 1L)], last)
   }
   lines
+}
+
+# ---------------------------------------------------------------------------
+# Shared parts for the styles that are not cards
+# ---------------------------------------------------------------------------
+
+# The fact sheet as a booktabs table: a rule above, a rule below, no
+# fill and no rules between rows. Two columns past five facts. `label_x`
+# right-aligns a "Facts" label in the margin when given. Returns the
+# items and the y the table ends at.
+# @keywords internal
+arch_fact_table_items <- function(facts, x, y, w, th, family = "serif",
+                                  size = 11.5, label_x = NULL) {
+  n <- length(facts)
+  if (!n) return(list(items = list(), y = y))
+  out <- list()
+  add <- function(e) out[[length(out) + 1L]] <<- e
+  line <- 19
+  ncol <- if (n > 5L) 2L else 1L
+  nrow <- ceiling(n / ncol)
+  gap <- 18
+  colw <- (w - (ncol - 1L) * gap) / ncol
+
+  add(sc_line(x, y, x + w, y, col = th$ink2, lwd = 0.8))
+  if (!is.null(label_x)) {
+    add(sc_text(label_x, y + 14, "Facts", size = size, col = th$ink2,
+                italic = TRUE, anchor = "end", family = family))
+  }
+  for (k in seq_len(n)) {
+    fx <- x + ((k - 1L) %/% nrow) * (colw + gap)
+    fy <- y + 14 + ((k - 1L) %% nrow) * line
+    name <- names(facts)[k]
+    name_w <- arch_text_width(name, size, family = family)
+    add(sc_text(fx, fy, name, size = size, col = th$ink2, family = family))
+    value <- arch_fit_text(as.character(facts[[k]]), colw - name_w - 12, size,
+                           family = family)
+    add(sc_text(fx + colw, fy, value, size = size, col = th$ink,
+                anchor = "end", family = family))
+  }
+  y <- y + 14 + nrow * line - 6
+  add(sc_line(x, y, x + w, y, col = th$ink2, lwd = 0.8))
+  list(items = out, y = y)
+}
+
+# "100", "1k", ..., "1B": short labels for powers of ten.
+# @keywords internal
+arch_decade_label <- function(d) {
+  units <- c("", "k", "M", "B", "T")
+  i <- pmin(d %/% 3, length(units) - 1L)
+  paste0(10^(d - 3 * i), units[i + 1L])
+}
+
+# A range-frame log axis: the line runs from the smallest value to the
+# largest, not across the whole plot, and ticks sit only on the decades
+# the values span. `px` maps a value to x.
+# @keywords internal
+arch_log_axis_items <- function(values, px, y, th, family = "serif") {
+  values <- values[is.finite(values) & values > 0]
+  if (!length(values)) return(list())
+  out <- list(sc_line(px(min(values)), y, px(max(values)), y, col = th$ink3,
+                      lwd = 0.8))
+  decades <- arch_axis_decades(values)
+  at <- 10^decades
+  labels <- arch_decade_label(decades)
+  # Every decade gets a tick; when decades are too narrow for their
+  # labels to sit apart, only every second (or third) is labelled.
+  if (length(at) > 1L) {
+    step <- ceiling(34 / (px(at[2]) - px(at[1])))
+    labels[(seq_along(labels) - 1L) %% step != 0L] <- ""
+  }
+  # Values within one decade cross no tick; label the ends instead, so
+  # the axis still says what it measures.
+  if (!length(at)) {
+    at <- range(values)
+    labels <- vapply(at, function(v) gsub(" ", "", arch_format_count(v)),
+                     character(1))
+  }
+  for (k in seq_along(at)) {
+    xd <- px(at[k])
+    out[[length(out) + 1L]] <- sc_line(xd, y, xd, y + 4, col = th$ink3,
+                                       lwd = 0.8)
+    if (nzchar(labels[k])) {
+      out[[length(out) + 1L]] <- sc_text(xd, y + 14, labels[k], size = 10,
+                                         col = th$ink3, anchor = "middle",
+                                         family = family)
+    }
+  }
+  out
+}
+
+# The decades inside the range of `values`: a tick outside the range
+# frame would dangle past the end of its line.
+# @keywords internal
+arch_axis_decades <- function(values) {
+  lo <- ceiling(log10(min(values)) - 1e-9)
+  hi <- floor(log10(max(values)) + 1e-9)
+  if (lo > hi) integer() else seq.int(lo, hi)
 }

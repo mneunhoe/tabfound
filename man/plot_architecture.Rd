@@ -29,12 +29,13 @@ description can be inspected and then drawn.}
 \item{format}{\code{"svg"}, \code{"png"} or \code{"pdf"}. Inferred from \code{file} when
 not given.}
 
-\item{style}{How to draw it. \code{"cards"} (the default) stacks one card
-per stage. Set \code{options(tabfound.arch_style = )} to change the
-default for a session.}
+\item{style}{How to draw it: \code{"cards"} (the default) or \code{"tufte"}.
+See the Styles section. Set \code{options(tabfound.arch_style = )} to
+change the default for a session.}
 
 \item{detail}{\code{"overview"} draws each repeated stack as one block;
-\code{"full"} expands it into its sublayers.}
+\code{"full"} expands it into its sublayers. In \code{"tufte"}, the sublayers
+are indented rows with a hollow dot each.}
 
 \item{theme}{\code{"light"} or \code{"dark"}.}
 
@@ -42,10 +43,12 @@ default for a session.}
 (\code{png}), where it raises the resolution; SVG and PDF are vector and
 scale on their own.}
 
-\item{show_shapes, show_params}{Draw the right-margin tensor-shape and
-parameter-count annotations.}
+\item{show_shapes, show_params}{Draw the tensor shapes and the
+parameter counts. In \code{"tufte"}, \code{show_params = FALSE} drops the dot
+plot and its axis.}
 
-\item{show_facts}{Draw the fact sheet under the diagram.}
+\item{show_facts}{Draw the fact sheet under the diagram. The key is
+drawn either way.}
 }
 \value{
 Invisibly: the output path when \code{file} is given, otherwise the
@@ -65,7 +68,37 @@ Everything drawn comes from the model itself -- the stage list from
 the backend's own description of its network, the parameter counts
 read off the loaded weights -- so the picture cannot disagree with the
 checkpoint it was made from.
+
+Every diagram ends in a key that defines each symbol in its shapes,
+each abbreviation in its text and the notation its style uses, so a
+figure shared on its own still reads. The key is always drawn.
 }
+\section{Styles}{
+
+The same description can be drawn more than one way:
+\itemize{
+\item \code{"cards"} (the default) stacks one card per stage, coloured by what
+the stage does, in the manner of Sebastian Raschka's LLM
+architecture gallery.
+\item \code{"tufte"} sets the stages as rows of a table, with each stage's
+parameter count as a dot on a log scale from 100 to 1 B that every
+diagram shares, so two models can be compared by eye. It follows
+Tufte's (2001) rules -- little non-data ink, labels placed directly
+beside what they name, a range-frame axis -- and Cleveland and
+McGill's (1984) finding that position on a common scale is read
+more accurately than length or area. Phases are coloured with
+viridis in stage order, in serif type.
+}
+
+Tufte, E. R. (2001). \emph{The Visual Display of Quantitative Information}
+(2nd ed.). Graphics Press.
+
+Cleveland, W. S., & McGill, R. (1984). Graphical perception: Theory,
+experimentation, and application to the development of graphical
+methods. \emph{Journal of the American Statistical Association}, 79(387),
+531--554.
+}
+
 \examples{
 \dontrun{
 clf <- tabular_classifier("path/to/tabpfn-v2.5-clf")
@@ -73,6 +106,7 @@ plot_architecture(clf)                                # current device
 plot_architecture(clf, "tabpfn.svg")
 plot_architecture(clf, "tabpfn.pdf", detail = "full")
 plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
+plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
 }
 }
 \seealso{

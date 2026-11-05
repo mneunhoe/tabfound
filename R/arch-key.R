@@ -121,25 +121,31 @@ arch_key_groups <- function(arch, notes = list(), show_shapes = TRUE,
 
 # Draw the key at (x, y), `w` wide. `th` needs `ink`, `ink2` and `ink3`.
 # Terms and meanings sit in two columns when there is room; notes always
-# run the full width. Returns the items and the y the key ends at.
+# run the full width. `family` sets the text face to match the style;
+# symbols stay monospaced, as they are in the shapes. `rule = FALSE`
+# drops the hairline above it, for a style whose last element already
+# ends in one. Returns the items and the y the key ends at.
 # @keywords internal
-arch_key_items <- function(groups, x, y, w, th) {
+arch_key_items <- function(groups, x, y, w, th, family = "sans",
+                           rule = TRUE) {
   out <- list()
   add <- function(e) out[[length(out) + 1L]] <<- e
   size <- 11
   line_h <- 15
   row_gap <- 5
 
-  add(sc_line(x, y, x + w, y, col = th$ink3, lwd = 0.8))
+  if (rule) add(sc_line(x, y, x + w, y, col = th$ink3, lwd = 0.8))
   y <- y + 20
-  add(sc_text(x, y, "Key", size = 12, col = th$ink, bold = TRUE))
+  add(sc_text(x, y, "Key", size = 12, col = th$ink, bold = TRUE,
+              family = family))
   y <- y + 22
 
   for (g in groups) {
     is_notes <- !is.null(g$notes)
     n <- if (is_notes) length(g$notes) else length(g$items)
     if (!n) next
-    add(sc_text(x, y, g$head, size = 10.5, col = th$ink3, bold = TRUE))
+    add(sc_text(x, y, g$head, size = 10.5, col = th$ink3, bold = TRUE,
+                family = family))
     y <- y + 18
 
     if (is_notes) {
@@ -150,10 +156,10 @@ arch_key_items <- function(groups, x, y, w, th) {
         if (!is.null(nt$swatch)) {
           add(sc_rect(x, y - 5, 10, 10, fill = nt$swatch, stroke = NA, r = 2))
         }
-        lines <- arch_wrap_text(nt$text, x + w - tx, size)
+        lines <- arch_wrap_text(nt$text, x + w - tx, size, family = family)
         for (k in seq_along(lines)) {
           add(sc_text(tx, y + (k - 1L) * line_h, lines[k], size = size,
-                      col = th$ink2))
+                      col = th$ink2, family = family))
         }
         y <- y + length(lines) * line_h + row_gap
       }
@@ -163,11 +169,12 @@ arch_key_items <- function(groups, x, y, w, th) {
       colw <- (w - (ncol - 1L) * gap) / ncol
       terms <- names(g$items)
       mono <- isTRUE(g$mono)
+      term_family <- if (mono) "mono" else family
       term_w <- max(vapply(terms, arch_text_width, numeric(1), size = size,
-                           bold = !mono, mono = mono)) + 14
+                           bold = !mono, family = term_family)) + 14
       rows <- ceiling(n / ncol)
       wrapped <- lapply(unname(g$items), arch_wrap_text,
-                        max_px = colw - term_w, size = size)
+                        max_px = colw - term_w, size = size, family = family)
       # Items run down the first column, then the second; a row is as
       # tall as the taller of its two entries.
       row_of <- (seq_len(n) - 1L) %% rows + 1L
@@ -179,10 +186,10 @@ arch_key_items <- function(groups, x, y, w, th) {
         cx <- x + col_of[i] * (colw + gap)
         ty <- tops[row_of[i]]
         add(sc_text(cx, ty, terms[i], size = size, col = th$ink,
-                    bold = !mono, mono = mono))
+                    bold = !mono, family = term_family))
         for (k in seq_along(wrapped[[i]])) {
           add(sc_text(cx + term_w, ty + (k - 1L) * line_h, wrapped[[i]][k],
-                      size = size, col = th$ink2))
+                      size = size, col = th$ink2, family = family))
         }
       }
       y <- y + sum(heights + row_gap)

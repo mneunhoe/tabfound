@@ -236,6 +236,33 @@ arch_format_from_file <- function(file) {
 #' read off the loaded weights -- so the picture cannot disagree with the
 #' checkpoint it was made from.
 #'
+#' Every diagram ends in a key that defines each symbol in its shapes,
+#' each abbreviation in its text and the notation its style uses, so a
+#' figure shared on its own still reads. The key is always drawn.
+#'
+#' @section Styles:
+#' The same description can be drawn more than one way:
+#'
+#' * `"cards"` (the default) stacks one card per stage, coloured by what
+#'   the stage does, in the manner of Sebastian Raschka's LLM
+#'   architecture gallery.
+#' * `"tufte"` sets the stages as rows of a table, with each stage's
+#'   parameter count as a dot on a log scale from 100 to 1 B that every
+#'   diagram shares, so two models can be compared by eye. It follows
+#'   Tufte's (2001) rules -- little non-data ink, labels placed directly
+#'   beside what they name, a range-frame axis -- and Cleveland and
+#'   McGill's (1984) finding that position on a common scale is read
+#'   more accurately than length or area. Phases are coloured with
+#'   viridis in stage order, in serif type.
+#'
+#' Tufte, E. R. (2001). *The Visual Display of Quantitative Information*
+#' (2nd ed.). Graphics Press.
+#'
+#' Cleveland, W. S., & McGill, R. (1984). Graphical perception: Theory,
+#' experimentation, and application to the development of graphical
+#' methods. *Journal of the American Statistical Association*, 79(387),
+#' 531--554.
+#'
 #' @param object A model from [tabular_classifier()] or
 #'   [tabular_regressor()], or a [tabfound()] fit. A
 #'   `tabfound_arch` from [tabfound_architecture()] is also accepted, so a
@@ -244,18 +271,21 @@ arch_format_from_file <- function(file) {
 #'   (the default) the diagram is drawn on the current graphics device.
 #' @param format `"svg"`, `"png"` or `"pdf"`. Inferred from `file` when
 #'   not given.
-#' @param style How to draw it. `"cards"` (the default) stacks one card
-#'   per stage. Set `options(tabfound.arch_style = )` to change the
-#'   default for a session.
+#' @param style How to draw it: `"cards"` (the default) or `"tufte"`.
+#'   See the Styles section. Set `options(tabfound.arch_style = )` to
+#'   change the default for a session.
 #' @param detail `"overview"` draws each repeated stack as one block;
-#'   `"full"` expands it into its sublayers.
+#'   `"full"` expands it into its sublayers. In `"tufte"`, the sublayers
+#'   are indented rows with a hollow dot each.
 #' @param theme `"light"` or `"dark"`.
 #' @param scale Multiplies the rendered size. Only affects raster output
 #'   (`png`), where it raises the resolution; SVG and PDF are vector and
 #'   scale on their own.
-#' @param show_shapes,show_params Draw the right-margin tensor-shape and
-#'   parameter-count annotations.
-#' @param show_facts Draw the fact sheet under the diagram.
+#' @param show_shapes,show_params Draw the tensor shapes and the
+#'   parameter counts. In `"tufte"`, `show_params = FALSE` drops the dot
+#'   plot and its axis.
+#' @param show_facts Draw the fact sheet under the diagram. The key is
+#'   drawn either way.
 #' @return Invisibly: the output path when `file` is given, otherwise the
 #'   `tabfound_arch` that was drawn.
 #' @examples
@@ -265,6 +295,7 @@ arch_format_from_file <- function(file) {
 #' plot_architecture(clf, "tabpfn.svg")
 #' plot_architecture(clf, "tabpfn.pdf", detail = "full")
 #' plot_architecture(clf, "tabpfn-dark.png", theme = "dark", scale = 2)
+#' plot_architecture(clf, "tabpfn-tufte.svg", style = "tufte")
 #' }
 #' @seealso [tabfound_architecture()] for the description behind the
 #'   picture.
