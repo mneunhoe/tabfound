@@ -1963,7 +1963,8 @@ tabpfn35_describe <- function(config, task) {
       detail = sprintf("%s, then LayerNorm",
                        if (clf) sprintf("class embedding -> %d", E)
                        else sprintf("Linear(1 -> %d)", E)),
-      prefix = c("col_y_encoder", "col_y_layernorm")),
+      prefix = c("col_y_encoder", "col_y_layernorm"),
+      join = "add", join_rows = "training rows"),
     arch_stage(
       "dist", "Feature-distribution embedder", kind = "attention",
       group = "Stage 1 - per column", repeats = n_dst, axis = "rows",
@@ -1972,16 +1973,7 @@ tabpfn35_describe <- function(config, task) {
         n_ind),
       shape = sprintf("(B, n, F, %d)", E),
       prefix = "feature_distribution_embedder",
-      children = list(
-        arch_stage("ind", "Inducing vectors attend to the rows",
-                   kind = "attention", axis = "rows",
-                   prefix = "feature_distribution_embedder.layers.0.cross_attn_block1"),
-        arch_stage("back", "Rows attend back to the inducing vectors",
-                   kind = "attention", axis = "inducing",
-                   prefix = "feature_distribution_embedder.layers.0.cross_attn_block2"),
-        arch_stage("iv", "Learned inducing vectors", kind = "embed",
-                   prefix = "feature_distribution_embedder.layers.0.inducing_vectors")
-      )),
+      children = tabpfn3_dist_children(qk_norm = TRUE)),
     arch_stage(
       "agg", "Column aggregator", kind = "attention",
       group = "Stage 2 - per row", repeats = n_agg, axis = "columns",
@@ -1990,23 +1982,15 @@ tabpfn35_describe <- function(config, task) {
         n_cls),
       shape = sprintf("(B, n, %d)", D), prefix = "column_aggregator",
       collapses = TRUE,
-      children = list(
-        arch_stage("attn", "Attention over a row's columns", kind = "attention",
-                   axis = "columns", prefix = "column_aggregator.blocks.0"),
-        arch_stage("rope", "RoPE frequencies (learned)", kind = "embed",
-                   prefix = "column_aggregator.rope"),
-        arch_stage("cls", "CLS tokens", kind = "embed",
-                   prefix = "column_aggregator.cls_tokens"),
-        arch_stage("oln", "RMSNorm", kind = "norm",
-                   prefix = "column_aggregator.out_ln")
-      )),
+      children = tabpfn3_agg_children(qk_norm = TRUE)),
     arch_stage(
       "icl_y", "Target encoder (per row)", kind = "embed",
       group = "Stage 3 - in-context",
       detail = sprintf("%s, then LayerNorm",
                        if (clf) sprintf("class embedding -> %d", D)
                        else sprintf("Linear(1 -> %d)", D)),
-      prefix = c("icl_y_encoder", "icl_y_layernorm")),
+      prefix = c("icl_y_encoder", "icl_y_layernorm"),
+      join = "add", join_rows = "training rows"),
     arch_stage(
       "icl", "In-context learning block", kind = "attention",
       group = "Stage 3 - in-context", repeats = L, axis = "rows",
@@ -2015,16 +1999,7 @@ tabpfn35_describe <- function(config, task) {
         h_icl, as.integer(D / h_icl), kv_t, if (kv_t == 1L) "" else "s",
         D, D * ff),
       shape = sprintf("(B, n, %d)", D), prefix = "icl_blocks",
-      children = list(
-        arch_stage("iattn", "Attention over rows, training-only keys",
-                   kind = "attention", axis = "rows",
-                   prefix = "icl_blocks.0.icl_attention"),
-        arch_stage("iln", "RMSNorm", kind = "norm",
-                   prefix = c("icl_blocks.0.layernorm",
-                              "icl_blocks.0.layernorm_mlp")),
-        arch_stage("imlp", "MLP, GELU", kind = "ffn",
-                   prefix = "icl_blocks.0.mlp")
-      )),
+      children = tabpfn3_icl_children(kv_t, qk_norm = TRUE)),
     arch_stage(
       "onorm", "Output RMSNorm", kind = "norm", group = "Decode",
       prefix = "output_norm"),

@@ -758,6 +758,58 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
 # ---------------------------------------------------------------------------
 
 #' @keywords internal
+# The children of one Kumo transformer block, in the order it runs them:
+# keys/values and then queries are normed apart, then attention, then the
+# MLP, whose own RMSNorm is its first layer. Both sit inside residual
+# connections.
+# @keywords internal
+kumo_block_children <- function(pfx, id, label, axis, attn) {
+  p <- function(x) paste0(pfx, ".", x)
+  list(
+    arch_residual(
+      arch_stage(paste0(id, "_nkv"), "RMSNorm, keys and values", kind = "norm",
+                 prefix = p("key_value_norm")),
+      arch_stage(paste0(id, "_nq"), "RMSNorm, queries", kind = "norm",
+                 prefix = p("query_norm")),
+      arch_stage(id, label, kind = "attention", axis = axis, attn = attn,
+                 prefix = p("attn"))
+    ),
+    arch_residual(
+      arch_stage(paste0(id, "_n2"), "RMSNorm", kind = "norm", prefix = p("mlp.0")),
+      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn",
+                 prefix = p(c("mlp.1", "mlp.3")))
+    )
+  )
+}
+
+# @keywords internal
+kumo_col_children <- function(pfx = "row_embedding.col_blocks.0") {
+  c(
+    list(arch_stage("iv", "Learned inducing points", kind = "embed",
+                    role = "input", feeds = "ind",
+                    prefix = paste0(pfx, ".inducing_points"))),
+    kumo_block_children(paste0(pfx, ".inducing_block"), "ind",
+                        "Inducing points attend to the context rows",
+                        axis = "rows",
+                        attn = arch_attn("context rows", qk_norm = TRUE,
+                                         scaling = "log-n")),
+    kumo_block_children(paste0(pfx, ".output_block"), "back",
+                        "Rows attend to the inducing summary",
+                        axis = "inducing",
+                        attn = arch_attn("inducing points", qk_norm = TRUE))
+  )
+}
+
+# A repeated stack of blocks, then the norm it ends with.
+# @keywords internal
+kumo_stack_children <- function(pfx, id, label, axis, final_norm, attn) {
+  c(
+    kumo_block_children(pfx, id, label, axis, attn),
+    list(arch_stage("onorm", "RMSNorm, after the stack", kind = "norm",
+                    role = "final", prefix = final_norm))
+  )
+}
+
 kumo_describe <- function(config, task) {
   D   <- as.integer(config$cell_channels)
   E   <- as.integer(config$icl_channels)
@@ -786,10 +838,12 @@ kumo_describe <- function(config, task) {
     arch_stage(
       "row_y", "Target embedding (cells)", kind = "embed", group = "Row embedding",
       detail = "added to every cell of the context rows",
+      join = "add", join_rows = "context rows",
       prefix = paste0("row_embedding.", yname)),
     arch_stage(
       "readout", "Readout tokens", kind = "embed", group = "Row embedding",
       detail = sprintf("%d learned tokens prepended to every row; the column blocks skip them", K),
+      join = "prepend",
       prefix = "row_embedding.readout_token"),
     arch_stage(
       "col", "Column block", kind = "attention", group = "Row embedding",
@@ -797,16 +851,7 @@ kumo_describe <- function(config, task) {
       detail = sprintf("induced attention over a column's cell tokens: %d inducing points read the context rows (log-n query scaling), every row reads them back; %d heads",
                        M, H),
       shape = sprintf("(C, R, %d)", D), prefix = "row_embedding.col_blocks",
-      children = list(
-        arch_stage("ind", "Inducing points attend to the context rows",
-                   kind = "attention", axis = "rows",
-                   prefix = "row_embedding.col_blocks.0.inducing_block"),
-        arch_stage("back", "Rows attend to the inducing summary",
-                   kind = "attention", axis = "inducing",
-                   prefix = "row_embedding.col_blocks.0.output_block"),
-        arch_stage("iv", "Learned inducing points", kind = "embed",
-                   prefix = "row_embedding.col_blocks.0.inducing_points")
-      )),
+      children = kumo_col_children()),
     arch_stage(
       "row", "Row block", kind = "attention", group = "Row embedding",
       repeats = L, axis = "columns", interleave = "embedding",
@@ -817,16 +862,10 @@ kumo_describe <- function(config, task) {
       # flattened readout tokens straight out of the last row block.
       collapses = !proj,
       prefix = c("row_embedding.row_blocks", "row_embedding.norm"),
-      children = list(
-        arch_stage("rattn", "Attention over a row's tokens", kind = "attention",
-                   axis = "columns", prefix = "row_embedding.row_blocks.0.attn"),
-        arch_stage("rmlp", "MLP, GELU", kind = "ffn",
-                   prefix = "row_embedding.row_blocks.0.mlp"),
-        arch_stage("rnorm", "RMSNorm", kind = "norm",
-                   prefix = c("row_embedding.row_blocks.0.query_norm",
-                              "row_embedding.row_blocks.0.key_value_norm",
-                              "row_embedding.norm"))
-      )),
+      children = kumo_stack_children("row_embedding.row_blocks.0", "rattn", "Attention over a row's tokens", "columns", "row_embedding.norm",
+                                     attn = arch_attn("all", queries = "readout tokens",
+                                                      qk_norm = TRUE,
+                                                      scaling = "gated log-n"))),
     if (proj) arch_stage(
       "proj", "Row projection", kind = "embed", group = "In-context",
       detail = sprintf("Linear(%d -> %d) from the flattened readout tokens", K * D, E),
@@ -834,6 +873,7 @@ kumo_describe <- function(config, task) {
     arch_stage(
       "icl_y", "Target embedding (rows)", kind = "embed", group = "In-context",
       detail = "added to the context rows",
+      join = "add", join_rows = "context rows",
       prefix = paste0("icl_block.", yname)),
     arch_stage(
       "icl", "In-context learning block", kind = "attention", group = "In-context",
@@ -843,16 +883,10 @@ kumo_describe <- function(config, task) {
                        if (is.null(kvh)) "" else
                          sprintf("; query rows use %d of the key/value heads", kvh)),
       shape = sprintf("(R, %d)", E), prefix = c("icl_block.layers", "icl_block.norm"),
-      children = list(
-        arch_stage("iattn", "Attention over context rows", kind = "attention",
-                   axis = "rows", prefix = "icl_block.layers.0.attn"),
-        arch_stage("imlp", "MLP, GELU", kind = "ffn",
-                   prefix = "icl_block.layers.0.mlp"),
-        arch_stage("inorm", "RMSNorm", kind = "norm",
-                   prefix = c("icl_block.layers.0.query_norm",
-                              "icl_block.layers.0.key_value_norm",
-                              "icl_block.norm"))
-      )),
+      children = kumo_stack_children("icl_block.layers.0", "iattn", "Attention over context rows", "rows", "icl_block.norm",
+                                     attn = arch_attn("context rows", queries = "query rows",
+                                                      qk_norm = TRUE, scaling = "log-n",
+                                                      kv_heads_test = kvh))),
     arch_stage(
       "head", "Decoder MLP", kind = "decode", group = "Decode",
       detail = sprintf("%d -> %d -> %d, GELU", E, 2L * E, n_out),

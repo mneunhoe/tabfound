@@ -735,14 +735,17 @@ tabpfn_describe <- function(config, task) {
     arch_stage(
       "y_encoder", "Target encoder", kind = "embed", group = "Embed",
       detail = "Linear(2 -> E); joins as an extra column on every row (test rows embed a missing value)",
+      join = "concat",
       prefix = "y_encoder"),
     arch_stage(
       "pos", "Feature positional embedding", kind = "embed", group = "Embed",
       detail = sprintf("subspace: fixed 48-d per column, Linear(48 -> %d)", E),
+      join = "add",
       prefix = "feature_positional_embedding_embeddings"),
     arch_stage(
       "think", "Thinking rows", kind = "embed", group = "Embed",
       detail = "64 learned rows prepended to the context",
+      join = "prepend",
       shape = "(B, 64 + n, F + 1, E)",
       prefix = "add_thinking_tokens"),
     arch_stage(
@@ -751,18 +754,26 @@ tabpfn_describe <- function(config, task) {
       detail = sprintf("post-norm; %d heads of %d; MLP %d -> %d", H,
                        as.integer(E / H), E, ff),
       shape = "(B, 64 + n, F + 1, E)", prefix = "transformer_encoder",
+      # Post-norm: each norm runs after its residual add, outside it.
       children = list(
-        arch_stage("a_feat", "Attention between features", kind = "attention",
-                   axis = "features",
-                   prefix = paste0(lyr, ".self_attn_between_features")),
-        arch_stage("ln1", "LayerNorm", kind = "norm"),
-        arch_stage("a_item", "Attention between items", kind = "attention",
-                   axis = "rows",
-                   prefix = paste0(lyr, ".self_attn_between_items")),
-        arch_stage("ln2", "LayerNorm", kind = "norm"),
-        arch_stage("mlp", "MLP, GELU", kind = "ffn",
-                   prefix = paste0(lyr, ".mlp")),
-        arch_stage("ln3", "LayerNorm", kind = "norm")
+        arch_residual(arch_stage(
+          "a_feat", "Attention between features", kind = "attention",
+          axis = "features", attn = arch_attn("all"),
+          prefix = paste0(lyr, ".self_attn_between_features"))),
+        arch_stage("ln1", "LayerNorm", kind = "norm",
+                   prefix = paste0(lyr, ".layer_norms.0")),
+        # Keys are the context rows (thinking and training); test rows
+        # read the first head's keys and values only.
+        arch_residual(arch_stage(
+          "a_item", "Attention between items", kind = "attention",
+          axis = "rows", attn = arch_attn("context rows", kv_heads_test = 1L),
+          prefix = paste0(lyr, ".self_attn_between_items"))),
+        arch_stage("ln2", "LayerNorm", kind = "norm",
+                   prefix = paste0(lyr, ".layer_norms.1")),
+        arch_residual(arch_stage("mlp", "MLP, GELU", kind = "ffn",
+                                 prefix = paste0(lyr, ".mlp"))),
+        arch_stage("ln3", "LayerNorm", kind = "norm",
+                   prefix = paste0(lyr, ".layer_norms.2"))
       )),
     arch_stage(
       "decoder", "Decoder MLP", kind = "decode", group = "Decode",

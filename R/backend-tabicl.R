@@ -1045,6 +1045,27 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
 # Architecture description
 # ---------------------------------------------------------------------------
 
+# The children of one TabICL attention block, in the order it runs them:
+# pre-norm attention, then a pre-norm MLP, each inside a residual
+# connection. Every stage of the model is built from this one block.
+# @keywords internal
+tabicl_block_children <- function(pfx, id, label, axis, attn) {
+  list(
+    arch_residual(
+      arch_stage(paste0(id, "_n1"), "LayerNorm", kind = "norm",
+                 prefix = paste0(pfx, ".norm1")),
+      arch_stage(id, label, kind = "attention", axis = axis, attn = attn,
+                 prefix = paste0(pfx, ".attn"))
+    ),
+    arch_residual(
+      arch_stage(paste0(id, "_n2"), "LayerNorm", kind = "norm",
+                 prefix = paste0(pfx, ".norm2")),
+      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn",
+                 prefix = paste0(pfx, c(".linear1", ".linear2")))
+    )
+  )
+}
+
 #' Stage list for the TabICL diagram
 #'
 #' Three stages, each attending over a different axis: a set transformer
@@ -1073,6 +1094,7 @@ tabicl_describe <- function(config, task) {
   n_out  <- if (clf) as.integer(config$max_classes)
             else as.integer(config$num_quantiles)
   ssmax  <- !identical(config$icl_ssmax, "none")
+  col_ssmax <- !identical(config$col_ssmax %||% "none", "none")
 
   stages <- list(
     arch_input_stage(detail = "numeric matrix; the wrapper imputes first"),
@@ -1086,6 +1108,7 @@ tabicl_describe <- function(config, task) {
       "col_y", "Target encoder (per column)", kind = "embed",
       group = "Stage 1 - per column",
       detail = "added on the labelled rows, so a column's summary is target-aware",
+      join = "add", join_rows = "training rows",
       prefix = "col_embedder.y_encoder"),
     arch_stage(
       "col_tf", "Column set transformer", kind = "attention",
@@ -1093,19 +1116,24 @@ tabicl_describe <- function(config, task) {
       detail = sprintf("induced self-attention: %d learned inducing points attend to the labelled rows only; %d heads",
                        n_ind, h_col),
       shape = "(B, n, F, E)", prefix = "col_embedder.tf_col",
-      children = list(
-        arch_stage("ind", "Inducing points attend to the rows",
-                   kind = "attention", axis = "rows",
-                   prefix = "col_embedder.tf_col.blocks.0.multihead_attn1"),
-        arch_stage("back", "Rows attend back to the inducing points",
-                   kind = "attention", axis = "inducing",
-                   prefix = "col_embedder.tf_col.blocks.0.multihead_attn2"),
-        arch_stage("iv", "Learned inducing points", kind = "embed",
-                   prefix = "col_embedder.tf_col.blocks.0.ind_vectors")
+      children = c(
+        list(arch_stage("iv", "Learned inducing points", kind = "embed",
+                        role = "input", feeds = "ind",
+                        prefix = "col_embedder.tf_col.blocks.0.ind_vectors")),
+        tabicl_block_children("col_embedder.tf_col.blocks.0.multihead_attn1",
+                              "ind", "Inducing points attend to the labelled rows",
+                              axis = "rows",
+                              attn = arch_attn("training rows",
+                                               scaling = if (col_ssmax) "scalable softmax"
+                                                         else "1/sqrt(d)")),
+        tabicl_block_children("col_embedder.tf_col.blocks.0.multihead_attn2",
+                              "back", "Rows attend back to the inducing points",
+                              axis = "inducing", attn = arch_attn("inducing points"))
       )),
     arch_stage(
       "cls", "CLS columns", kind = "embed", group = "Stage 2 - per row",
       detail = sprintf("%d learned columns overwrite the reserved slots", n_cls),
+      join = "prepend",
       prefix = "row_interactor.cls_tokens"),
     arch_stage(
       "row_tf", "Row encoder", kind = "attention", group = "Stage 2 - per row",
@@ -1114,19 +1142,22 @@ tabicl_describe <- function(config, task) {
                        h_row),
       shape = sprintf("(B, n, %d)", D), collapses = TRUE,
       prefix = c("row_interactor.tf_row", "row_interactor.out_ln"),
-      children = list(
-        arch_stage("attn", "Attention over a row's columns", kind = "attention",
-                   axis = "columns",
-                   prefix = "row_interactor.tf_row.blocks.0"),
-        arch_stage("rope", "RoPE frequencies", kind = "embed",
-                   prefix = "row_interactor.tf_row.rope"),
-        arch_stage("oln", "LayerNorm", kind = "norm",
-                   prefix = "row_interactor.out_ln")
+      children = c(
+        list(arch_stage("rope", "RoPE frequencies", kind = "embed",
+                        role = "input", feeds = "attn",
+                        prefix = "row_interactor.tf_row.rope")),
+        tabicl_block_children("row_interactor.tf_row.blocks.0", "attn",
+                              "Attention over a row's columns",
+                              axis = "columns",
+                              attn = arch_attn("all", queries = "CLS tokens")),
+        list(arch_stage("oln", "LayerNorm, after the stack", kind = "norm",
+                        role = "final", prefix = "row_interactor.out_ln"))
       )),
     arch_stage(
       "icl_y", "Target encoder (per row)", kind = "embed",
       group = "Stage 3 - in-context",
       detail = sprintf("added on the labelled rows at the flattened width %d", D),
+      join = "add", join_rows = "training rows",
       prefix = "icl_predictor.y_encoder"),
     arch_stage(
       "icl", "In-context learning block", kind = "attention",
@@ -1135,17 +1166,12 @@ tabicl_describe <- function(config, task) {
                        h_icl, as.integer(D / h_icl),
                        if (ssmax) "; scalable softmax" else ""),
       shape = sprintf("(B, n, %d)", D), prefix = "icl_predictor.tf_icl",
-      children = list(
-        arch_stage("iattn", "Attention over rows, labelled-row keys",
-                   kind = "attention", axis = "rows",
-                   prefix = "icl_predictor.tf_icl.blocks.0.attn"),
-        arch_stage("iln", "LayerNorm x2", kind = "norm",
-                   prefix = c("icl_predictor.tf_icl.blocks.0.norm1",
-                              "icl_predictor.tf_icl.blocks.0.norm2")),
-        arch_stage("imlp", "MLP, GELU", kind = "ffn",
-                   prefix = c("icl_predictor.tf_icl.blocks.0.linear1",
-                              "icl_predictor.tf_icl.blocks.0.linear2"))
-      )),
+      children = tabicl_block_children("icl_predictor.tf_icl.blocks.0", "iattn",
+                                       "Attention over rows, labelled-row keys",
+                                       axis = "rows",
+                                       attn = arch_attn("training rows",
+                                                        scaling = if (ssmax) "scalable softmax"
+                                                                  else "1/sqrt(d)"))),
     arch_stage(
       "dec", "Decoder MLP", kind = "decode", group = "Decode",
       detail = sprintf("LayerNorm, then %d -> %d -> %d, GELU", D, D * 2L, n_out),
