@@ -155,7 +155,7 @@ test_that("SVG output is well formed and carries the diagram's text", {
   expect_true(any(grepl("Quantile-rank embedding", svg, fixed = TRUE)))
   # Every element opened is closed on its own line.
   body <- svg[grepl("^  <", svg)]
-  expect_true(all(grepl("/>$|</(text|tspan)>$", body)))
+  expect_true(all(grepl("/>$|</(text|tspan|title|desc)>$", body)))
 })
 
 

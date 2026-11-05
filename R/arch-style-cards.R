@@ -171,8 +171,43 @@ arch_scene_cards <- function(arch, detail, theme, show_shapes, show_params,
     y <- facts$y
   }
 
+  # --- key --------------------------------------------------------------
+  groups <- arch_key_groups(
+    arch, arch_cards_notes(arch, detail, show_shapes, show_params),
+    show_shapes = show_shapes, extra = unname(ARCH_KINDS)
+  )
+  key <- arch_key_items(groups, g$pad, y + 26, W - 2 * g$pad, th)
+  push_all(key$items)
+  y <- key$y
+
   list(width = W, height = ceiling(y + g$pad), bg = th$surface, items = it,
-       theme = th)
+       theme = th, title = arch$title,
+       desc = paste(c(arch$subtitle, arch_key_text(groups)), collapse = ". "))
+}
+
+# The notation cards draws, and only what this diagram actually uses.
+# @keywords internal
+arch_cards_notes <- function(arch, detail, show_shapes, show_params) {
+  axes <- unlist(lapply(arch$stages, function(s)
+    c(s$axis, if (identical(detail, "full"))
+      unlist(lapply(s$children, `[[`, "axis")))))
+  repeats <- any(vapply(arch$stages, `[[`, integer(1), "repeats") > 1L)
+  has_shape <- show_shapes &&
+    any(vapply(arch$stages, function(s) !is.null(s$shape), logical(1)))
+  margin <- c(if (has_shape) "the tensor shape each stage emits",
+              if (show_params) "its exact parameter count")
+  c(
+    if (repeats) list(arch_note(if (identical(detail, "full"))
+      "× N: the block is stacked N times; its sublayers are drawn once"
+      else "× N: the block is stacked N times; the card is drawn once, as a deck")),
+    if (length(axes)) list(arch_note(
+      "over rows / columns / features: the axis this block's attention runs across")),
+    list(arch_note("card colour: what kind of stage it is (see the legend above)")),
+    if (length(margin)) list(arch_note(paste0(
+      "right margin: ", paste(margin, collapse = ", then ")))),
+    if (any(vapply(arch$stages, function(s) !is.null(s$group), logical(1))))
+      list(arch_note("left margin: the phase each group of stages belongs to"))
+  )
 }
 
 # One block: the deck of cards behind it when it repeats, the card
@@ -369,11 +404,9 @@ arch_facts_items <- function(arch, x, y, w, th) {
   ncol <- if (n > 5L) 2L else 1L
   nrow <- ceiling(n / ncol)
   line <- 19
-  sym <- arch_used_symbols(arch)
-  sym <- if (length(sym))
-    paste(paste0(names(sym), " = ", unname(sym)), collapse = "   ·   ")
-    else NULL
-  h <- 16 + 20 + nrow * line + if (is.null(sym)) 4 else 24
+  # The symbols used to sit on a line at the foot of this panel, cut to
+  # its width; they are in the key now, which never truncates.
+  h <- 16 + 20 + nrow * line + 4
 
   out <- list(sc_rect(x, y, w, h, fill = th$panel, stroke = NA, r = 6))
   out[[length(out) + 1L]] <- sc_text(x + 16, y + 19, "Fact sheet", size = 10.5,
@@ -391,11 +424,6 @@ arch_facts_items <- function(arch, x, y, w, th) {
       fx + colw - 16, fy,
       arch_fit_text(as.character(facts[[i]]), colw * 0.46, 10.5, bold = TRUE),
       size = 10.5, col = th$ink, anchor = "end", bold = TRUE)
-  }
-  if (!is.null(sym)) {
-    out[[length(out) + 1L]] <- sc_text(
-      x + 16, y + h - 13, arch_fit_text(sym, w - 32, 9.5), size = 9.5,
-      col = th$ink3, italic = TRUE)
   }
   list(items = out, y = y + h)
 }

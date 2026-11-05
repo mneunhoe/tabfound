@@ -69,10 +69,10 @@ test_that("every style's scene fits its canvas in both themes", {
 # cards
 # ---------------------------------------------------------------------------
 
-# The fixtures were written by `main` before the styles existed. Moving
-# the cards scene into its own builder must not move a single byte; a
-# deliberate change to the cards look regenerates them.
-test_that("cards output is byte-identical to the pre-styles diagrams", {
+# Refactoring a style must not move a single byte of its output. A
+# deliberate change to the cards look regenerates these fixtures (the
+# last one: adding the key).
+test_that("cards output is byte-identical to its fixtures", {
   skip_on_cran()
   arch <- arch_test_arch("tabicl")
   dir <- withr::local_tempdir()
@@ -183,4 +183,158 @@ test_that("arch_viridis matches viridisLite to within a small colour difference"
   expect_identical(arch_viridis(0), character())
   expect_length(arch_viridis(5), 5L)
   expect_identical(arch_viridis(1, begin = 0.35), arch_viridis(3, 0.35, 1)[1])
+})
+
+
+# ---------------------------------------------------------------------------
+# The description: collapse flag and fact vocabulary
+# ---------------------------------------------------------------------------
+
+test_that("at most one stage collapses the table, and before the ICL stack", {
+  expected <- list(tabicl = "row_tf", tabfm = "row2", tabpfn3 = "agg",
+                   tabpfn35 = "agg", tabpfn = character(),
+                   tabpfn26 = character(), mitra = character())
+  for (nm in names(arch_test_variants())) {
+    v <- arch_test_variants()[[nm]]
+    arch <- arch_test_variant_arch(v)
+    ids <- vapply(arch$stages, `[[`, character(1), "id")
+    hit <- ids[vapply(arch$stages, function(s) isTRUE(s$collapses), logical(1))]
+    want <- if (identical(v$backend, "kumo")) {
+      if (identical(nm, "kumo small")) "row" else "proj"
+    } else expected[[v$backend]]
+    expect_identical(hit, want, info = nm)
+    if (length(hit) && "icl" %in% ids) {
+      expect_lt(match(hit, ids), match("icl", ids))
+    }
+  }
+  df <- as.data.frame(arch_test_arch("tabicl"))
+  expect_identical(df$stage[df$collapses], "row_tf")
+})
+
+
+test_that("every backend names its facts from the shared vocabulary", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    expect_true(length(arch$facts) > 0L, info = nm)
+    expect_identical(setdiff(names(arch$facts), ARCH_FACT_NAMES), character(),
+                     info = nm)
+    expect_false(anyDuplicated(names(arch$facts)) > 0L, info = nm)
+  }
+  expect_identical(arch_ff_fact(768 * 4, 768), "4 x width (3072)")
+  expect_identical(arch_ff_fact(384, 192), "2 x width (384)")
+  expect_identical(arch_ff_fact(1000, 768), "1.3 x width (1000)")
+})
+
+
+# ---------------------------------------------------------------------------
+# The key: every diagram explains itself
+# ---------------------------------------------------------------------------
+
+test_that("every symbol drawn in a shape has a definition", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    expect_identical(setdiff(arch_shape_symbols(arch), names(arch$symbols)),
+                     character(), info = nm)
+  }
+  # The plain words a shape may spell out are not symbols.
+  expect_identical(arch_tokens("(n rows, p features)"),
+                   c("n", "rows", "p", "features"))
+  expect_identical(arch_tokens("(B, 64 + n, F + 1, E) (n_test, 10)"),
+                   c("B", "n", "F", "E", "n_test"))
+})
+
+
+test_that("every abbreviation drawn is in the glossary or is a proper name", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    expect_identical(arch_unexplained_terms(arch, unname(ARCH_KINDS)),
+                     character(), info = nm)
+  }
+  fake <- list(title = "A GQA model", facts = character(), stages = list())
+  expect_identical(arch_unexplained_terms(fake), "GQA")
+  fake$title <- "MLPs over RoPE, then TabPFN"
+  expect_identical(arch_unexplained_terms(fake), character())
+  expect_named(arch_used_terms(fake), c("RoPE", "MLP"))
+})
+
+
+test_that("a backend's glossary entries win over the shared ones", {
+  gl <- arch_merge_glossary(c(ICL = "reworded", GQA = "grouped-query attention"))
+  expect_identical(gl[["ICL"]], "reworded")
+  expect_identical(gl[["GQA"]], "grouped-query attention")
+  expect_identical(sum(names(gl) == "ICL"), 1L)
+  expect_identical(arch_merge_glossary(), ARCH_GLOSSARY)
+})
+
+
+test_that("the key is drawn whole on every style, theme and setting", {
+  scene_text <- function(sc) {
+    vapply(Filter(function(e) e$type == "text", sc$items), `[[`,
+           character(1), "text")
+  }
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    sym <- arch_used_symbols(arch)
+    expect_true(length(sym) > 0L, info = nm)
+    for (style in names(arch_styles())) {
+      for (theme in c("light", "dark")) {
+        for (detail in c("overview", "full")) {
+          for (facts in c(TRUE, FALSE)) {
+            info <- paste(nm, style, theme, detail, facts)
+            sc <- arch_scene(arch, style = style, detail = detail,
+                             theme = theme, show_facts = facts)
+            txt <- scene_text(sc)
+            at <- match("Key", txt)
+            expect_false(is.na(at), info = info)
+            key <- txt[seq(at, length(txt))]
+            # Never truncated.
+            expect_false(any(grepl("...", key, fixed = TRUE)), info = info)
+            # Every symbol and term, with its whole meaning: wrapped
+            # lines are consecutive items, so joining them restores it.
+            joined <- paste(key, collapse = " ")
+            terms <- c(sym, arch_used_terms(arch, unname(ARCH_KINDS)))
+            for (t in names(terms)) {
+              expect_true(t %in% key, info = paste(info, t))
+              expect_true(grepl(terms[[t]], joined, fixed = TRUE),
+                          info = paste(info, t))
+            }
+            svg <- arch_render_svg(sc)
+            expect_identical(sum(startsWith(svg, "  <title>")), 1L, info = info)
+            expect_identical(sum(startsWith(svg, "  <desc>")), 1L, info = info)
+          }
+        }
+      }
+    }
+  }
+})
+
+
+test_that("the key wraps long entries instead of cutting them", {
+  th <- list(ink = "#000000", ink2 = "#333333", ink3 = "#666666")
+  long <- paste(rep("a fairly long definition", 12), collapse = " ")
+  groups <- list(
+    list(head = "SYMBOLS IN SHAPES", items = c(B = long, n = "rows"), mono = TRUE),
+    list(head = "HOW TO READ", notes = list(arch_note(long, "#ff0000")))
+  )
+  k <- arch_key_items(groups, 0, 0, 400, th)
+  txt <- vapply(Filter(function(e) e$type == "text", k$items), `[[`,
+                character(1), "text")
+  expect_false(any(grepl("...", txt, fixed = TRUE)))
+  joined <- paste(txt, collapse = " ")
+  expect_identical(lengths(regmatches(joined, gregexpr(long, joined, fixed = TRUE))),
+                   2L)
+  expect_gt(length(txt), 8L)
+  expect_true(any(vapply(k$items, function(e) e$type == "rect", logical(1))))
+  # Narrow keys use one column, wide ones two: the second entry sits
+  # under the first or beside it.
+  narrow <- arch_key_items(groups[1], 0, 0, 400, th)
+  wide <- arch_key_items(groups[1], 0, 0, 800, th)
+  x_of <- function(k, s) Filter(function(e) e$type == "text" &&
+                                  identical(e$text, s), k$items)[[1]]$x
+  expect_identical(x_of(narrow, "n"), x_of(narrow, "B"))
+  expect_gt(x_of(wide, "n"), x_of(wide, "B"))
+
+  desc <- arch_key_text(groups)
+  expect_match(desc, "^Symbols in shapes: B: a fairly")
+  expect_match(desc, "How to read: ")
 })

@@ -98,3 +98,42 @@ arch_test_configs <- function() {
       task = "classification")
   )
 }
+
+# Every config as both a classifier and a regressor, plus Kumo small,
+# which has no row projection. The key and vocabulary tests run on all
+# of them: a regressor draws different decoders and outputs, and so
+# different symbols and abbreviations.
+arch_test_variants <- function() {
+  cs <- arch_test_configs()
+  flip <- list(
+    tabpfn   = list(head = "regressor", n_bar_bins = 16L),
+    tabpfn26 = list(head = "classifier", n_out_classes = 6L),
+    tabpfn3  = list(head = "regressor", n_out = 16L, num_buckets = 16L),
+    tabpfn35 = list(),
+    tabicl   = list(head = "regressor", max_classes = 0L),
+    tabfm    = list(is_classifier = FALSE),
+    kumo     = list(head = "regressor", num_classes = 0L, num_quantiles = 9L),
+    mitra    = list(task = "REGRESSION", dim_output = 1L)
+  )
+  other <- c(classification = "regression", regression = "classification")
+  out <- list()
+  for (nm in names(cs)) {
+    out[[paste(nm, cs[[nm]]$task)]] <- list(
+      backend = nm, config = cs[[nm]]$config, task = cs[[nm]]$task)
+    task2 <- other[[cs[[nm]]$task]]
+    out[[paste(nm, task2)]] <- list(
+      backend = nm, config = utils::modifyList(cs[[nm]]$config, flip[[nm]]),
+      task = task2)
+  }
+  # Small: the readout tokens flatten straight to the in-context width.
+  out[["kumo small"]] <- list(
+    backend = "kumo", task = "classification",
+    config = utils::modifyList(cs$kumo$config,
+                               list(size = "small", icl_channels = 16L,
+                                    num_icl_key_value_heads_for_query = NULL)))
+  out
+}
+
+arch_test_variant_arch <- function(v) {
+  tabfound_architecture(arch_test_model(v$config, v$backend, v$task))
+}

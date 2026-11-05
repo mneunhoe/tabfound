@@ -100,6 +100,10 @@ arch_render_svg <- function(scene) {
                    "height=\"%s\" viewBox=\"0 0 %s %s\">"),
             svg_num(scene$width), svg_num(scene$height),
             svg_num(scene$width), svg_num(scene$height)),
+    # The title and the key as plain text, so a screen reader or a page
+    # embedding the file gets the same explanation the picture draws.
+    if (!is.null(scene$title)) paste0("  <title>", svg_esc(scene$title), "</title>"),
+    if (!is.null(scene$desc)) paste0("  <desc>", svg_esc(scene$desc), "</desc>"),
     sprintf("  <rect width=\"%s\" height=\"%s\" fill=\"%s\"/>",
             svg_num(scene$width), svg_num(scene$height), scene$bg),
     body,

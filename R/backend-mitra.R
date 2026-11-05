@@ -902,9 +902,9 @@ mitra_describe <- function(config, task) {
     subtitle = "AutoGluon  -  one stack, attending across rows and across features",
     facts = c(
       "Layers"              = L,
-      "Width"               = D,
+      "Embedding width"     = D,
       "Attention heads"     = sprintf("%d x %d", H, as.integer(D / H)),
-      "MLP width"           = 4L * D,
+      "Feed-forward"        = arch_ff_fact(4L * D, D),
       "Attention per layer" = "2 (rows, features)",
       "Output width"        = n_out,
       "Preprocessing"       = "quantile ranks, no weights",
@@ -912,7 +912,8 @@ mitra_describe <- function(config, task) {
       "KV cache"            = "exact"
     ),
     symbols = c(
-      B = "ensemble members (batch)", S = "support rows", Q = "query rows",
+      arch_default_symbols()[c("B", "n", "p")],
+      S = "support rows", Q = "query rows",
       F = "features", D = sprintf("model width (%d)", D)
     ),
     stages = Filter(Negate(is.null), stages)

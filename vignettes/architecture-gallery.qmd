@@ -30,7 +30,10 @@ the published checkpoint's `config.json`.
 The layout owes its shape to Sebastian Raschka's
 [LLM architecture gallery](https://sebastianraschka.com/llm-architecture-gallery/):
 blocks stacked in the order they run, repeated blocks drawn once with
-their repeat count, a fact sheet underneath. What is different here is
+their repeat count, a fact sheet underneath. Under that, a key defines
+every symbol in the shapes, every abbreviation and every piece of
+notation the diagram uses, so a figure still reads when it is shared on
+its own. What is different here is
 the thing that makes a tabular foundation model a tabular foundation
 model, and which a language model has no equivalent of: **an attention
 layer has an axis**. It can run down a column, across a row's features,

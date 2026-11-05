@@ -58,20 +58,48 @@ ARCH_AXES <- c("features", "columns", "rows", "cells", "inducing", "classes")
 #' @param children Optional list of `arch_stage()`s, drawn when
 #'   `detail = "full"`. Their `prefix` entries point at the *first*
 #'   member of a repeated stack, so their counts are per block.
+#' @param collapses `TRUE` on the stage after which the table has no
+#'   feature axis left: each row is one vector from here on. At most one
+#'   stage per architecture sets it; models that keep their cells to the
+#'   end set none.
 #' @return A `tabfound_arch_stage`.
 #' @keywords internal
 arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
                        shape = NULL, group = NULL, repeats = 1L,
-                       prefix = character(), children = list()) {
+                       prefix = character(), children = list(),
+                       collapses = FALSE) {
   kind <- match.arg(kind, names(ARCH_KINDS))
   if (!is.null(axis)) axis <- match.arg(axis, ARCH_AXES)
   structure(
     list(id = id, label = label, kind = kind, detail = detail, axis = axis,
          shape = shape, group = group, repeats = as.integer(repeats),
          prefix = as.character(prefix), children = children,
-         params = NA_real_),
+         collapses = isTRUE(collapses), params = NA_real_),
     class = "tabfound_arch_stage"
   )
+}
+
+# The fact names every backend draws from. Sharing
+# them is what lets two models' fact sheets be lined up against each
+# other: "ICL blocks" in one and "ICL layers" in another would read as
+# two different facts. A backend may use any subset, and the tests check
+# that it uses nothing else.
+ARCH_FACT_NAMES <- c(
+  "Layers", "Column-stage blocks", "Row-stage blocks", "ICL layers",
+  "Embedding width", "ICL width", "Attention heads", "ICL heads",
+  "Embedding heads", "Query KV heads", "Inducing points",
+  "Features per group", "Fourier frequencies", "Feed-forward",
+  "Thinking rows", "Attention per layer", "Cell channels", "Output width",
+  "Heads in checkpoint", "Preprocessing", "Normalisation",
+  "Attention scaling", "Train/test split", "Missing values", "KV cache"
+)
+
+# A feed-forward width as a multiple of the width it expands, written the
+# same way everywhere so equal values compare equal: "4 x width (768)".
+# @keywords internal
+arch_ff_fact <- function(hidden, width) {
+  ratio <- format(round(hidden / width, 2), trim = TRUE, drop0trailing = TRUE)
+  sprintf("%s x width (%d)", ratio, as.integer(hidden))
 }
 
 # Convenience: the same stage list every backend starts and ends with.
@@ -173,7 +201,8 @@ arch_audit_coverage <- function(arch) {
 #' @param object A model from [tabular_classifier()] or
 #'   [tabular_regressor()] -- fitted or not -- or a [tabfound()] fit.
 #' @return An object of class `tabfound_arch`: a list with `backend`,
-#'   `task`, `title`, `subtitle`, `facts`, `n_params` and `stages`.
+#'   `task`, `title`, `subtitle`, `facts`, `symbols`, `glossary`,
+#'   `n_params` and `stages`.
 #' @examples
 #' \dontrun{
 #' clf <- tabular_classifier("path/to/tabpfn-v2.5-clf")
@@ -217,6 +246,7 @@ tabfound_architecture <- function(object) {
       subtitle    = subtitle,
       facts       = desc$facts %||% character(),
       symbols     = desc$symbols %||% arch_default_symbols(),
+      glossary    = arch_merge_glossary(desc$glossary),
       stages      = stages,
       n_params    = if (is.null(index)) NA_real_ else sum(index),
       param_index = index,
@@ -224,6 +254,13 @@ tabfound_architecture <- function(object) {
     ),
     class = "tabfound_arch"
   )
+}
+
+# A backend's own entries win over the shared ones.
+# @keywords internal
+arch_merge_glossary <- function(extra = NULL) {
+  if (!length(extra)) return(ARCH_GLOSSARY)
+  c(extra, ARCH_GLOSSARY[!names(ARCH_GLOSSARY) %in% names(extra)])
 }
 
 # Pull the network, config, backend name and task out of whatever the
@@ -263,8 +300,37 @@ arch_default_symbols <- function() {
     n = "rows in the context (train + test)",
     p = "raw features",
     F = "feature groups",
-    E = "embedding width")
+    E = "embedding width",
+    n_test = "test rows (the rows being predicted)")
 }
+
+# Abbreviations a diagram may draw, with the definition its key shows. A
+# backend can add or reword entries through a `glossary` element in its
+# describe hook's return value. Only the terms a diagram actually draws
+# go in its key, so a long list here costs nothing.
+ARCH_GLOSSARY <- c(
+  ICL       = "in-context learning: test rows attend to the labelled training rows",
+  CLS       = "learned summary token that reads out a row or column",
+  RoPE      = "rotary position embedding",
+  MLP       = "multilayer perceptron (the feed-forward sublayer)",
+  GELU      = "Gaussian error linear unit (activation)",
+  SwiGLU    = "gated linear unit with a Swish activation",
+  LayerNorm = "layer normalisation",
+  RMSNorm   = "root-mean-square normalisation",
+  QK        = "query and key (as in QK-norm)",
+  KV        = "keys and values (as in KV cache, KV heads)",
+  `NaN`     = "not-a-number: undefined values in the input",
+  `NA`      = "missing values in the input",
+  ECDF      = "empirical cumulative distribution function"
+)
+
+# Names that look like abbreviations but need no definition: models,
+# publishers and libraries. The tests fail on a capitalised abbreviation
+# that is in neither this list nor the glossary, which is how a new
+# "GQA" in a label gets caught before it ships unexplained.
+ARCH_PROPER_NAMES <- c(
+  "TabPFN", "TabICL", "TabFM", "NVIDIA", "AutoGluon"
+)
 
 # ---------------------------------------------------------------------------
 # Printing
@@ -321,6 +387,7 @@ as.data.frame.tabfound_arch <- function(x, row.names = NULL, optional = FALSE,
       repeats = s$repeats,
       detail  = s$detail %||% NA_character_,
       shape   = s$shape %||% NA_character_,
+      collapses = isTRUE(s$collapses),
       params  = s$params,
       stringsAsFactors = FALSE
     )

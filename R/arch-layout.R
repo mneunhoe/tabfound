@@ -228,17 +228,3 @@ arch_wrap_text <- function(text, max_px, size, family = "sans", bold = FALSE,
   }
   lines
 }
-
-# Only the symbols that actually appear in a shape annotation. A legend
-# for letters the diagram never uses is noise, and the backends declare
-# a superset so a shape can be reworded without touching the legend.
-# @keywords internal
-arch_used_symbols <- function(arch) {
-  if (!length(arch$symbols)) return(arch$symbols)
-  shapes <- paste(unlist(lapply(arch$stages, function(s)
-    c(s$shape, unlist(lapply(s$children, `[[`, "shape"))))), collapse = " ")
-  keep <- vapply(names(arch$symbols),
-                 function(nm) grepl(paste0("\\b", nm, "\\b"), shapes),
-                 logical(1))
-  arch$symbols[keep]
-}

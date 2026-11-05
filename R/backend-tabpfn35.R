@@ -1989,6 +1989,7 @@ tabpfn35_describe <- function(config, task) {
         "pre-norm self-attention with RoPE and QK-norm; last block reads out %d CLS tokens",
         n_cls),
       shape = sprintf("(B, n, %d)", D), prefix = "column_aggregator",
+      collapses = TRUE,
       children = list(
         arch_stage("attn", "Attention over a row's columns", kind = "attention",
                    axis = "columns", prefix = "column_aggregator.blocks.0"),
@@ -2010,7 +2011,7 @@ tabpfn35_describe <- function(config, task) {
       "icl", "In-context learning block", kind = "attention",
       group = "Stage 3 - in-context", repeats = L, axis = "rows",
       detail = sprintf(
-        "pre-norm, QK-norm; %d heads of %d; test rows read %d kv head%s; MLP %d -> %d",
+        "pre-norm, QK-norm; %d heads of %d; test rows read %d KV head%s; MLP %d -> %d",
         h_icl, as.integer(D / h_icl), kv_t, if (kv_t == 1L) "" else "s",
         D, D * ff),
       shape = sprintf("(B, n, %d)", D), prefix = "icl_blocks",
@@ -2074,7 +2075,7 @@ tabpfn35_describe <- function(config, task) {
     facts = c(
       "ICL layers"          = L,
       "Column-stage blocks" = n_dst,
-      "Aggregator blocks"   = n_agg,
+      "Row-stage blocks"    = n_agg,
       "Embedding width"     = E,
       "ICL width"           = sprintf("%d (%d CLS x %d)", D, n_cls, E),
       "ICL heads"           = sprintf("%d x %d", h_icl, as.integer(D / h_icl)),

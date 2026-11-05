@@ -813,6 +813,9 @@ kumo_describe <- function(config, task) {
       detail = sprintf("self-attention over a row's %d readout + C cell tokens; RoPE, gated log-n query scaling; the last block queries from the readout tokens only; %d heads",
                        K, H),
       shape = sprintf("(R, %d + C, %d)", K, D),
+      # Without a projection (small), the in-context stack reads the
+      # flattened readout tokens straight out of the last row block.
+      collapses = !proj,
       prefix = c("row_embedding.row_blocks", "row_embedding.norm"),
       children = list(
         arch_stage("rattn", "Attention over a row's tokens", kind = "attention",
@@ -827,7 +830,7 @@ kumo_describe <- function(config, task) {
     if (proj) arch_stage(
       "proj", "Row projection", kind = "embed", group = "In-context",
       detail = sprintf("Linear(%d -> %d) from the flattened readout tokens", K * D, E),
-      prefix = "row_project"),
+      prefix = "row_project", collapses = TRUE),
     arch_stage(
       "icl_y", "Target embedding (rows)", kind = "embed", group = "In-context",
       detail = "added to the context rows",
@@ -867,15 +870,19 @@ kumo_describe <- function(config, task) {
                     if (clf) "classifier" else "regressor"),
     subtitle = "NVIDIA  -  cell embedding -> column/row blocks -> in-context stack",
     facts = c(
-      "Embedding layers" = L,
+      # One column block and one row block per embedding layer.
+      "Column-stage blocks" = L,
+      "Row-stage blocks" = L,
       "ICL layers"       = Li,
-      "Cell width"       = D,
+      "Embedding width"  = D,
       "ICL width"        = if (proj) sprintf("%d (projected from %d x %d)", E, K, D)
                            else sprintf("%d (%d readout x %d)", E, K, D),
-      "Heads"            = sprintf("%d embedding, %d ICL", H, He),
+      "ICL heads"        = sprintf("%d x %d", He, E %/% He),
+      "Embedding heads"  = H,
       "Query KV heads"   = if (is.null(kvh)) "all" else kvh,
       "Inducing points"  = M,
-      "Cell group"       = sprintf("%d slots x %d frequencies", G, Fq),
+      "Features per group" = G,
+      "Fourier frequencies" = Fq,
       "Output width"     = n_out,
       "Missing values"   = "handled by the network"
     ),
