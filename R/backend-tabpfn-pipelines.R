@@ -668,6 +668,11 @@ build_member_kv_caches <- function(net, col_emb, X_train, y_train, configs,
 #'   model's `criterion$borders`, which live in the **z-normalized
 #'   target space** (after Python's `(y - mean) / std` step). The
 #'   function un-standardizes at the end.
+#' @param member_weights Optional weight per member; `NULL` averages them
+#'   uniformly, which is the reference's combine and stays bit-identical
+#'   to it.
+#' @param return_members Also return each member's translated bucket
+#'   probabilities, as `$members` (a list of `(n_test, n_bins)` matrices).
 #' @return List with `mean`, `quantiles`, etc. on the RAW y scale.
 #' @keywords internal
 apply_ensemble_predict_regressor <- function(net, col_emb,
@@ -682,7 +687,9 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
                                               save_peak_memory_factor = NULL,
                                               row_chunk_size = NA_integer_,
                                               col_chunk_size = NA_integer_,
-                                              pipelines = NULL) {
+                                              pipelines = NULL,
+                                              member_weights = NULL,
+                                              return_members = FALSE) {
   X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
   storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
   pipelines <- pipelines %||%
@@ -694,6 +701,7 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
 
   n_bins <- as.integer(borders$size(1)) - 1L
   acc_probs <- NULL
+  members <- if (isTRUE(return_members)) vector("list", length(configs))
 
   for (i in seq_along(configs)) {
     cfg <- configs[[i]]
@@ -763,9 +771,12 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
       }
     }
     probs <- translate_probs_across_borders_r(logits_c, frm = borders_t, to = borders)
+    if (!is.null(members)) members[[i]] <- as.matrix(probs$cpu())
+    if (!is.null(member_weights)) probs <- probs * member_weights[[i]]
     acc_probs <- if (is.null(acc_probs)) probs else acc_probs + probs
   }
-  avg_probs <- acc_probs / length(configs)
+  avg_probs <- if (is.null(member_weights)) acc_probs / length(configs) else
+    acc_probs / sum(member_weights)
 
   # Post-process on the RAW y scale. The reference does
   #   logits = (sum_members probs) / n ; logits = logits.log()
@@ -784,7 +795,8 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
   list(
     mean       = as.numeric(pred_mean$cpu()),
     quantiles  = as.matrix(q$cpu()),
-    avg_probs  = as.matrix(avg_probs$cpu())
+    avg_probs  = as.matrix(avg_probs$cpu()),
+    members    = members
   )
 }
 
@@ -799,7 +811,14 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
 #' @param configs   List of ensemble-member specs, e.g. from
 #'   `load_ensemble_configs_from_dump()`.
 #' @param n_classes Integer number of original classes.
-#' @return Numeric matrix `(n_test, n_classes)` of averaged probabilities.
+#' @param member_weights Optional weight per member; `NULL` averages them
+#'   uniformly, which is the reference's combine and stays bit-identical
+#'   to it.
+#' @param return_members Return each member's raw logits as well: before
+#'   the temperature, with the class permutation undone.
+#' @return Numeric matrix `(n_test, n_classes)` of averaged probabilities;
+#'   with `return_members`, a list of that (`$probs`) and the members'
+#'   logits (`$members`, a list of `(n_test, n_classes)` matrices).
 #' @keywords internal
 apply_ensemble_predict_classifier <- function(net, col_emb,
                                                X_train, X_test, y_train,
@@ -812,13 +831,16 @@ apply_ensemble_predict_classifier <- function(net, col_emb,
                                                save_peak_memory_factor = NULL,
                                                row_chunk_size = NA_integer_,
                                                col_chunk_size = NA_integer_,
-                                               pipelines = NULL) {
+                                               pipelines = NULL,
+                                               member_weights = NULL,
+                                               return_members = FALSE) {
   X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
   storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
   pipelines <- pipelines %||%
     member_pipeline_store(X_tr, configs, categorical_features)
   y_int <- as.integer(y_train)
   acc <- array(0, dim = c(nrow(X_te), n_classes))
+  members <- if (isTRUE(return_members)) vector("list", length(configs))
 
   for (i in seq_along(configs)) {
     cfg <- configs[[i]]
@@ -848,13 +870,21 @@ apply_ensemble_predict_classifier <- function(net, col_emb,
                      col_chunk_size = col_chunk_size)
     })
     logits <- out$logits[1, , 1:n_classes]
+    if (!is.null(members)) {
+      members[[i]] <- apply_class_permutation_inverse(
+        as.matrix(logits$cpu()), cfg$class_perm + 1L)
+    }
     if (softmax_temperature != 1) logits <- logits / softmax_temperature
     trace_member(trace_dir, i, X_tr_t$squeeze(1L), X_te_t$squeeze(1L),
                  y_tr_t$squeeze(1L), out$logits$squeeze(1L))
     probs  <- as.matrix(torch::nnf_softmax(logits, dim = -1L)$cpu())
-    acc <- acc + apply_class_permutation_inverse(probs, cfg$class_perm + 1L)
+    probs  <- apply_class_permutation_inverse(probs, cfg$class_perm + 1L)
+    if (!is.null(member_weights)) probs <- probs * member_weights[[i]]
+    acc <- acc + probs
   }
-  acc / length(configs)
+  probs <- if (is.null(member_weights)) acc / length(configs) else
+    acc / sum(member_weights)
+  if (is.null(members)) probs else list(probs = probs, members = members)
 }
 
 

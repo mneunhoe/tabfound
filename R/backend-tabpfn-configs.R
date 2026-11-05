@@ -195,6 +195,47 @@ fit_yeojohnson_lambda <- function(y, interval = c(-2, 2)) {
   lapply(list(v26_plain, v26_svd), function(p) { p$polynomial_features <- poly; p })
 }
 
+#' The member menu a TabPFN checkpoint ensembles over
+#'
+#' The preprocessing presets [generate_ensemble_configs_native()] cycles
+#' through by default, as the checkpoint's own `inference_config` defines
+#' them. Each entry is a list with `preset`, `append_original`,
+#' `max_features_per_estimator`, `categorical_name`,
+#' `global_transformer_name` and `polynomial_features`. Edit or extend
+#' the list and pass it back as `presets =` to draw members outside the
+#' default menu.
+#'
+#' @inheritParams generate_ensemble_configs_native
+#' @return A list of member presets.
+#' @export
+native_ensemble_presets <- function(variant = c("v2.5", "v2.6"),
+                                    head = c("classifier", "regressor")) {
+  .native_presets(match.arg(variant), match.arg(head))
+}
+
+.preset_fields <- c("preset", "append_original", "max_features_per_estimator",
+                    "categorical_name", "global_transformer_name",
+                    "polynomial_features")
+
+# @keywords internal
+.check_presets <- function(presets) {
+  if (!is.list(presets) || !length(presets)) {
+    cli::cli_abort("{.arg presets} must be a non-empty list of member presets.")
+  }
+  for (i in seq_along(presets)) {
+    p <- presets[[i]]
+    gone <- setdiff(.preset_fields, names(p))
+    if (!is.list(p) || length(gone)) {
+      cli::cli_abort(c(
+        "{.arg presets}[[{i}]] is not a member preset.",
+        x = "Missing: {.field {gone}}.",
+        i = "Start from {.fn native_ensemble_presets}."
+      ))
+    }
+  }
+  invisible(presets)
+}
+
 
 # The reference's factor-pair draw, on R's RNG: sample a first factor with
 # replacement, then a second one at or after it that this first factor has
@@ -264,13 +305,26 @@ fit_yeojohnson_lambda <- function(y, interval = c(-2, 2)) {
 #'   `tabpfn26`). Passing the wrong one produces a working but
 #'   off-distribution ensemble, so match it to the weights.
 #' @param random_state Integer seed. Default 0.
-#' @param output_dir Directory to write configs to (created if missing).
+#' @param output_dir Directory to write configs to (created if missing),
+#'   for `ensemble_configs_dir =`. `NULL` (the default) writes nothing
+#'   and returns the configs instead, for `ensemble_configs =`.
 #' @param add_target_transform Regressor only, and ignored for `"v2.6"`.
 #'   If `TRUE` (default), every second v2.5 member includes a
 #'   Yeo-Johnson target transform with MLE-fitted lambda.
-#' @return `output_dir`, invisibly.
+#' @param presets The member menu to cycle through, `NULL` for the
+#'   checkpoint's own (see [native_ensemble_presets()]). A custom menu
+#'   produces members the checkpoint was not tuned on: valid, but no
+#'   longer the reference's ensemble.
+#' @return `output_dir`, invisibly; or, with `output_dir = NULL`, the
+#'   list of member configs.
 #' @examples
 #' \dontrun{
+#' cfg <- generate_ensemble_configs_native(X, y, n_estimators = 4,
+#'                                         head = "classifier",
+#'                                         variant = "v2.6")
+#' clf <- tabular_classifier("tabpfn-v2.6-classifier", ensemble_configs = cfg)
+#'
+#' # Or on disk, for a directory to keep or share:
 #' d <- tempfile()
 #' generate_ensemble_configs_native(X, y, n_estimators = 4,
 #'                                  head = "classifier", variant = "v2.6",
@@ -284,16 +338,31 @@ generate_ensemble_configs_native <- function(X_train, y_train,
                                              categorical_features = NULL,
                                              variant = c("v2.5", "v2.6"),
                                              random_state = 0L,
-                                             output_dir,
-                                             add_target_transform = TRUE) {
+                                             output_dir = NULL,
+                                             add_target_transform = TRUE,
+                                             presets = NULL) {
   head <- match.arg(head)
   variant <- match.arg(variant)
   require_suggested("safetensors")
   require_suggested("jsonlite")
 
+  # The in-memory form is the on-disk one read back: one format, and one
+  # reader, whichever way the configs travel.
+  if (is.null(output_dir)) {
+    tmp <- tempfile("tabpfn-configs-")
+    on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+    generate_ensemble_configs_native(
+      X_train, y_train, n_estimators = n_estimators, head = head,
+      categorical_features = categorical_features, variant = variant,
+      random_state = random_state, output_dir = tmp,
+      add_target_transform = add_target_transform, presets = presets)
+    return(load_ensemble_configs_from_dump(tmp))
+  }
+
   X_mat <- as.matrix(X_train); storage.mode(X_mat) <- "double"
   n_features <- ncol(X_mat)
-  presets <- .native_presets(variant, head)
+  presets <- if (is.null(presets)) .native_presets(variant, head) else
+    .check_presets(presets)
   cat_ix <- detect_categorical_features(X_mat, categorical_features)
 
   n_classes <- NULL
@@ -331,6 +400,10 @@ generate_ensemble_configs_native <- function(X_train, y_train,
     shuffle_perm_0idx <- sample.int(n_post) - 1L
 
     member_dir <- file.path(output_dir, sprintf("member_%02d", i - 1L))
+    # The reader takes a file's presence as the member having that part,
+    # so one left behind by an earlier run into the same directory would
+    # be read as this member's.
+    unlink(member_dir, recursive = TRUE)
     dir.create(member_dir, showWarnings = FALSE, recursive = TRUE)
     safetensors::safe_save_file(
       list(t = torch::torch_tensor(as.integer(shuffle_perm_0idx),

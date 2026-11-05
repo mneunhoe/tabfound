@@ -21,6 +21,22 @@
   tokens, named by `feeds`) and `"final"` for a step run once after the
   stack (a stack's output norm). This changes `detail = "full"` diagrams
   and the icicle's sublayer band.
+* Hooks for reweighting and selecting a TabPFN ensemble after the fact,
+  for add-on packages such as `tabfound.thinking`:
+  * `tabular_classifier()` / `tabular_regressor()` take the ensemble as
+    an in-memory list, `ensemble_configs =`, in place of
+    `ensemble_configs_dir =`, and `generate_ensemble_configs_native()`
+    returns that list when `output_dir` is left out.
+  * `member_weights =` combines the members with a weighted mean. Members
+    weighted zero are never run. Without it the combine is the
+    reference's unweighted mean, bit for bit.
+  * New `predict_members()` returns each member's output before it is
+    combined: the raw logits for a classifier, the bucket probabilities on
+    the shared grid for a regressor.
+  * New `native_ensemble_presets()` returns the checkpoint's member menu,
+    and `generate_ensemble_configs_native(presets = )` draws members from
+    an edited one.
+
 * Architecture descriptions corrected against the networks' forward
   passes, so every diagram style shows what the models run:
   * Kumo Tabular's column and row blocks alternate, one of each per layer;
