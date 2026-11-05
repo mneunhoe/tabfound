@@ -75,6 +75,22 @@ py_for <- function(backend) {
   PY
 }
 
+# The full-estimator TabPFN references -- `tabpfn_reference.py`, which cuts
+# the v2.5 tree and the v2.6 ensemble tree -- are cut against `tabpfn`
+# 9.2.0, whose regressor border translation (PriorLabs/TabPFN#1288) the R
+# side ports. The bare-network v2.6 and v3 references stay on the shared
+# 8.2.0 venv: their scripts reach into network attributes 9.x removed. No
+# fallback to the shared venv, because an 8.2.0 cut of these fixtures
+# would grade R against a translation it no longer runs.
+PY_ESTIMATOR <- Sys.getenv("TABFOUND_REF_PYTHON_ESTIMATOR",
+                           ".venvs/ref92/bin/python")
+.require_estimator_python <- function() {
+  if (file.exists(PY_ESTIMATOR)) return(invisible(PY_ESTIMATOR))
+  stop("The TabPFN estimator references need `tabpfn` 9.2.0 at ", PY_ESTIMATOR,
+       " (set TABFOUND_REF_PYTHON_ESTIMATOR); see inst/parity/README.md.",
+       call. = FALSE)
+}
+
 if (!dir.exists(FIXTURE_DIR)) {
   cat("Generating fixtures...\n")
   write_parity_fixtures(FIXTURE_DIR)
@@ -144,14 +160,15 @@ run_tabpfn <- function() {
       out <- file.path(REF_ROOT, "tabpfn", fx)
       unlink(out, recursive = TRUE)
       cat(sprintf("  regenerating %s ...\n", fx))
-      st <- system2(PY, c(file.path(here, "tabpfn_reference.py"),
-                          "--fixture-dir", FIXTURE_DIR,
-                          "--fixture", base_fx,
-                          "--ckpt", ckpts[[head]],
-                          "--n-estimators", "4",
-                          extra,
-                          .categorical_flag(fx),
-                          "--out", out),
+      st <- system2(.require_estimator_python(),
+                    c(file.path(here, "tabpfn_reference.py"),
+                      "--fixture-dir", FIXTURE_DIR,
+                      "--fixture", base_fx,
+                      "--ckpt", ckpts[[head]],
+                      "--n-estimators", "4",
+                      extra,
+                      .categorical_flag(fx),
+                      "--out", out),
                     stdout = TRUE, stderr = TRUE)
       status <- attr(st, "status")
       if (!is.null(status) && status != 0L) {
@@ -270,14 +287,15 @@ run_tabpfn26 <- function() {
       out <- file.path(REF_ROOT, "tabpfn26-ensemble", fx)
       unlink(out, recursive = TRUE)
       cat(sprintf("  regenerating ensemble %s ...\n", fx))
-      st <- system2(PY, c(file.path(here, "tabpfn_reference.py"),
-                          "--fixture-dir", FIXTURE_DIR,
-                          "--fixture", .base_fixture(fx),
-                          "--ckpt", ckpts[[head]],
-                          "--n-estimators", "4",
-                          if (endsWith(fx, "_nofp")) "--no-fingerprint" else character(),
-                          .categorical_flag(fx),
-                          "--out", out),
+      st <- system2(.require_estimator_python(),
+                    c(file.path(here, "tabpfn_reference.py"),
+                      "--fixture-dir", FIXTURE_DIR,
+                      "--fixture", .base_fixture(fx),
+                      "--ckpt", ckpts[[head]],
+                      "--n-estimators", "4",
+                      if (endsWith(fx, "_nofp")) "--no-fingerprint" else character(),
+                      .categorical_flag(fx),
+                      "--out", out),
                     stdout = TRUE, stderr = TRUE)
       status <- attr(st, "status")
       if (!is.null(status) && status != 0L) {

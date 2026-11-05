@@ -132,6 +132,8 @@ _orig_call_model = _inf.InferenceEngineCachePreprocessing._call_model
 def _traced_call_model(self, *pargs, **kwargs):
     if not _tracing["on"]:
         return _orig_call_model(self, *pargs, **kwargs)
+    if "members" in kwargs:
+        return _traced_call_group(self, *pargs, **kwargs)
     i = _member_counter["i"]
     d = DUMP / f"member_{i:02d}"
     d.mkdir(parents=True, exist_ok=True)
@@ -145,6 +147,32 @@ def _traced_call_model(self, *pargs, **kwargs):
     t = out.get("standard") if isinstance(out, dict) else out
     if t is not None:
         safe_save_file({"t": _as_tensor(t)}, str(d / "logits.safetensors"))
+    return out
+
+
+def _traced_call_group(self, *pargs, **kwargs):
+    # `tabpfn` >= 9 calls the model once per group of members, which share a
+    # forward along the batch dimension, and returns each forward's output
+    # with the positions in `members` it holds. Groups arrive in member
+    # order on one device, so a running count still names the members.
+    members, X_tests = kwargs["members"], kwargs["X_tests"]
+    base = _member_counter["i"]
+    for k, (member, X_test) in enumerate(zip(members, X_tests)):
+        d = DUMP / f"member_{base + k:02d}"
+        d.mkdir(parents=True, exist_ok=True)
+        for key, value in (("X_train", member.X_train), ("X_test", X_test),
+                           ("y_train", member.y_train)):
+            safe_save_file({"t": _as_tensor(value)}, str(d / f"{key}.safetensors"))
+    _member_counter["i"] += len(members)
+
+    out = _orig_call_model(self, *pargs, **kwargs)
+
+    for positions, output in out:
+        t = output.get("standard") if isinstance(output, dict) else output
+        for column, position in enumerate(positions):
+            d = DUMP / f"member_{base + position:02d}"
+            safe_save_file({"t": _as_tensor(t[:, column : column + 1])},
+                           str(d / "logits.safetensors"))
     return out
 
 

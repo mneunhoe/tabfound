@@ -1,5 +1,5 @@
 {
-  "tabpfn_version": "8.2.0",
+  "tabpfn_version": "9.2.0",
   "torch_version": "2.13.0",
   "fixture": "clf_iris",
   "task": "classification",
@@ -8,6 +8,8 @@
   "ckpt": "tabpfn-v2.5-classifier-v2.5_default.ckpt",
   "fingerprint_feature": true,
   "softmax_temperature": 0.9,
+  "declared_categorical": null,
+  "inferred_categorical": [],
   "n_classes": 3,
   "n_members_traced": 4,
   "n_target_transforms": 0,

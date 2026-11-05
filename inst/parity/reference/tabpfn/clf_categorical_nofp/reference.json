@@ -1,5 +1,5 @@
 {
-  "tabpfn_version": "8.2.0",
+  "tabpfn_version": "9.2.0",
   "torch_version": "2.13.0",
   "fixture": "clf_categorical",
   "task": "classification",

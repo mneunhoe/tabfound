@@ -106,6 +106,18 @@
   * New `native_ensemble_presets()` returns the checkpoint's member menu,
     and `generate_ensemble_configs_native(presets = )` draws members from
     an edited one.
+* Fixed TabPFN regression ensembles losing probability mass at bar
+  resolution. Every member's bar distribution is translated onto the
+  shared border grid, and that translation took differences of float32
+  CDF values and clamped them at zero, so buckets whose two CDF values
+  rounded together came out with probability exactly 0 -- 2 to 6% of the
+  bars near the truth on TabPFN v2.6, and an infinite log score wherever
+  an observed value fell in one. It is now a port of the reference's
+  replacement from `tabpfn` 9.1 (PriorLabs/TabPFN#1288): each bucket's
+  mass is a sum of non-negative overlap terms, and the two outer source
+  buckets are read as half-normal tails. Means, quantiles and samples move
+  by little; densities and log scores move a lot. The full-estimator
+  parity fixtures are now cut against `tabpfn` 9.2.0 (#27).
 * `fit()` now refuses a target with missing or non-finite values, saying
   how many and at which rows. Before, every backend accepted one: a single
   `NA` in a regression target made every prediction `NA`, and a classifier
