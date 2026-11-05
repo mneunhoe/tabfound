@@ -1,5 +1,15 @@
 # tabfound (development version)
 
+* A stage's sublayers are now the steps of its forward pass, in the order
+  they run, checked against each network by a test that traces one
+  forward pass. Norms are listed one by one where they run (no more
+  "LayerNorm x2" or "RMSNorm x4"), whole attention-and-MLP blocks are
+  split into their norms, attention and feed-forward, and both halves of
+  every induced-attention block are shown in full. Sublayers gain `role`:
+  `"input"` for what a step consumes (RoPE tables, inducing points, CLS
+  tokens, named by `feeds`) and `"final"` for a step run once after the
+  stack (a stack's output norm). This changes `detail = "full"` diagrams
+  and the icicle's sublayer band.
 * Architecture descriptions corrected against the networks' forward
   passes, so every diagram style shows what the models run:
   * Kumo Tabular's column and row blocks alternate, one of each per layer;

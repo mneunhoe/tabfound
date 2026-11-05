@@ -137,3 +137,116 @@ arch_test_variants <- function() {
 arch_test_variant_arch <- function(v) {
   tabfound_architecture(arch_test_model(v$config, v$backend, v$task))
 }
+
+# --- Tracing the forward pass ---------------------------------------------
+#
+# R torch has no module forward hooks, so the order test wraps the
+# reference a parent module holds to each submodule it wants to watch.
+# The wrapper forces its arguments before logging: R evaluates arguments
+# lazily, so without that `self$b(self$a(x))` would log b before a.
+
+# The module at a dotted path, or NULL when the path names a parameter
+# or nothing at all.
+arch_module_at <- function(net, path) {
+  m <- net
+  for (seg in strsplit(path, ".", fixed = TRUE)[[1L]]) {
+    kids <- attr(m, "module")$children
+    if (!seg %in% names(kids)) return(NULL)
+    m <- kids[[seg]]
+  }
+  m
+}
+
+# Every module path in a network, parents before children.
+arch_module_paths <- function(net, path = "") {
+  kids <- attr(net, "module")$children
+  out <- character()
+  for (nm in names(kids)) {
+    p <- if (nzchar(path)) paste0(path, ".", nm) else nm
+    out <- c(out, p, arch_module_paths(kids[[nm]], p))
+  }
+  out
+}
+
+# Run `forward()` and give the watched `paths` in the order they were
+# first called. Every module in the network is wrapped to force its
+# arguments before it runs, which is the order Python's eager evaluation
+# gives: without it, R's lazy evaluation runs `f(x, g(y))` by entering f
+# first and only computing g(y) when f's body first reads it. A call to
+# watched module places it; a module never called directly is placed by
+# its first call to a module inside it -- so an attention step whose
+# projections are reached into, rather than called, is still seen. (A
+# direct call wins because an attention may run its key/value projection
+# early, before the norm on its queries.)
+arch_trace_first_calls <- function(net, paths, forward) {
+  log <- character()
+  direct <- logical()
+  watched <- paths[!vapply(paths, function(p) is.null(arch_module_at(net, p)),
+                           logical(1))]
+  all <- arch_module_paths(net)
+  # The watched path a module belongs to: itself, or its nearest watched
+  # ancestor.
+  owner <- vapply(all, function(m) {
+    hit <- watched[m == watched | startsWith(m, paste0(watched, "."))]
+    if (length(hit)) hit[which.max(nchar(hit))] else NA_character_
+  }, character(1))
+  # Deepest first, so a parent's wrapper never hides a child's.
+  depth <- lengths(strsplit(all, ".", fixed = TRUE))
+  for (i in order(-depth)) local({
+    path <- all[i]
+    tag <- owner[[i]]   # each wrapper keeps its own, not the loop's last
+    segs <- strsplit(path, ".", fixed = TRUE)[[1L]]
+    parent <- if (length(segs) > 1L)
+      arch_module_at(net, paste(segs[-length(segs)], collapse = ".")) else net
+    nm <- segs[length(segs)]
+    old <- parent[[nm]]
+    f <- function(...) {
+      args <- list(...)
+      if (!is.na(tag)) {
+        log <<- c(log, tag)
+        direct <<- c(direct, identical(tag, path))
+      }
+      do.call(old, args)
+    }
+    attributes(f) <- attributes(old)
+    parent[[nm]] <- f
+  })
+  torch::with_no_grad(forward())
+  at <- vapply(unique(log), function(w) {
+    hit <- which(log == w & direct)
+    if (length(hit)) hit[1] else which(log == w)[1]
+  }, integer(1))
+  names(at)[order(at)]
+}
+
+# One small forward pass through a test variant's network.
+arch_test_forward <- function(v, net) {
+  torch::torch_manual_seed(3L)
+  clf <- identical(v$task, "classification")
+  n_tr <- 12L; n_te <- 5L; p <- 5L
+  y_of <- function(n) {
+    if (clf) torch::torch_randint(0L, 3L, c(1L, n))$to(dtype = torch::torch_float())
+    else torch::torch_randn(c(1L, n))
+  }
+  x <- torch::torch_randn(c(1L, n_tr + n_te, p))
+  x_tr <- x[, 1:n_tr, ]
+  x_te <- x[, (n_tr + 1L):(n_tr + n_te), ]
+  switch(v$backend,
+    tabpfn = , tabpfn3 = , tabpfn35 = function() net(x_tr, y_of(n_tr), x_te),
+    # v2.6 ships its column embeddings rather than drawing them.
+    tabpfn26 = function() net(x_tr, y_of(n_tr), x_te,
+                              column_embeddings = torch::torch_randn(c(64L, net$pos_emb_dim))),
+    tabicl = function() net(x, y_of(n_tr)),
+    tabfm = function() {
+      y <- torch::torch_full(c(1L, n_tr + n_te), -100)
+      y[1, 1:n_tr] <- y_of(n_tr)[1, ]
+      net(x, y, torch::torch_tensor(n_tr, dtype = torch::torch_long())$reshape(1L))
+    },
+    mitra = function() net(x_tr, y_of(n_tr), x_te),
+    kumo = function() {
+      y <- if (clf) torch::torch_randint(0L, 3L, c(1L, n_tr), dtype = torch::torch_long())
+           else torch::torch_randn(c(1L, n_tr))
+      net(x, y, c(TRUE, rep(FALSE, p - 1L)))
+    }
+  )
+}

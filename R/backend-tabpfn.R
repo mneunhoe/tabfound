@@ -625,14 +625,17 @@ tabpfn_describe <- function(config, task) {
         arch_stage("a_feat", "Attention between features", kind = "attention",
                    axis = "features",
                    prefix = paste0(lyr, ".self_attn_between_features")),
-        arch_stage("ln1", "LayerNorm", kind = "norm"),
+        arch_stage("ln1", "LayerNorm", kind = "norm",
+                   prefix = paste0(lyr, ".layer_norms.0")),
         arch_stage("a_item", "Attention between items", kind = "attention",
                    axis = "rows",
                    prefix = paste0(lyr, ".self_attn_between_items")),
-        arch_stage("ln2", "LayerNorm", kind = "norm"),
+        arch_stage("ln2", "LayerNorm", kind = "norm",
+                   prefix = paste0(lyr, ".layer_norms.1")),
         arch_stage("mlp", "MLP, GELU", kind = "ffn",
                    prefix = paste0(lyr, ".mlp")),
-        arch_stage("ln3", "LayerNorm", kind = "norm")
+        arch_stage("ln3", "LayerNorm", kind = "norm",
+                   prefix = paste0(lyr, ".layer_norms.2"))
       )),
     arch_stage(
       "decoder", "Decoder MLP", kind = "decode", group = "Decode",
