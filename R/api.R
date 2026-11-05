@@ -74,11 +74,16 @@
 #'   when `NULL`.
 #' @param device One of `"cpu"`, `"cuda"`, `"mps"`.
 #' @param categorical_features Integer vector of 1-based column indices to
-#'   treat as categorical, or `NULL` to let the backend infer. Declaring
-#'   is much stronger than inferring: inference only catches columns with
-#'   fewer than four distinct values, so an ordinal-coded factor with five
-#'   levels is invisible to it. [tabfound()] fills this in from the frame's
-#'   factor columns automatically.
+#'   treat as categorical, `integer()` to declare that none are, or `NULL`
+#'   to let the backend infer. Declaring is much stronger than inferring:
+#'   on TabPFN, inference takes a column nobody declared as categorical
+#'   only when it has fewer than four distinct values and the training
+#'   set has more than 100 rows, so an ordinal-coded factor with five
+#'   levels is invisible to it -- and a count or time step with three
+#'   values is swept up by it. Declared columns are still checked, and the
+#'   other columns still inferred; only `integer()` turns inference off.
+#'   [tabfound()] fills this in from the frame's factor columns
+#'   automatically.
 #' @param transform_text Expand text columns into numeric features at
 #'   [fit()]: `"auto"` (default) does so when the checkpoint's own recipe
 #'   asks for it -- TabPFN v3.5's does -- and not otherwise; `TRUE` or

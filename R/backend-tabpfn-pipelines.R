@@ -205,18 +205,17 @@ fit_categorical_encoding <- function(X_train, cat_ix, cfg,
     }
     if (is.null(mappings)) {
       cli::cli_abort(c(
-        "This member shuffles categorical codes but carries no mappings.",
-        i = "The permutations come from the reference's NumPy generator, \\
-             so they have to travel with the config -- regenerate the dump, \\
-             or use {.fn generate_ensemble_configs_native}."
+        "This member encodes {length(sel)} categorical column{?s} on these \\
+         training rows, but its config carries no code mappings.",
+        .config_schema_hint()
       ))
     }
     if (length(mappings) != length(sel)) {
       cli::cli_abort(c(
-        "This member carries {length(mappings)} code mapping{?s} for \\
-         {length(sel)} encoded column{?s}.",
-        i = "The config and the data disagree about which columns are \\
-             categorical."
+        "This member carries {length(mappings)} code mapping{?s}, but \\
+         encodes {length(sel)} categorical column{?s} on these training \\
+         rows.",
+        .config_schema_hint()
       ))
     }
     for (k in seq_along(sel)) {
@@ -237,6 +236,19 @@ fit_categorical_encoding <- function(X_train, cat_ix, cfg,
     cat_ix = seq_along(sel),
     cat_mappings = mappings
   )
+}
+
+# What to do when a member's config and the training rows disagree. A
+# member is sized on the rows its config was generated from -- its width,
+# and which categorical columns its encoder takes -- so the fix is nearly
+# always to generate on the rows being fitted.
+# @keywords internal
+.config_schema_hint <- function() {
+  c(i = "The ensemble configs and these training rows disagree about the \\
+         columns: each member is sized on the rows it was generated from.",
+    i = "Generate the configs with \\
+         {.fn generate_ensemble_configs_native} on the rows you fit on. A \\
+         dump from the Python reference has to be regenerated the same way.")
 }
 
 #' @rdname apply_categorical_encoding
@@ -398,6 +410,23 @@ fit_member_pipeline <- function(X_train, cfg,
   # stops mattering here.
   steps$shuffle_perm <- cfg$shuffle_perm
   if (!is.null(cfg$shuffle_perm)) {
+    if (length(cfg$shuffle_perm) != ncol(X_tr)) {
+      # Constant columns are the usual cause on a slice of the table, and
+      # the one the caller can see; the base columns keep their positions
+      # through the polynomial step, which only appends.
+      n_raw <- ncol(as.matrix(X_train))
+      # As text, so cli counts them rather than reading one as a quantity.
+      dropped <- as.character(setdiff(seq_len(n_raw), keep_cols))
+      cli::cli_abort(c(
+        "This member was sized for {length(cfg$shuffle_perm)} columns, but \\
+         these training rows give it {ncol(X_tr)}.",
+        i = if (length(dropped))
+          "Predictor{?s} {dropped} {?is/are} constant \\
+           on these rows, and \\
+           {?was/were} dropped.",
+        .config_schema_hint()
+      ))
+    }
     X_tr <- apply_feature_shift(X_tr, cfg$shuffle_perm)
   }
 
@@ -482,7 +511,10 @@ inverse_target_transform_borders <- function(znorm_borders, tt_state) {
 #' @param dump_dir Path to a dumped ensemble directory.
 #' @return A list of member specs, each carrying the preprocessing
 #'   settings ([apply_member_pipeline()] reads them) plus `class_perm`
-#'   (0-indexed) and `target_transform_lambda`.
+#'   (0-indexed) and `target_transform_lambda`. Configs written by
+#'   [generate_ensemble_configs_native()] also carry
+#'   `categorical_features` (1-based) and `n_features_in`, the schema they
+#'   were sized for; a Python dump records neither, and both are `NULL`.
 #' @keywords internal
 load_ensemble_configs_from_dump <- function(dump_dir) {
   require_suggested("jsonlite")
@@ -530,7 +562,11 @@ load_ensemble_configs_from_dump <- function(dump_dir) {
       # fingerprint column can be switched off (`FINGERPRINT_FEATURE`
       # in the reference's inference config), and the parity harness
       # uses that to separate hash chaos from real numeric drift.
-      add_fingerprint            = !identical(c$add_fingerprint_feature, FALSE)
+      add_fingerprint            = !identical(c$add_fingerprint_feature, FALSE),
+      categorical_features       = if (is.null(c$`_categorical_features`)) NULL
+                                    else as.integer(unlist(c$`_categorical_features`)) + 1L,
+      n_features_in              = if (is.null(c$`_n_features_in`)) NULL
+                                    else as.integer(c$`_n_features_in`)
     )
   })
 }

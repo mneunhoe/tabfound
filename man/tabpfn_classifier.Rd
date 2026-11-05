@@ -40,10 +40,13 @@ same layout the Python parity harness produces, so the two can be
 diffed file-for-file. See \verb{inst/parity/}.}
 
 \item{categorical_features}{Integer vector of 1-based column indices to
-treat as categorical, or \code{NULL} to infer. Only the ensemble path uses
-it: a single forward pass hands the matrix to the network unchanged.
-See \code{\link[=detect_categorical_features]{detect_categorical_features()}} for what inference will and will
-not pick up on its own.}
+treat as categorical, \code{integer()} to declare none (and infer none), or
+\code{NULL} to infer. Only the ensemble path uses it: a single forward pass
+hands the matrix to the network unchanged. See
+\code{\link[=detect_categorical_features]{detect_categorical_features()}} for what inference will and will not
+pick up on its own. Configs from \code{\link[=generate_ensemble_configs_native]{generate_ensemble_configs_native()}}
+record the set they were generated for, and a fit uses that set; a
+declaration here must agree with it.}
 
 \item{kv_cache}{Condition on the training rows once per \code{predict()}
 call and reuse that across every prediction chunk and ensemble
