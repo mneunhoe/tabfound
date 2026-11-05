@@ -771,6 +771,7 @@ tabpfn_describe <- function(config, task) {
         arch_stage("ln2", "LayerNorm", kind = "norm",
                    prefix = paste0(lyr, ".layer_norms.1")),
         arch_residual(arch_stage("mlp", "MLP, GELU", kind = "ffn",
+                                 ffn = arch_ffn(E, ff, bias = FALSE),
                                  prefix = paste0(lyr, ".mlp"))),
         arch_stage("ln3", "LayerNorm", kind = "norm",
                    prefix = paste0(lyr, ".layer_norms.2"))

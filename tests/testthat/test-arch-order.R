@@ -205,3 +205,25 @@ test_that("residual groups flatten into numbered children", {
   expect_identical(vapply(st$children, `[[`, integer(1), "residual"),
                    c(NA, 1L, 1L, NA))
 })
+
+test_that("every feed-forward step's widths account for its parameters", {
+  # Widths, type and bias together fix a feed-forward's parameter count,
+  # so matching the network's own count checks all three.
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    for (s in arch$stages) {
+      for (ch in s$children) {
+        if (!identical(ch$kind, "ffn")) next
+        expect_s3_class(ch$ffn, "arch_ffn")
+        expect_equal(arch_ffn_params(ch$ffn), ch$params,
+                     info = paste(nm, s$id, ch$id))
+      }
+    }
+  }
+  expect_identical(arch_ffn_params(arch_ffn(8, 16)), 8 * 16 * 2 + 16 + 8)
+  expect_identical(arch_ffn_params(arch_ffn(8, 16, "swiglu", bias = FALSE)),
+                   3 * 8 * 16)
+  expect_identical(arch_ffn(8, 16, "swiglu")$act, "SiLU")
+  expect_error(arch_stage("x", "x", kind = "norm", ffn = arch_ffn(8, 16)),
+               "feed-forward child")
+})

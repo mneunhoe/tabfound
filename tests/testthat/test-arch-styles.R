@@ -948,3 +948,36 @@ test_that("every backend's accent is readable in both themes", {
   expect_identical(arch_readable("#000000", "#ffffff"), "#000000")
   expect_gte(arch_contrast(arch_readable("#ffff00", "#ffffff"), "#ffffff"), 4.5)
 })
+
+schematic_zooms <- function(sc) {
+  Filter(function(e) e$type == "rect" && isTRUE(e$dash) &&
+           isTRUE(all.equal(e$r, 8)), sc$items)
+}
+
+test_that("full detail adds one zoom box per distinct feed-forward", {
+  for (nm in names(arch_test_variants())) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    ffns <- unlist(lapply(arch$stages, function(s) lapply(
+      Filter(function(ch) identical(ch$kind, "ffn"), s$children),
+      function(ch) paste(unlist(ch$ffn), collapse = "/"))))
+    expect_length(schematic_zooms(arch_scene(arch, style = "schematic")), 0L)
+    full <- arch_scene(arch, style = "schematic", detail = "full")
+    expect_length(schematic_zooms(full), length(unique(ffns)))
+  }
+})
+
+test_that("a zoom box shows the feed-forward's widths and steps", {
+  txt_of <- function(sc) vapply(Filter(function(e) e$type == "text", sc$items),
+                                `[[`, character(1), "text")
+  tabfm <- arch_scene(arch_test_arch("tabfm"), style = "schematic",
+                      detail = "full")
+  txt <- txt_of(tabfm)
+  expect_true("SiLU" %in% txt)
+  expect_true("×" %in% txt)
+  expect_true("8 → 16 → 8" %in% txt)
+  expect_true("SiLU" %in% names(tabfm$key[[2]]$items))
+  # Biases left out of a feed-forward are said so.
+  pfn <- txt_of(arch_scene(arch_test_arch("tabpfn"), style = "schematic",
+                           detail = "full"))
+  expect_true("12 → 24 → 12, no bias" %in% pfn)
+})

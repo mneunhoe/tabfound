@@ -1049,7 +1049,7 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
 # pre-norm attention, then a pre-norm MLP, each inside a residual
 # connection. Every stage of the model is built from this one block.
 # @keywords internal
-tabicl_block_children <- function(pfx, id, label, axis, attn) {
+tabicl_block_children <- function(pfx, id, label, axis, attn, ffn) {
   list(
     arch_residual(
       arch_stage(paste0(id, "_n1"), "LayerNorm", kind = "norm",
@@ -1060,7 +1060,7 @@ tabicl_block_children <- function(pfx, id, label, axis, attn) {
     arch_residual(
       arch_stage(paste0(id, "_n2"), "LayerNorm", kind = "norm",
                  prefix = paste0(pfx, ".norm2")),
-      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn",
+      arch_stage(paste0(id, "_mlp"), "MLP, GELU", kind = "ffn", ffn = ffn,
                  prefix = paste0(pfx, c(".linear1", ".linear2")))
     )
   )
@@ -1125,10 +1125,12 @@ tabicl_describe <- function(config, task) {
                               axis = "rows",
                               attn = arch_attn("training rows",
                                                scaling = if (col_ssmax) "scalable softmax"
-                                                         else "1/sqrt(d)")),
+                                                         else "1/sqrt(d)"),
+                              ffn = arch_ffn(E, E * ff)),
         tabicl_block_children("col_embedder.tf_col.blocks.0.multihead_attn2",
                               "back", "Rows attend back to the inducing points",
-                              axis = "inducing", attn = arch_attn("inducing points"))
+                              axis = "inducing", attn = arch_attn("inducing points"),
+                              ffn = arch_ffn(E, E * ff))
       )),
     arch_stage(
       "cls", "CLS columns", kind = "embed", group = "Stage 2 - per row",
@@ -1149,7 +1151,8 @@ tabicl_describe <- function(config, task) {
         tabicl_block_children("row_interactor.tf_row.blocks.0", "attn",
                               "Attention over a row's columns",
                               axis = "columns",
-                              attn = arch_attn("all", queries = "CLS tokens")),
+                              attn = arch_attn("all", queries = "CLS tokens"),
+                              ffn = arch_ffn(E, E * ff)),
         list(arch_stage("oln", "LayerNorm, after the stack", kind = "norm",
                         role = "final", prefix = "row_interactor.out_ln"))
       )),
@@ -1171,7 +1174,8 @@ tabicl_describe <- function(config, task) {
                                        axis = "rows",
                                        attn = arch_attn("training rows",
                                                         scaling = if (ssmax) "scalable softmax"
-                                                                  else "1/sqrt(d)"))),
+                                                                  else "1/sqrt(d)"),
+                                       ffn = arch_ffn(D, D * ff))),
     arch_stage(
       "dec", "Decoder MLP", kind = "decode", group = "Decode",
       detail = sprintf("LayerNorm, then %d -> %d -> %d, GELU", D, D * 2L, n_out),

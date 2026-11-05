@@ -10,6 +10,11 @@
     Gallery: data flowing upwards, residual connections drawn, attention
     steps saying where their keys come from, facts pointing at their
     part). `options(tabfound.arch_style = )` sets the default.
+  * In the schematic, `detail = "full"` adds a zoom box beside each
+    distinct feed-forward step, showing what it computes inside (Linear,
+    activation, Linear, or SwiGLU's gated pair) with its widths. Each
+    feed-forward sublayer records them through `arch_ffn()`, checked
+    against the network's parameter count.
   * New `plot_architecture_diff()` draws two models side by side, pairing
     their stages by kind and attention axis and their facts by name. It
     takes models, fits or `tabfound_arch` objects in any mix.
