@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="906" height="1631" viewBox="0 0 906 1631">
+<svg xmlns="http://www.w3.org/2000/svg" width="906" height="1651" viewBox="0 0 906 1651">
   <title>Kumo Tabular small - classifier</title>
-  <desc>NVIDIA  -  cell embedding -&gt; column/row blocks -&gt; in-context stack  ·  27.5 M parameters. Symbols in shapes: n: rows in the context (train + test); p: raw features; n_test: test rows (the rows being predicted); R: rows; C: columns. Abbreviations: ICL: in-context learning: test rows attend to the labelled training rows; RoPE: rotary position embedding; MLP: multilayer perceptron (the feed-forward sublayer); GELU: Gaussian error linear unit (activation); RMSNorm: root-mean-square normalisation; KV: keys and values (as in KV cache, KV heads); NaN: not-a-number: undefined values in the input. How to read: × N: the block is stacked N times; the card is drawn once, as a deck; over rows / columns / features: the axis this block's attention runs across; card colour: what kind of stage it is (see the legend above); right margin: the tensor shape each stage emits, then its exact parameter count; left margin: the phase each group of stages belongs to.</desc>
-  <rect width="906" height="1631" fill="#fcfcfb"/>
+  <desc>NVIDIA  -  cell embedding -&gt; column/row blocks -&gt; in-context stack  ·  27.5 M parameters. Symbols in shapes: n: rows in the context (train + test); p: raw features; n_test: test rows (the rows being predicted); R: rows; C: columns. Abbreviations: ICL: in-context learning: test rows attend to the labelled training rows; RoPE: rotary position embedding; MLP: multilayer perceptron (the feed-forward sublayer); GELU: Gaussian error linear unit (activation); RMSNorm: root-mean-square normalisation; KV: keys and values (as in KV cache, KV heads); NaN: not-a-number: undefined values in the input. How to read: × N: the block is stacked N times; the card is drawn once, as a deck; alternating: Column block and Row block take turns, one of each per repeat, rather than one stack after the other; over rows / columns / features: the axis this block's attention runs across; card colour: what kind of stage it is (see the legend above); right margin: the tensor shape each stage emits, then its exact parameter count; left margin: the phase each group of stages belongs to.</desc>
+  <rect width="906" height="1651" fill="#fcfcfb"/>
   <text x="30" y="42" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="19px" font-weight="600" fill="#0b0b0b">Kumo Tabular small - classifier</text>
   <text x="30" y="64" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" fill="#52514e">NVIDIA  -  cell embedding -&gt; column/row blocks -&gt; in-context stack  ·  27.5 M parameters</text>
   <line x1="30" y1="84" x2="876" y2="84" stroke="#dbd9d3" stroke-width="1" stroke-linecap="round"/>
@@ -31,7 +31,7 @@
   <rect x="198" y="362" width="472" height="60" rx="5" fill="#E1EBF6" stroke="#2a78d6" stroke-width="1.3"/>
   <rect x="198" y="363" width="5" height="58" rx="2" fill="#2a78d6"/>
   <text x="215" y="383" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13px" font-weight="600" fill="#0b0b0b">Readout tokens</text>
-  <text x="215" y="402" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" fill="#52514e">4 learned tokens prepended to every row</text>
+  <text x="215" y="402" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" fill="#52514e">4 learned tokens prepended to every row; the column blocks skip them</text>
   <text x="686" y="392" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" fill="#52514e">512 params</text>
   <line x1="434" y1="422" x2="434" y2="441" stroke="#7d7b74" stroke-width="1.4" stroke-linecap="round"/>
   <polygon points="430,440 438,440 434,446" fill="#7d7b74"/>
@@ -40,9 +40,9 @@
   <rect x="198" y="446" width="472" height="60" rx="5" fill="#FAE9E1" stroke="#eb6834" stroke-width="1.3"/>
   <rect x="198" y="447" width="5" height="58" rx="2" fill="#eb6834"/>
   <text x="215" y="467" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13px" font-weight="600" fill="#0b0b0b">Column block</text>
-  <text x="215" y="486" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" fill="#52514e">induced attention over a column's rows: 128 inducing points read the ...</text>
+  <text x="215" y="486" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" fill="#52514e">induced attention over a column's cell tokens: 128 inducing po...</text>
   <text x="653" y="467" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10px" text-anchor="end" fill="#7d7b74">over rows</text>
-  <text x="653" y="486" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" font-weight="600" text-anchor="end" fill="#52514e">× 4</text>
+  <text x="653" y="486" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" font-weight="600" text-anchor="end" fill="#52514e">× 4, alternating</text>
   <text x="686" y="467" dy="0.35em" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5px" fill="#52514e">(C, R, 128)</text>
   <text x="686" y="486" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10px" fill="#7d7b74">1.1 M params</text>
   <line x1="434" y1="516" x2="434" y2="535" stroke="#7d7b74" stroke-width="1.4" stroke-linecap="round"/>
@@ -52,9 +52,9 @@
   <rect x="198" y="540" width="472" height="60" rx="5" fill="#FAE9E1" stroke="#eb6834" stroke-width="1.3"/>
   <rect x="198" y="541" width="5" height="58" rx="2" fill="#eb6834"/>
   <text x="215" y="561" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="13px" font-weight="600" fill="#0b0b0b">Row block</text>
-  <text x="215" y="580" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" fill="#52514e">self-attention over a row's 4 readout + C cell tokens; RoPE, gated...</text>
+  <text x="215" y="580" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" fill="#52514e">self-attention over a row's 4 readout + C cell tokens; RoPE, g...</text>
   <text x="653" y="561" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10px" text-anchor="end" fill="#7d7b74">over columns</text>
-  <text x="653" y="580" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" font-weight="600" text-anchor="end" fill="#52514e">× 4</text>
+  <text x="653" y="580" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11.5px" font-weight="600" text-anchor="end" fill="#52514e">× 4, alternating</text>
   <text x="686" y="561" dy="0.35em" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5px" fill="#52514e">(R, 4 + C, 128)</text>
   <text x="686" y="580" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10px" fill="#7d7b74">546.4 k params</text>
   <line x1="434" y1="610" x2="434" y2="629" stroke="#7d7b74" stroke-width="1.4" stroke-linecap="round"/>
@@ -182,8 +182,9 @@
   <text x="518.66" y="1423" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">not-a-number: undefined values in the input</text>
   <text x="30" y="1473" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="10.5px" font-weight="600" fill="#7d7b74">HOW TO READ</text>
   <text x="30" y="1491" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">× N: the block is stacked N times; the card is drawn once, as a deck</text>
-  <text x="30" y="1511" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">over rows / columns / features: the axis this block's attention runs across</text>
-  <text x="30" y="1531" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">card colour: what kind of stage it is (see the legend above)</text>
-  <text x="30" y="1551" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">right margin: the tensor shape each stage emits, then its exact parameter count</text>
-  <text x="30" y="1571" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">left margin: the phase each group of stages belongs to</text>
+  <text x="30" y="1511" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">alternating: Column block and Row block take turns, one of each per repeat, rather than one stack after the other</text>
+  <text x="30" y="1531" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">over rows / columns / features: the axis this block's attention runs across</text>
+  <text x="30" y="1551" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">card colour: what kind of stage it is (see the legend above)</text>
+  <text x="30" y="1571" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">right margin: the tensor shape each stage emits, then its exact parameter count</text>
+  <text x="30" y="1591" dy="0.35em" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="11px" fill="#52514e">left margin: the phase each group of stages belongs to</text>
 </svg>

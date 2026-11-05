@@ -753,3 +753,92 @@ test_that("plot_architecture_diff takes models and descriptions in any mix", {
   expect_error(plot_architecture_diff(arch, "nope"), "Cannot describe")
   expect_error(plot_architecture_diff(arch, m, format = "png"), "needs a .*file")
 })
+
+
+# ---------------------------------------------------------------------------
+# Descriptions checked against the forward code
+# ---------------------------------------------------------------------------
+
+stage_ids <- function(arch) vapply(arch$stages, `[[`, character(1), "id")
+stage_by_id <- function(arch, id) arch$stages[[match(id, stage_ids(arch))]]
+
+test_that("Kumo's column and row blocks alternate, one of each per layer", {
+  for (nm in c("kumo classification", "kumo regression", "kumo small")) {
+    arch <- arch_test_variant_arch(arch_test_variants()[[nm]])
+    ids <- stage_ids(arch)
+    expect_identical(stage_by_id(arch, "col")$interleave, "embedding",
+                     info = nm)
+    expect_identical(stage_by_id(arch, "row")$interleave, "embedding",
+                     info = nm)
+    expect_identical(match("row", ids) - match("col", ids), 1L, info = nm)
+    expect_match(stage_by_id(arch, "readout")$detail, "column blocks skip them",
+                 fixed = TRUE)
+  }
+  arch <- arch_test_arch("kumo")
+  expect_identical(arch_repeat_tag(stage_by_id(arch, "col")),
+                   "× 2, alternating")
+  for (style in names(arch_styles())) {
+    notes <- unlist(lapply(arch_scene(arch, style = style)$key, function(g)
+      vapply(g$notes, `[[`, character(1), "text")))
+    if (identical(style, "icicle")) next   # draws no repeat tags
+    expect_true(any(startsWith(notes, "alternating: Column block and Row block")),
+                info = style)
+  }
+  diff <- arch_diff_scene(arch, arch)
+  notes <- vapply(diff$key[[3]]$notes, `[[`, character(1), "text")
+  expect_identical(sum(startsWith(notes, "alternating:")), 1L)
+})
+
+
+test_that("interleaved stages must be consecutive and repeat alike", {
+  st <- function(id, rep, il) arch_stage(id, id, repeats = rep, interleave = il)
+  expect_true(arch_check_interleave(
+    list(st("a", 2L, "g"), st("b", 2L, "g"), st("c", 1L, NULL)), "x"))
+  expect_error(arch_check_interleave(
+    list(st("a", 2L, "g"), st("c", 1L, NULL), st("b", 2L, "g")), "x"),
+    "interleaves")
+  expect_error(arch_check_interleave(
+    list(st("a", 2L, "g"), st("b", 3L, "g")), "x"), "interleaves")
+  expect_error(arch_check_interleave(list(st("a", 2L, "g")), "x"),
+               "interleaves")
+})
+
+
+test_that("TabFM's CLS columns join after the first column stage", {
+  for (nm in c("tabfm classification", "tabfm regression")) {
+    ids <- stage_ids(arch_test_variant_arch(arch_test_variants()[[nm]]))
+    expect_true(match("col1", ids) < match("cls", ids), info = nm)
+    expect_true(match("cls", ids) < match("row1", ids), info = nm)
+  }
+})
+
+
+test_that("TabICL's and TabFM's final norm belongs to the decoder", {
+  for (nm in c("tabicl", "tabfm")) {
+    arch <- arch_test_arch(nm)
+    expect_true("icl_predictor.ln" %in% stage_by_id(arch, "dec")$prefix,
+                info = nm)
+    expect_false("icl_predictor.ln" %in% stage_by_id(arch, "icl_y")$prefix,
+                 info = nm)
+    expect_identical(arch_audit_coverage(arch)$duplicated, character(),
+                     info = nm)
+  }
+})
+
+
+test_that("TabPFN v2.x describe their encoders and embeddings as built", {
+  reg <- arch_test_variant_arch(arch_test_variants()[["tabpfn regression"]])
+  clf <- arch_test_variant_arch(arch_test_variants()[["tabpfn classification"]])
+  expect_match(stage_by_id(reg, "encoder")$detail, "^MLP\\(6 -> ")
+  expect_match(stage_by_id(clf, "encoder")$detail, "^Linear\\(6 -> 12\\)")
+  expect_match(stage_by_id(clf, "y_encoder")$detail, "extra column",
+               fixed = TRUE)
+  # The test config is 12 wide, so the subspace is 3-d, not 48.
+  v26 <- arch_test_arch("tabpfn26")
+  expect_match(stage_by_id(v26, "pos")$detail, "fixed 3-d per column",
+               fixed = TRUE)
+  net <- arch_test_model(arch_test_configs()$tabpfn26$config, "tabpfn26",
+                         "regression")$model
+  expect_identical(
+    net$feature_positional_embedding_embeddings$weight$size(2), 3L)
+})

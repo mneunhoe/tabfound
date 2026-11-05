@@ -789,12 +789,12 @@ kumo_describe <- function(config, task) {
       prefix = paste0("row_embedding.", yname)),
     arch_stage(
       "readout", "Readout tokens", kind = "embed", group = "Row embedding",
-      detail = sprintf("%d learned tokens prepended to every row", K),
+      detail = sprintf("%d learned tokens prepended to every row; the column blocks skip them", K),
       prefix = "row_embedding.readout_token"),
     arch_stage(
       "col", "Column block", kind = "attention", group = "Row embedding",
-      repeats = L, axis = "rows",
-      detail = sprintf("induced attention over a column's rows: %d inducing points read the context rows (log-n query scaling), every row reads them back; %d heads",
+      repeats = L, axis = "rows", interleave = "embedding",
+      detail = sprintf("induced attention over a column's cell tokens: %d inducing points read the context rows (log-n query scaling), every row reads them back; %d heads",
                        M, H),
       shape = sprintf("(C, R, %d)", D), prefix = "row_embedding.col_blocks",
       children = list(
@@ -809,7 +809,7 @@ kumo_describe <- function(config, task) {
       )),
     arch_stage(
       "row", "Row block", kind = "attention", group = "Row embedding",
-      repeats = L, axis = "columns",
+      repeats = L, axis = "columns", interleave = "embedding",
       detail = sprintf("self-attention over a row's %d readout + C cell tokens; RoPE, gated log-n query scaling; the last block queries from the readout tokens only; %d heads",
                        K, H),
       shape = sprintf("(R, %d + C, %d)", K, D),

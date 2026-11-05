@@ -15,7 +15,8 @@ arch_stage(
   repeats = 1L,
   prefix = character(),
   children = list(),
-  collapses = FALSE
+  collapses = FALSE,
+  interleave = NULL
 )
 }
 \arguments{
@@ -49,6 +50,11 @@ member of a repeated stack, so their counts are per block.}
 feature axis left: each row is one vector from here on. At most one
 stage per architecture sets it; models that keep their cells to the
 end set none.}
+
+\item{interleave}{Optional name shared by consecutive repeated stages
+whose blocks take turns -- one of each per repeat -- rather than
+running as one stack after another. They must have the same
+\code{repeats}.}
 }
 \value{
 A \code{tabfound_arch_stage}.

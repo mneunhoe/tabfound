@@ -717,17 +717,24 @@ tabpfn_describe <- function(config, task) {
            else as.integer(config$n_bar_bins %||% 5000L)
   ver <- config$tabpfn_version %||% "2"
   lyr <- "transformer_encoder.layers.0"
+  # The regressor's encoder is an MLP; its width is set the way the
+  # network sets it.
+  enc_hidden <- as.integer(config$encoder_mlp_hidden_dim %||%
+                             config$mlp_hidden_dim %||% 1024L)
 
   stages <- list(
     arch_input_stage(),
     arch_stage(
       "encoder", "Feature-group encoder", kind = "embed", group = "Embed",
-      detail = sprintf("Linear(%d -> %d), no bias: %d values + %d NaN flags",
-                       2L * grp, E, grp, grp),
+      detail = if (clf)
+        sprintf("Linear(%d -> %d), no bias: %d values + %d NaN flags",
+                2L * grp, E, grp, grp)
+      else sprintf("MLP(%d -> %d -> %d), no bias: %d values + %d NaN flags",
+                   2L * grp, enc_hidden, E, grp, grp),
       shape = "(B, n, F, E)", prefix = "encoder"),
     arch_stage(
       "y_encoder", "Target encoder", kind = "embed", group = "Embed",
-      detail = "Linear(2 -> E); added on the training rows only",
+      detail = "Linear(2 -> E); joins as an extra column on every row (test rows embed a missing value)",
       prefix = "y_encoder"),
     arch_stage(
       "pos", "Feature positional embedding", kind = "embed", group = "Embed",

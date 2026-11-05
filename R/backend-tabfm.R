@@ -1161,13 +1161,9 @@ tabfm_describe <- function(config, task) {
     arch_input_stage(detail = "numeric matrix; NaN is mapped to the sentinel -100"),
     arch_stage(
       "cell", "Fourier cell embedder", kind = "embed", group = "Embed",
-      detail = sprintf("sin/cos at %d learned frequencies per cell, summed over a group of %d; Linear(%d -> %d)",
+      detail = sprintf("sin/cos at %d learned frequencies per cell, summed over a group of %d; Linear(%d -> %d); the target embedding is added on the training rows",
                        nfreq, grp, 2L * nfreq, E),
       shape = "(B, n, F, E)", prefix = "cell_embedder"),
-    arch_stage(
-      "cls", "CLS columns", kind = "embed", group = "Embed",
-      detail = sprintf("%d learned columns prepended to every row", n_cls),
-      prefix = "cls_tokens"),
     arch_stage(
       "col1", "Column set transformer", kind = "attention",
       group = "Pass 1", repeats = n_col, axis = "rows",
@@ -1175,6 +1171,14 @@ tabfm_describe <- function(config, task) {
                        n_ind, h_col),
       shape = "(B, n, F, E)", prefix = "col_embedder",
       children = col_children("col_embedder")),
+    # The CLS columns join after the first column stage: they are absent
+    # from pass 1's column summaries, and pass 2's column stage treats
+    # them as ordinary columns.
+    arch_stage(
+      "cls", "CLS columns", kind = "embed", group = "Pass 1",
+      detail = sprintf("%d learned columns prepended to every row, after the first column stage",
+                       n_cls),
+      prefix = "cls_tokens"),
     arch_stage(
       "row1", "Row encoder", kind = "attention", group = "Pass 1",
       repeats = n_row, axis = "columns",
@@ -1201,7 +1205,7 @@ tabfm_describe <- function(config, task) {
       group = "In-context",
       detail = if (clf) sprintf("one-hot over %d classes -> Linear(%d)", n_out, D)
                else sprintf("MLP(1 -> %d)", D),
-      prefix = c("icl_predictor.y_encoder", "icl_predictor.ln")),
+      prefix = "icl_predictor.y_encoder"),
     arch_stage(
       "icl", "In-context learning block", kind = "attention",
       group = "In-context", repeats = n_icl, axis = "rows",
@@ -1224,9 +1228,10 @@ tabfm_describe <- function(config, task) {
       )),
     arch_stage(
       "dec", "Decoder MLP", kind = "decode", group = "Decode",
-      detail = sprintf("%d -> %s -> %d, GELU", D,
+      detail = sprintf("RMSNorm, then %d -> %s -> %d, GELU", D,
                        format(config$decoder_hidden %||% (D * 2L)), n_out),
-      shape = sprintf("(n_test, %d)", n_out), prefix = "icl_predictor.decoder"),
+      shape = sprintf("(n_test, %d)", n_out),
+      prefix = c("icl_predictor.ln", "icl_predictor.decoder")),
     if (clf)
       arch_output_stage("Class logits",
                         detail = sprintf("%d slots; softmax over the classes seen", n_out))

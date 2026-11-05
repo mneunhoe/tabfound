@@ -62,19 +62,24 @@ ARCH_AXES <- c("features", "columns", "rows", "cells", "inducing", "classes")
 #'   feature axis left: each row is one vector from here on. At most one
 #'   stage per architecture sets it; models that keep their cells to the
 #'   end set none.
+#' @param interleave Optional name shared by consecutive repeated stages
+#'   whose blocks take turns -- one of each per repeat -- rather than
+#'   running as one stack after another. They must have the same
+#'   `repeats`.
 #' @return A `tabfound_arch_stage`.
 #' @keywords internal
 arch_stage <- function(id, label, kind = "embed", detail = NULL, axis = NULL,
                        shape = NULL, group = NULL, repeats = 1L,
                        prefix = character(), children = list(),
-                       collapses = FALSE) {
+                       collapses = FALSE, interleave = NULL) {
   kind <- match.arg(kind, names(ARCH_KINDS))
   if (!is.null(axis)) axis <- match.arg(axis, ARCH_AXES)
   structure(
     list(id = id, label = label, kind = kind, detail = detail, axis = axis,
          shape = shape, group = group, repeats = as.integer(repeats),
          prefix = as.character(prefix), children = children,
-         collapses = isTRUE(collapses), params = NA_real_),
+         collapses = isTRUE(collapses), interleave = interleave,
+         params = NA_real_),
     class = "tabfound_arch_stage"
   )
 }
@@ -254,6 +259,7 @@ tabfound_architecture <- function(object) {
   }
 
   desc <- bk$describe(ctx$config, ctx$task)
+  arch_check_interleave(desc$stages, bk$name)
   index <- arch_param_index(ctx$net)
   stages <- arch_fill_params(desc$stages, index)
 
@@ -283,6 +289,50 @@ tabfound_architecture <- function(object) {
     ),
     class = "tabfound_arch"
   )
+}
+
+# Stages that interleave take turns, so they must sit next to each other
+# and repeat the same number of times. A describe hook that breaks this
+# is describing something its network does not do.
+# @keywords internal
+arch_check_interleave <- function(stages, backend) {
+  groups <- vapply(stages, function(s) s$interleave %||% NA_character_,
+                   character(1))
+  for (g in unique(groups[!is.na(groups)])) {
+    at <- which(groups %in% g)
+    reps <- vapply(stages[at], `[[`, integer(1), "repeats")
+    if (length(at) < 2L || any(diff(at) != 1L) || length(unique(reps)) != 1L) {
+      cli::cli_abort(c(
+        "The {.val {backend}} description interleaves {.val {g}} wrongly.",
+        i = "Interleaved stages must be consecutive, at least two, and \\
+             repeat the same number of times."
+      ))
+    }
+  }
+  invisible(TRUE)
+}
+
+# The tag for a stage's repeat count: "× 4", or "× 4, alternating" for a
+# stage whose blocks take turns with another's.
+# @keywords internal
+arch_repeat_tag <- function(s) {
+  if (s$repeats <= 1L) return(NULL)
+  paste0("\u00d7 ", s$repeats, if (!is.null(s$interleave)) ", alternating")
+}
+
+# The key note for interleaved stages, naming each group's stages; empty
+# when nothing interleaves.
+# @keywords internal
+arch_interleave_notes <- function(arch) {
+  groups <- unique(unlist(lapply(arch$stages, `[[`, "interleave")))
+  lapply(groups, function(g) {
+    labels <- vapply(Filter(function(s) identical(s$interleave, g),
+                            arch$stages), `[[`, character(1), "label")
+    arch_note(paste0(
+      "alternating: ", paste(labels, collapse = " and "),
+      " take turns, one of each per repeat, rather than one stack after ",
+      "the other"))
+  })
 }
 
 # A backend's own entries win over the shared ones.
@@ -381,7 +431,8 @@ print.tabfound_arch <- function(x, ...) {
   cli::cli_text("{arch_format_count(x$n_params)} parameters in {length(x$stages)} stages")
   cli::cli_par()
   for (s in x$stages) {
-    rep_txt <- if (s$repeats > 1L) cli::col_yellow(sprintf(" x%d", s$repeats)) else ""
+    rep_txt <- if (s$repeats > 1L) cli::col_yellow(sprintf(
+      " x%d%s", s$repeats, if (!is.null(s$interleave)) ", alternating" else "")) else ""
     axis_txt <- if (!is.null(s$axis)) cli::col_grey(sprintf(" [over %s]", s$axis)) else ""
     par_txt <- if (is.na(s$params) || s$params == 0)
       "" else cli::col_grey(sprintf("  %s", arch_format_count(s$params)))
@@ -417,6 +468,7 @@ as.data.frame.tabfound_arch <- function(x, row.names = NULL, optional = FALSE,
       detail  = s$detail %||% NA_character_,
       shape   = s$shape %||% NA_character_,
       collapses = isTRUE(s$collapses),
+      interleave = s$interleave %||% NA_character_,
       params  = s$params,
       stringsAsFactors = FALSE
     )

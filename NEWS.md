@@ -16,6 +16,21 @@
     and `generate_ensemble_configs_native(presets = )` draws members from
     an edited one.
 
+* Architecture descriptions corrected against the networks' forward
+  passes, so every diagram style shows what the models run:
+  * Kumo Tabular's column and row blocks alternate, one of each per layer;
+    they were drawn as two stacks run one after the other. Stages gain
+    `interleave`, and the diagrams tag such blocks "x N, alternating".
+    Its readout tokens are noted as skipping the column blocks.
+  * TabFM's CLS columns join after the first column stage, not before it,
+    and its cell embedder's target embedding is now mentioned.
+  * TabICL's and TabFM's final norm moves from the target encoder to the
+    decoder, where it runs (`decoder(ln(x))`); TabICL's inducing points
+    are learned vectors whose keys are the labelled rows.
+  * TabPFN v2.5's target encoder joins as an extra column on every row,
+    not added on the training rows, and its regressor's encoder is an
+    MLP. TabPFN v2.6's positional subspace is a quarter of the model
+    width (48 only at the published width).
 * Architecture diagrams come in four styles: `plot_architecture(style = )`
   takes `"cards"` (the default, unchanged apart from the key below),
   `"tufte"` (a table with a dot per stage on a log scale shared by every
