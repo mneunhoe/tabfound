@@ -237,13 +237,98 @@ plot_architecture(clf, "tabicl-dark.svg", theme = "dark")
 ![TabICL v2, dark theme](figures/tabicl-dark.svg){fig-alt="The TabICL
 diagram on a dark surface"}
 
-Colour carries three identities — embedding, attention, feed-forward —
-and everything else is neutral. That is a deliberate ceiling: with a
+In the cards style, colour carries three identities — embedding,
+attention, feed-forward — and everything else is neutral. That is a deliberate ceiling: with a
 diagram whose blocks are read against each other rather than in
 sequence, only three hues from the reference categorical palette clear
 the colour-vision-deficiency separation floors. Every block is also
 labelled in words and listed in the legend, so nothing is carried by
 colour alone.
+
+## Four ways to draw the same model
+
+Every figure above is in the default style, `"cards"`. The same
+description can be drawn three other ways, each answering a different
+question. Pick one with `style`, or set
+`options(tabfound.arch_style = )` once for a session.
+
+```{r}
+#| eval: false
+icl <- tabular_classifier("tabicl-v2-classifier")
+plot_architecture(icl, "tabicl-tufte.svg", style = "tufte")
+plot_architecture(icl, "tabicl-glyphs.svg", style = "glyphs")
+plot_architecture(icl, "tabicl-icicle.svg", style = "icicle")
+```
+
+Every style ends in the same kind of key: each symbol in its shapes,
+each abbreviation in its text and each piece of notation it uses is
+defined on the figure itself.
+
+### Tufte: how big each stage is
+
+The stages become rows of a table, and each stage's parameter count is
+a dot on a log scale that runs from 100 to 1 B in *every* diagram — so
+two models' dots can be compared by eye across figures. It follows
+Tufte's rules for statistical graphics: as little ink as the reading
+needs, labels set beside what they name rather than in a legend, an axis
+that runs only from the smallest dot to the largest. Position on a
+common scale is also what Cleveland and McGill found people read most
+accurately. Phases are coloured in stage order with viridis.
+
+![TabICL v2 in the tufte style](figures/tabicl-tufte.svg){fig-alt="TabICL
+v2 drawn as a table of stages with a dot per stage on a shared log
+parameter scale; the in-context stack's dot sits furthest right at 25.7
+million parameters, 93% of the total."}
+
+### Glyphs: what each stage does to the table
+
+Each stage is drawn as a small table, training rows above and test rows
+below, with the part its attention runs over picked out: a column for
+attention across rows, a row for attention across columns or features,
+dots for inducing points. After TabICL's row encoder merges each row's
+columns into one vector, the glyphs become a single wide column — the
+moment the model stops seeing individual features.
+
+![TabICL v2 in the glyphs style](figures/tabicl-glyphs.svg){fig-alt="TabICL
+v2 drawn as a column of small table glyphs, one per stage, highlighting
+a column for attention across rows, a row for attention across columns,
+and becoming a single wide column after the row encoder."}
+
+### Icicle: where the parameters are
+
+Three bands on one linear scale: the phases, the stages within them,
+and each stage's sublayers summed over all of its stacked blocks. A
+stage's width *is* its share of the model, so TabICL's in-context stack
+fills nearly the whole page while its column and row stages are slivers.
+Blocks too narrow to name are listed underneath with their counts. The
+layout is Kruskal and Landwehr's icicle plot, turned on its side.
+
+![TabICL v2 in the icicle style](figures/tabicl-icicle.svg){fig-alt="TabICL
+v2 drawn as three horizontal bands of phases, stages and sublayers,
+widths proportional to parameters; the in-context stack takes 93% of the
+width, split between attention and the MLP."}
+
+## Comparing two models
+
+`plot_architecture_diff()` sets two models side by side, stage against
+stage. Stages are paired by their kind and the axis their attention
+runs over, in order, not by name — so the pairing is structural: TabPFN
+v3's many-class decoder pairs with TabICL's decoder MLP because both are
+decoders. The chip between each pair says whether they match, how their
+stack depths differ, or that a stage has no counterpart. Facts are
+paired by name; the backends share one vocabulary of fact names so that
+"ICL layers" in one model lines up with "ICL layers" in the other.
+
+```{r}
+#| eval: false
+pfn <- tabular_classifier("tabpfn-v3-classifier")
+plot_architecture_diff(icl, pfn, "diff-tabicl-tabpfn3.svg")
+```
+
+![TabICL v2 against TabPFN v3](figures/diff-tabicl-tabpfn3.svg){fig-alt="TabICL
+v2 and TabPFN v3 side by side: most stages match; TabICL's CLS columns
+and TabPFN v3's output RMSNorm have no counterpart, and the in-context
+stacks differ in depth, 12 blocks against 24."}
 
 ## The description behind the picture
 
@@ -258,8 +343,8 @@ as.data.frame(arch)                   # one row per stage
 as.data.frame(arch, detail = "full")  # sublayers too
 ```
 
-For the v3 classifier above, dropping the `parent`, `detail` and `shape`
-columns to fit the page:
+For the v3 classifier above, dropping the `parent`, `detail`, `shape`
+and `collapses` columns to fit the page:
 
 ```
 #>    stage                         label      kind    axis repeats   params

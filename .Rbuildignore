@@ -10,4 +10,4 @@
 ^ckpts$
 ^\.DS_Store$
 ^HANDOFF_.*\.md$
-^\planning$
+^planning$

@@ -264,7 +264,7 @@ tabfound_architecture <- function(object) {
   subtitle <- paste(
     c(desc$subtitle,
       if (!is.null(index)) paste(arch_format_count(sum(index)), "parameters")),
-    collapse = "  ·  "
+    collapse = "  \u00b7  "
   )
 
   structure(

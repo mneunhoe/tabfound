@@ -27,7 +27,7 @@
 #      ships no config but whose converter derives one from the shapes
 #      (Kumo Tabular).
 #
-# A model that none of the three finds is skipped with a message naming
+# A model that none of the four finds is skipped with a message naming
 # what would fetch it. The vignette says which diagrams it has.
 
 suppressMessages(library(tabfound))
@@ -73,11 +73,21 @@ GALLERY <- list(
        id = "kumo-tabular-medium-classifier", env = "TABFOUND_GALLERY_KUMO_MEDIUM")
 )
 
-# Extra renderings the vignette uses to show the options off.
+# Extra renderings the vignette uses to show the options off: the
+# sublayers opened up, the dark theme, and TabICL in every other style.
 EXTRAS <- list(
   list(key = "tabpfn3", suffix = "-full", detail = "full"),
   list(key = "tabpfn35", suffix = "-full", detail = "full"),
-  list(key = "tabicl",  suffix = "-dark", theme  = "dark")
+  list(key = "tabicl",  suffix = "-dark", theme  = "dark"),
+  list(key = "tabicl",  suffix = "-tufte", style = "tufte"),
+  list(key = "tabicl",  suffix = "-glyphs", style = "glyphs"),
+  list(key = "tabicl",  suffix = "-icicle", style = "icicle")
+)
+
+# Pairs drawn with `plot_architecture_diff()`, written as
+# `diff-<a>-<b>.svg`.
+DIFFS <- list(
+  c("tabicl", "tabpfn3")
 )
 
 # ---------------------------------------------------------------------------
@@ -122,6 +132,7 @@ skip_note <- function(spec) {
 # ---------------------------------------------------------------------------
 
 built <- list()
+archs <- list()
 for (spec in GALLERY) {
   path <- config_path(spec)
   if (is.null(path)) {
@@ -143,14 +154,19 @@ for (spec in GALLERY) {
   )
 
   arch <- tabfound_architecture(model)
-  plot_architecture(arch, file.path(outdir, paste0(spec$key, ".svg")))
+  plot_architecture(arch, file.path(outdir, paste0(spec$key, ".svg")),
+                    style = "cards")
 
   for (ex in Filter(function(e) identical(e$key, spec$key), EXTRAS)) {
     plot_architecture(
       arch, file.path(outdir, paste0(spec$key, ex$suffix, ".svg")),
-      detail = ex$detail %||% "overview", theme = ex$theme %||% "light"
+      style = ex$style %||% "cards", detail = ex$detail %||% "overview",
+      theme = ex$theme %||% "light"
     )
   }
+  # Descriptions are small -- the network is not kept -- so the diffs
+  # can be drawn once every model has been built.
+  archs[[spec$key]] <- arch
 
   built[[spec$key]] <- data.frame(
     key = spec$key, title = arch$title, params = arch$n_params,
@@ -158,6 +174,18 @@ for (spec in GALLERY) {
   )
   rm(net, model, arch)
   gc(verbose = FALSE)
+}
+
+for (pair in DIFFS) {
+  if (!all(pair %in% names(archs))) {
+    message("skipping diff ", paste(pair, collapse = " vs "),
+            ": not every model was built")
+    next
+  }
+  plot_architecture_diff(
+    archs[[pair[1]]], archs[[pair[2]]],
+    file.path(outdir, sprintf("diff-%s-%s.svg", pair[1], pair[2]))
+  )
 }
 
 summary_df <- do.call(rbind, built)

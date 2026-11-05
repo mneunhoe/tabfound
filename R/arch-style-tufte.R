@@ -51,7 +51,7 @@ arch_tufte_geom <- function() {
 
 # @keywords internal
 arch_tufte_tags <- function(s) {
-  tags <- c(if (s$repeats > 1L) paste0("× ", s$repeats),
+  tags <- c(if (s$repeats > 1L) paste0("\u00d7 ", s$repeats),
             if (!is.null(s$axis)) paste0("over ", s$axis))
   if (length(tags)) paste(tags, collapse = "  ") else NULL
 }
@@ -276,7 +276,7 @@ arch_tufte_notes <- function(arch, detail, show_shapes, show_params,
   has_children <- full && show_params &&
     any(vapply(arch$stages, function(s) length(s$children) > 0L, logical(1)))
   c(
-    if (repeats) list(arch_note("× N: the block is stacked N times")),
+    if (repeats) list(arch_note("\u00d7 N: the block is stacked N times")),
     if (length(axes)) list(arch_note(
       "over rows / columns / features: the axis this block's attention runs across")),
     if (show_params) list(arch_note(paste0(

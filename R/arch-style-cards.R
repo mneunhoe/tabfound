@@ -199,8 +199,8 @@ arch_cards_notes <- function(arch, detail, show_shapes, show_params) {
               if (show_params) "its exact parameter count")
   c(
     if (repeats) list(arch_note(if (identical(detail, "full"))
-      "× N: the block is stacked N times; its sublayers are drawn once"
-      else "× N: the block is stacked N times; the card is drawn once, as a deck")),
+      "\u00d7 N: the block is stacked N times; its sublayers are drawn once"
+      else "\u00d7 N: the block is stacked N times; the card is drawn once, as a deck")),
     if (length(axes)) list(arch_note(
       "over rows / columns / features: the axis this block's attention runs across")),
     list(arch_note("card colour: what kind of stage it is (see the legend above)")),
@@ -245,7 +245,7 @@ arch_block_items <- function(s, x, y, h, g, th, detail) {
   # what is actually left rather than run underneath them.
   tags <- c(
     if (!is.null(s$axis)) paste0("over ", s$axis),
-    if (s$repeats > 1L) paste0("× ", s$repeats)
+    if (s$repeats > 1L) paste0("\u00d7 ", s$repeats)
   )
   tag_w <- if (!length(tags)) 0 else
     max(vapply(tags, arch_text_width, numeric(1), size = 11, bold = TRUE)) + 16
@@ -309,8 +309,8 @@ arch_child_items <- function(ch, x, y, w, g, th) {
   )
   cy <- y + g$child_h / 2
   right <- c(if (!is.null(ch$axis)) paste0("over ", ch$axis),
-             if (ch$repeats > 1L) paste0("× ", ch$repeats))
-  right <- if (length(right)) paste(right, collapse = " · ") else NULL
+             if (ch$repeats > 1L) paste0("\u00d7 ", ch$repeats))
+  right <- if (length(right)) paste(right, collapse = " \u00b7 ") else NULL
   rw <- if (is.null(right)) 0 else arch_text_width(right, 9.5) + 14
   out[[length(out) + 1L]] <- sc_text(
     x + 13, cy, arch_fit_text(ch$label, w - 26 - rw, 11.5), size = 11.5,

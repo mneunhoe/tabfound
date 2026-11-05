@@ -125,11 +125,11 @@ px_to_pt <- function(px) px * 72 / 96
 # grid path falls back to ASCII when -- and only when -- the session
 # cannot render it.
 ARCH_GLYPH_ASCII <- c(
-  "—" = " - ",   # em dash
-  "×" = "x",     # multiplication sign
-  "·" = "-",     # middle dot
-  "→" = "->",    # rightwards arrow
-  "≤" = "<="
+  "\u2014" = " - ",   # em dash
+  "\u00d7" = "x",     # multiplication sign
+  "\u00b7" = "-",     # middle dot
+  "\u2192" = "->",    # rightwards arrow
+  "\u2264" = "<="
 )
 
 # @keywords internal

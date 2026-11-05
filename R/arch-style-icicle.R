@@ -204,7 +204,7 @@ arch_scene_icicle <- function(arch, detail, theme, show_shapes, show_params,
     }
     push(sc_text(x0 - 12, y, heads[[b]], size = 11, col = th$ink3,
                  anchor = "end", italic = TRUE))
-    lines <- arch_wrap_text(paste(narrow[[b]], collapse = "  ·  "), wid, 11)
+    lines <- arch_wrap_text(paste(narrow[[b]], collapse = "  \u00b7  "), wid, 11)
     for (l in lines) {
       push(sc_text(x0, y, l, size = 11, col = th$ink2))
       y <- y + 16

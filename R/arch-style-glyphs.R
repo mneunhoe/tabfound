@@ -122,9 +122,9 @@ arch_glyph_items <- function(s, x, y, collapsed, g, th) {
 
 # @keywords internal
 arch_glyphs_tags <- function(s) {
-  tags <- c(if (s$repeats > 1L) paste0("× ", s$repeats),
+  tags <- c(if (s$repeats > 1L) paste0("\u00d7 ", s$repeats),
             if (!is.null(s$axis)) paste("over", s$axis))
-  if (length(tags)) paste(tags, collapse = "  ·  ") else NULL
+  if (length(tags)) paste(tags, collapse = "  \u00b7  ") else NULL
 }
 
 # The glyphs scene builder, registered in `arch_styles()`. With
@@ -257,7 +257,7 @@ arch_glyphs_notes <- function(arch, detail, show_shapes, show_params, th) {
       "one wide column: after this point the table's columns are merged",
       "into one vector per row"))),
     if (any_of(function(s) s$repeats > 1L)) list(arch_note(
-      "× N: the block is stacked N times")),
+      "\u00d7 N: the block is stacked N times")),
     if (length(axes)) list(arch_note(
       "over rows / columns / features: the axis this block's attention runs across")),
     if (length(margin)) list(arch_note(paste0(

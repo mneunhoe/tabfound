@@ -262,8 +262,9 @@ are evaluated by simulation instead (see above).
 - `vignette("how-big-a-table")`: memory and table size, per model
 - `vignette("advanced")`: ensembles, the matrix interface, reproducing the
   Python reference exactly, and known limitations per model
-- `vignette("architecture-gallery")`: diagrams of every architecture, and
-  how to add a new model
+- `vignette("architecture-gallery")`: diagrams of every architecture in
+  four styles, side-by-side comparisons of two models, and how to add a
+  new model
 
 ## Citation
 

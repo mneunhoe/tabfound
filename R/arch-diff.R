@@ -152,7 +152,7 @@ arch_diff_scene <- function(A, B, theme = "light") {
                     list(x = xb, arch = B, col = th$b, tag = "MODEL B"))) {
     push(sc_text(side$x, y, side$tag, size = 10, col = side$col, bold = TRUE))
     push(sc_text(side$x, y + 17,
-                 arch_fit_text(paste0(arch_short_title(side$arch), "  ·  ",
+                 arch_fit_text(paste0(arch_short_title(side$arch), "  \u00b7  ",
                                       arch_format_count(arch_total_params(side$arch))),
                                g$col_w, 13, bold = TRUE),
                  size = 13, col = th$ink, bold = TRUE))
@@ -245,7 +245,7 @@ arch_diff_scene <- function(A, B, theme = "light") {
       "facts: shared (the same value), different, or one side (reported",
       "by one model only, shown as --)"))),
     list(arch_note(paste(
-      "on each card: × N stacked blocks and the axis its attention runs",
+      "on each card: \u00d7 N stacked blocks and the axis its attention runs",
       "over, then its output shape; top right, its exact parameter count")))
   )
   # Cards draw labels, tags and shapes, not detail lines.
