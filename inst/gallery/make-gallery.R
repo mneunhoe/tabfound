@@ -43,9 +43,17 @@ suppressMessages(library(tabfound))
 # It writes `<key>/<style>-<detail>-<theme>.svg`,
 # `compare/<a>_vs_<b>-<theme>.svg` and a `manifest.json` that lists
 # what was drawn, so a page can offer only the views that exist.
+#
+# `--background-light=<colour>` and `--background-dark=<colour>` give each
+# theme's figures a background, so they sit on the page they are shown
+# on rather than in a box of their own.
 args <- commandArgs(trailingOnly = TRUE)
 matrix_mode <- "--matrix" %in% args
-args <- setdiff(args, "--matrix")
+bg_args <- grep("^--background-(light|dark)=", args, value = TRUE)
+MATRIX_BACKGROUNDS <- c(light = NA_character_, dark = NA_character_)
+MATRIX_BACKGROUNDS[sub("^--background-(light|dark)=.*", "\\1", bg_args)] <-
+  sub("^--background-(light|dark)=", "", bg_args)
+args <- setdiff(args, c("--matrix", bg_args))
 outdir <- if (length(args)) args[[1]] else "vignettes/figures"
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 
@@ -91,6 +99,12 @@ GALLERY <- list(
 MATRIX_STYLES  <- c("cards", "tufte", "glyphs", "icicle", "schematic")
 MATRIX_DETAILS <- c("overview", "full")
 MATRIX_THEMES  <- c("light", "dark")
+
+# The background for a theme's figures, or NULL for the theme's own.
+matrix_background <- function(theme) {
+  bg <- MATRIX_BACKGROUNDS[[theme]]
+  if (is.na(bg)) NULL else bg
+}
 
 # Extra renderings the vignette uses to show the options off: the
 # sublayers opened up, the dark theme, TabICL in every other style, and
@@ -184,7 +198,8 @@ render_matrix <- function(arch, key) {
       for (i in seq_along(MATRIX_THEMES)) {
         suppressMessages(plot_architecture(
           arch, files[[i]], style = style, detail = detail,
-          theme = MATRIX_THEMES[[i]]
+          theme = MATRIX_THEMES[[i]],
+          background = matrix_background(MATRIX_THEMES[[i]])
         ))
       }
       first <- file.path(outdir, key, sprintf("%s-overview-light.svg", style))
@@ -273,7 +288,8 @@ if (matrix_mode) {
     for (i in seq_along(MATRIX_THEMES)) {
       suppressMessages(plot_architecture_diff(
         archs[[pair[1]]], archs[[pair[2]]], files[[i]],
-        theme = MATRIX_THEMES[[i]]
+        theme = MATRIX_THEMES[[i]],
+        background = matrix_background(MATRIX_THEMES[[i]])
       ))
     }
     c(list(a = pair[1], b = pair[2]), svg_size(files[[1]]))
@@ -282,10 +298,11 @@ if (matrix_mode) {
     list(
       tabfound = as.character(utils::packageVersion("tabfound")),
       styles = MATRIX_STYLES, themes = MATRIX_THEMES,
+      backgrounds = as.list(MATRIX_BACKGROUNDS),
       models = manifest_models, compare = compare
     ),
     file.path(outdir, "manifest.json"),
-    auto_unbox = TRUE, pretty = TRUE, digits = NA
+    auto_unbox = TRUE, pretty = TRUE, digits = NA, na = "null"
   )
   DIFFS <- list()
 }
