@@ -433,6 +433,29 @@ test_that("test rows cannot see each other", {
 })
 
 
+test_that("a single key/value head is expanded, bit for bit as if copied", {
+  # The test-row path of every ICL block attends to one key/value head.
+  # It is broadcast to the query heads as a view rather than copied; that
+  # is only an allocation saving if the kernel reads the view exactly as
+  # it would the copy, which is what this pins.
+  torch::torch_manual_seed(3)
+  q <- torch::torch_randn(c(1L, 7L, 4L, 8L))
+  k <- torch::torch_randn(c(1L, 30L, 1L, 8L))
+  v <- torch::torch_randn(c(1L, 30L, 1L, 8L))
+  copied <- function(q, k, v) {
+    p <- c(1L, 3L, 2L, 4L)
+    sdpa(q$permute(p),
+         torch::torch_repeat_interleave(k$permute(p), repeats = 4L, dim = 2L),
+         torch::torch_repeat_interleave(v$permute(p), repeats = 4L, dim = 2L),
+         dropout_p = 0)$permute(p)
+  }
+  expect_true(torch::torch_equal(tabpfn3_sdpa(q, k, v), copied(q, k, v)))
+  withr::with_options(list(tabfound.sdpa = "r"), {
+    expect_true(torch::torch_equal(tabpfn3_sdpa(q, k, v), copied(q, k, v)))
+  })
+})
+
+
 test_that("the KV cache reproduces the forward it was built from", {
   net <- tiny_net("classifier")
   set.seed(7)

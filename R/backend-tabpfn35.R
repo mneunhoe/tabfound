@@ -390,7 +390,8 @@ tabpfn35_cell_embedder <- torch::nn_module(
 #' inside, so the shapes in the callers line up with the reference's
 #' suffix notation one for one. Grouped-query attention falls back to
 #' `repeat_interleave`, which is what the reference does in float32 and is
-#' exact either way.
+#' exact either way; a single key/value head is expanded as a view, which
+#' is the same numbers without the copy.
 #'
 #' @param scaling Optional [tabpfn35_softmax_scaling_mlp()], applied to the
 #'   queries with the key count as its length argument.
@@ -401,7 +402,16 @@ tabpfn35_sdpa <- function(q, k, v, scaling = NULL) {
   kh <- k$permute(c(1L, 3L, 2L, 4L))
   vh <- v$permute(c(1L, 3L, 2L, 4L))
   n_q <- qh$size(2); n_kv <- kh$size(2)
-  if (n_q != n_kv) {
+  if (n_kv == 1L && n_q > 1L) {
+    # One key/value head is the test-row path of every ICL block, cached
+    # or not. An expanded view hands the kernel the same numbers through a
+    # zero stride, so it is the same computation without the copy:
+    # `repeat_interleave` here allocates `2 * H * N * D` floats per layer
+    # -- 205 MB at 50,000 training rows -- and on the cached path the state
+    # carried between layers is too small for anything to collect them.
+    kh <- kh$expand(replace(kh$size(), 2L, n_q))
+    vh <- vh$expand(replace(vh$size(), 2L, n_q))
+  } else if (n_q != n_kv) {
     reps <- as.integer(n_q / n_kv)
     kh <- torch::torch_repeat_interleave(kh, repeats = reps, dim = 2L)
     vh <- torch::torch_repeat_interleave(vh, repeats = reps, dim = 2L)
