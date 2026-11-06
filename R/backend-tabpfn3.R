@@ -79,7 +79,9 @@ TABPFN3_NEG_INF_INDICATOR <-  4.0
 #' When there are fewer key/value heads than query heads the keys and
 #' values are repeated. Torch only has a fused grouped-query kernel for
 #' half precision, so the reference falls back to `repeat_interleave` in
-#' float32 -- which is what this reproduces, and is exact either way.
+#' float32 -- which is what this reproduces, and is exact either way. A
+#' single key/value head is expanded as a view instead of copied: the
+#' same numbers, bit for bit, without the allocation.
 #'
 #' @param q `(B, S, H, D)`; @param k,v `(B, J, Hkv, D)`.
 #' @param scaling Optional [tabpfn3_softmax_scaling_mlp()], applied to the
@@ -91,7 +93,16 @@ tabpfn3_sdpa <- function(q, k, v, scaling = NULL) {
   kh <- k$permute(c(1L, 3L, 2L, 4L))
   vh <- v$permute(c(1L, 3L, 2L, 4L))
   n_q <- qh$size(2); n_kv <- kh$size(2)
-  if (n_q != n_kv) {
+  if (n_kv == 1L && n_q > 1L) {
+    # One key/value head is the test-row path of every ICL block, cached
+    # or not. An expanded view hands the kernel the same numbers through a
+    # zero stride, so it is the same computation without the copy:
+    # `repeat_interleave` here allocates `2 * H * N * D` floats per layer
+    # -- 205 MB at 50,000 training rows -- and on the cached path the state
+    # carried between layers is too small for anything to collect them.
+    kh <- kh$expand(replace(kh$size(), 2L, n_q))
+    vh <- vh$expand(replace(vh$size(), 2L, n_q))
+  } else if (n_q != n_kv) {
     reps <- as.integer(n_q / n_kv)
     kh <- torch::torch_repeat_interleave(kh, repeats = reps, dim = 2L)
     vh <- torch::torch_repeat_interleave(vh, repeats = reps, dim = 2L)
