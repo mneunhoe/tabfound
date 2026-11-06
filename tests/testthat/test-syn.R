@@ -190,6 +190,29 @@ test_that("method controls the loop and '' carries the real column through", {
 })
 
 
+test_that("a single-string method applies to the visit sequence only", {
+  # Recycled over every column, it gave the unvisited columns a method,
+  # so they were neither synthesised nor carried and came back all NA.
+  set.seed(41)
+  d <- data.frame(x = rnorm(40), y = rnorm(40), z = rnorm(40),
+                  g = factor(sample(c("a", "b"), 40, TRUE)))
+  s <- tabfound_syn(d, visit_sequence = c("x", "y"), method = "sample",
+                    models = stub_models(), seed = 42L, verbose = FALSE)
+  got <- s$syn[[1]]
+  expect_identical(colSums(is.na(got)), c(x = 0, y = 0, z = 0, g = 0))
+  expect_identical(got[c("z", "g")], d[c("z", "g")])
+  expect_identical(s$visit_sequence, c("x", "y"))
+  expect_identical(unname(s$method), c("sample", "sample", "", ""))
+
+  # An unvisited categorical column no longer trips the check that a
+  # scalar "regression" only targets continuous columns.
+  r <- tabfound_syn(d, visit_sequence = c("x", "y"), method = "regression",
+                    models = stub_models(), seed = 43L, verbose = FALSE)
+  expect_identical(r$syn[[1]][c("z", "g")], d[c("z", "g")])
+  expect_identical(unname(r$method[c("z", "g")]), c("", ""))
+})
+
+
 test_that("the draw modes have the support behaviour they claim", {
   set.seed(31)
   d <- data.frame(x = rnorm(120), y = round(rnorm(120) * 10))
