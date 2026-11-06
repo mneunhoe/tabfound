@@ -209,7 +209,7 @@ print.tabfound_models <- function(x, ...) {
                                               ordered = ord)))
   }
   if (is.character(col)) {
-    lv <- sort(unique(col[!is.na(col)]))
+    lv <- .code_point_levels(col)
     return(list(kind = "categorical",
                 to_model = function(x) factor(x, levels = lv),
                 restore  = function(x) as.character(x)))

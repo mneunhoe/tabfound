@@ -95,6 +95,16 @@ test_that("text detection follows the reference's rule", {
   expect_identical(.text_columns(detect, 30L), character(0))
 })
 
+test_that("a string column that is not text is coded in code-point order", {
+  # sklearn's order, not the session's collation; under the C collation
+  # testthat sets the two would agree by luck.
+  local_natural_collate()
+  d <- data.frame(s = c("b", "B", "a", "A", "_x", "Z"), stringsAsFactors = FALSE)
+  fitted <- fit_frame_expansion(d, transform_text = TRUE, transform_dates = TRUE)
+  expect_identical(fitted$state$char_levels$s, c("A", "B", "Z", "_x", "a", "b"))
+  expect_identical(as.integer(fitted$data$s), c(6L, 2L, 5L, 1L, 4L, 3L))
+})
+
 test_that("pandas' numeric spellings are pandas', not R's", {
   expect_identical(.is_numeric_spelling(c("1", " 2 ", "3e2", "-inf", "Inf")),
                    rep(TRUE, 5))

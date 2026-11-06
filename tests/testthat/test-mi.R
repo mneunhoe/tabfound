@@ -27,6 +27,16 @@ test_that("every missing cell is filled and every observed cell is untouched", {
 })
 
 
+test_that("a string column is coded in code-point order, whatever the locale", {
+  # The levels become the predictor codes and the classifier's classes, so
+  # they follow sklearn's sort rather than the session's collation.
+  local_natural_collate()
+  plan <- .mi_column_plan(c("b", "B", NA, "a", "_x", "Z"))
+  expect_identical(levels(plan$to_model(c("a", "B"))),
+                   c("B", "Z", "_x", "a", "b"))
+})
+
+
 test_that("imputed columns keep their original type", {
   d <- mi_test_df()
   got <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,

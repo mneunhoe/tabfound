@@ -66,6 +66,24 @@ test_that("quantile transformer matches sklearn's uniform output", {
 })
 
 
+test_that("quantile transformer matches sklearn on tied data at n_quantiles = n", {
+  # `quantile_uni_fine` on rounded data: the knots are the sorted data
+  # with runs of ties, which is where `quantile(type = 7)` and `approx()`
+  # drift from NumPy by half a rank step.
+  Xt  <- as_mat(ref$quantile_ties_X)
+  Xtt <- as_mat(ref$quantile_ties_X_test)
+  expect_identical(quantile_preset_n_quantiles("quantile_uni_fine", nrow(Xt)),
+                   as.integer(scl$quantile_ties_n_quantiles))
+  fit <- fit_quantile_transformer(Xt, n_quantiles = scl$quantile_ties_n_quantiles)
+  expect_equal(transform_quantile_transformer(Xt, fit),
+               as_mat(ref$quantile_ties_train), tolerance = 1e-12,
+               ignore_attr = TRUE)
+  expect_equal(transform_quantile_transformer(Xtt, fit),
+               as_mat(ref$quantile_ties_test), tolerance = 1e-12,
+               ignore_attr = TRUE)
+})
+
+
 test_that("a constant column comes out 0, not 0.5, from the quantile transform", {
   # Every quantile of a constant column is the same value, so it is at once
   # the fitted minimum and the fitted maximum. sklearn pins the maximum to
@@ -254,6 +272,22 @@ test_that("SVD features match TruncatedSVD, including the sign convention", {
 })
 
 
+test_that("a near-constant column gets scale 1 before the SVD, as in sklearn", {
+  # Its spread is rounding noise, so it passes the exact constant check but
+  # not `_is_constant_feature`. Dividing by that noise would make it ~1e16.
+  Xv <- as_mat(ref$svd_nearconst_X)
+  expect_identical(length(remove_constant_features_fit(Xv)), ncol(Xv))
+  fit <- fit_transform_svd_features(Xv, "svd")
+  expect_equal(as.numeric(fit$n_components),
+               as.numeric(scl$svd_nearconst_n_components))
+  expect_equal(fit$col_scale, as.numeric(as.array(ref$svd_nearconst_scale)),
+               tolerance = 1e-12)
+  expect_identical(fit$col_scale[4], 1)
+  expect_equal(transform_svd_features(Xv, fit), as_mat(ref$svd_nearconst_train),
+               tolerance = 1e-9, ignore_attr = TRUE)
+})
+
+
 test_that("fingerprint reproduces the reference hash", {
   sq  <- fit_squashing_scaler(X[, keep, drop = FALSE], max_absolute_value = 3.0)
   Xsq <- transform_squashing_scaler(X[, keep, drop = FALSE], sq)
@@ -267,6 +301,28 @@ test_that("fingerprint reproduces the reference hash", {
                as.numeric(as.array(ref$fingerprint_train)), tolerance = 1e-12)
   expect_equal(apply_fingerprint(Xte, salt, is_test = TRUE),
                as.numeric(as.array(ref$fingerprint_test)), tolerance = 1e-12)
+})
+
+
+test_that("a missing value hashes as NumPy's NaN, whether NA or NaN in R", {
+  # The fixture's missing cells arrive from safetensors as NaN. Real data
+  # carries `NA_real_`, a NaN with a payload, and must hash the same.
+  sq  <- fit_squashing_scaler(X[, keep, drop = FALSE], max_absolute_value = 3.0)
+  Xsq <- transform_squashing_scaler(X[, keep, drop = FALSE], sq)
+  expect_true(any(is.nan(Xsq)))
+  Xna <- Xsq
+  Xna[is.nan(Xna)] <- NA_real_
+  expect_false(any(is.nan(Xna)))
+  expect_equal(apply_fingerprint(Xna, scl$fingerprint_salt, is_test = FALSE),
+               as.numeric(as.array(ref$fingerprint_train)), tolerance = 1e-12)
+
+  # And the platform's own NaN, whatever its sign bit, hashes as `np.nan`.
+  expect_identical(writeBin(.NP_NAN, raw(), size = 8L, endian = "little"),
+                   as.raw(c(0, 0, 0, 0, 0, 0, 0xf8, 0x7f)))
+  Xneg <- Xsq
+  Xneg[is.nan(Xneg)] <- -NaN
+  expect_equal(apply_fingerprint(Xneg, scl$fingerprint_salt, is_test = FALSE),
+               as.numeric(as.array(ref$fingerprint_train)), tolerance = 1e-12)
 })
 
 
