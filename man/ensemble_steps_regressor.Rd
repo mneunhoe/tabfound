@@ -22,7 +22,8 @@ ensemble_steps_regressor(
   pipelines = NULL,
   member_weights = NULL,
   return_members = FALSE,
-  exact_cache_only = FALSE
+  exact_cache_only = FALSE,
+  want_logits = FALSE
 )
 }
 \arguments{
@@ -50,6 +51,12 @@ probabilities, as \verb{$members} (a list of \verb{(n_test, n_bins)} matrices).}
 \item{exact_cache_only}{Use a cache passed to \code{add()} only on a chunk
 it gives the uncached answer; run the others uncached. See
 \code{\link[=tabpfn_classifier]{tabpfn_classifier()}}'s \code{chunk_cache}.}
+
+\item{want_logits}{Also return the averaged distribution's
+pseudo-logits, the log of the averaged bucket probabilities, as
+\verb{$pseudo_logits}: a \verb{(n_test, n_bins)} tensor on the z-scale borders,
+on \code{device}. Only sampling reads them, and at 5,000 buckets a row they
+outweigh the mean many times over, so they are not kept otherwise.}
 }
 \value{
 \code{list(start, add, finish)}; see \code{\link[=run_members_outer]{run_members_outer()}}.

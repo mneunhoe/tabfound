@@ -929,7 +929,8 @@ ensemble_steps_regressor <- function(net, col_emb, X_train, y_train,
                                      pipelines = NULL,
                                      member_weights = NULL,
                                      return_members = FALSE,
-                                     exact_cache_only = FALSE) {
+                                     exact_cache_only = FALSE,
+                                     want_logits = FALSE) {
   X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
   pipelines <- pipelines %||%
     member_pipeline_store(X_tr, configs, categorical_features)
@@ -1036,11 +1037,15 @@ ensemble_steps_regressor <- function(net, col_emb, X_train, y_train,
     pred_mean <- bar_logits_to_mean(pseudo_logits, borders)
     q <- bar_logits_to_quantiles(pseudo_logits, borders, quantiles)
 
+    # Only sampling reads the distribution itself, so only it gets it, and
+    # as the tensor it decodes: an `n_rows x n_bins` R matrix per chunk
+    # that the mean and the quantiles built and threw away was most of a
+    # large predict's peak.
     list(
-      mean       = as.numeric(pred_mean$cpu()) * y_std + y_mean,
-      quantiles  = as.matrix(q$cpu()) * y_std + y_mean,
-      avg_probs  = as.matrix(avg_probs$cpu()),
-      members    = st$members
+      mean          = as.numeric(pred_mean$cpu()) * y_std + y_mean,
+      quantiles     = as.matrix(q$cpu()) * y_std + y_mean,
+      pseudo_logits = if (isTRUE(want_logits)) pseudo_logits,
+      members       = st$members
     )
   }
 
@@ -1078,6 +1083,11 @@ ensemble_steps_regressor <- function(net, col_emb, X_train, y_train,
 #'   to it.
 #' @param return_members Also return each member's translated bucket
 #'   probabilities, as `$members` (a list of `(n_test, n_bins)` matrices).
+#' @param want_logits Also return the averaged distribution's
+#'   pseudo-logits, the log of the averaged bucket probabilities, as
+#'   `$pseudo_logits`: a `(n_test, n_bins)` tensor on the z-scale borders,
+#'   on `device`. Only sampling reads them, and at 5,000 buckets a row they
+#'   outweigh the mean many times over, so they are not kept otherwise.
 #' @return List with `mean`, `quantiles`, etc. on the RAW y scale.
 #' @keywords internal
 apply_ensemble_predict_regressor <- function(net, col_emb,
@@ -1094,7 +1104,8 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
                                               col_chunk_size = NA_integer_,
                                               pipelines = NULL,
                                               member_weights = NULL,
-                                              return_members = FALSE) {
+                                              return_members = FALSE,
+                                              want_logits = FALSE) {
   steps <- ensemble_steps_regressor(
     net, col_emb, X_train, y_train, configs, borders,
     quantiles = quantiles, device = device,
@@ -1103,7 +1114,7 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
     save_peak_memory_factor = save_peak_memory_factor,
     row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
     pipelines = pipelines, member_weights = member_weights,
-    return_members = return_members)
+    return_members = return_members, want_logits = want_logits)
   st <- steps$start(X_test)
   for (i in seq_along(configs)) {
     # Between members: this iteration's transients are dead but R's gc

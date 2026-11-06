@@ -751,7 +751,7 @@ tabpfn_regressor <- function(ctx,
 
   # See the classifier's `.steps()`.
   .steps <- function(state, pipelines, quantiles, return_members = FALSE,
-                     exact_cache_only = FALSE) {
+                     exact_cache_only = FALSE, want_logits = FALSE) {
     if (is.null(ensemble_configs)) {
       return(list(
         start  = function(X) list(X = X, out = NULL),
@@ -773,7 +773,8 @@ tabpfn_regressor <- function(ctx,
       save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       pipelines = pipelines, member_weights = member_weights,
-      return_members = return_members, exact_cache_only = exact_cache_only
+      return_members = return_members, exact_cache_only = exact_cache_only,
+      want_logits = want_logits
     )
   }
 
@@ -831,13 +832,15 @@ tabpfn_regressor <- function(ctx,
                                    col_chunk_size = col_chunk_size)))
   }
 
-  .run <- function(state, X_te, quantiles, return_members = FALSE) {
+  .run <- function(state, X_te, quantiles, return_members = FALSE,
+                   want_logits = FALSE) {
     pipelines <- .build_pipelines(state)
     src <- .member_cache(state, pipelines, nrow(X_te))
     run_members_outer(X_te, predict_chunk_size,
                       max(1L, length(ensemble_configs)),
                       .steps(state, pipelines, quantiles, return_members,
-                             exact_cache_only = src$exact),
+                             exact_cache_only = src$exact,
+                             want_logits = want_logits),
                       src$get)
   }
 
@@ -845,8 +848,7 @@ tabpfn_regressor <- function(ctx,
     parts <- .run(state, as.matrix(newdata), quantiles)
     if (length(parts) == 1L) return(parts[[1L]])
     list(mean      = unlist(lapply(parts, `[[`, "mean")),
-         quantiles = do.call(rbind, lapply(parts, `[[`, "quantiles")),
-         avg_probs = do.call(rbind, lapply(parts, `[[`, "avg_probs")))
+         quantiles = do.call(rbind, lapply(parts, `[[`, "quantiles")))
   }
 
   predict_fn <- function(state, newdata, type = "mean",
@@ -872,14 +874,18 @@ tabpfn_regressor <- function(ctx,
     # used to warn and quietly use one unensembled forward pass.)
     if (!is.null(ensemble_configs)) {
       # Drawn on the z-scale borders and rescaled in double, like the mean
-      # and the quantiles: see `apply_ensemble_predict_regressor()`.
-      probs <- .common(state, newdata, quantiles = 0.5)$avg_probs
-      pseudo <- torch::torch_log(torch::torch_tensor(
-        probs, dtype = torch::torch_float(), device = dev))
-      return(as.matrix(bar_logits_to_samples(pseudo, borders,
-                                             n_samples = as.integer(n_samples),
-                                             seed = seed)$cpu()) *
-               state$y_std + state$y_mean)
+      # and the quantiles: see `apply_ensemble_predict_regressor()`. Each
+      # chunk's pseudo-logits stay a tensor and are decoded in turn, from
+      # uniforms drawn once for every row, so the seed fixes the draw
+      # whatever the chunking.
+      X_te <- as.matrix(newdata)
+      parts <- .run(state, X_te, quantiles = 0.5, want_logits = TRUE)
+      chunk <- as.integer(predict_chunk_size)
+      return(.bar_samples_over_chunks(
+        nrow(X_te), chunk,
+        function(s, e) parts[[(s - 1L) %/% chunk + 1L]]$pseudo_logits,
+        borders, n_samples = n_samples, seed = seed) *
+          state$y_std + state$y_mean)
     }
     # The same chunked, cache-aware forward the mean and the quantiles
     # run. This used to be one uncached pass over all of `newdata`, so
