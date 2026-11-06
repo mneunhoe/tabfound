@@ -21,7 +21,8 @@ tabpfn3_kv_cache(
 \item{inducing_hidden}{List of inducing summaries, one per
 distribution-embedder block.}
 
-\item{train_embeddings}{\verb{(B, n_train, D)} post-norm row embeddings.}
+\item{train_embeddings}{\verb{(B, n_train, D)} post-norm row embeddings,
+or \code{NULL} for a regressor.}
 
 \item{y_train}{\verb{(B, n_train)} ordinal targets, for the classifier's
 decoder.}
@@ -45,8 +46,8 @@ to impute NaN and Inf;
 vectors per column;
 \item the key/value projections of each ICL block, one head wide because a
 test row attends to one head;
-\item the post-norm training row embeddings, which the classifier's
-retrieval decoder reads.
+\item for the classifier, the post-norm training row embeddings its
+retrieval decoder reads. A regressor reads none, so keeps none.
 }
 
 Unlike v2.6's cache, this one changes nothing: v2.6 fits its

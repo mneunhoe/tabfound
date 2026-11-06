@@ -9,7 +9,7 @@ tabpfn35_kv_cache(
   scaler,
   ecdf_context,
   inducing_hidden,
-  train_embeddings,
+  decoder_keys,
   y_train,
   n_train
 )
@@ -25,7 +25,8 @@ post-\code{k_norm}.}
 \item{inducing_hidden}{List of inducing summaries, one per
 distribution-embedder block.}
 
-\item{train_embeddings}{\verb{(B, n_train, D)} post-norm row embeddings.}
+\item{decoder_keys}{\verb{(B, n_train, H * D)} decoder keys, or \code{NULL} for a
+regressor, which has no decoder.}
 
 \item{y_train}{\verb{(B, n_train)} targets, for the classifier's decoder.}
 
@@ -50,12 +51,17 @@ the uncached one would have produced;
 vectors per column;
 \item the key/value projections of each ICL block, one head wide because a
 test row attends to one head;
-\item the post-norm training row embeddings, which the classifier's
-retrieval decoder reads.
+\item for the classifier, the retrieval decoder's keys over the training
+rows -- \code{mlp_classification} and \code{k_projection} applied once, at 384
+floats a row, where the embeddings they come from are 1,024.
 }
 
 As in v3, and unlike v2.6's cache, this one changes nothing: nothing is
 fitted on test rows, so a cached prediction and an uncached one are the
 same computation.
+
+Caches built before the decoder keys were held carry
+\code{train_embeddings} instead, and still load: the cached forward projects
+the keys from them on every call, as it used to.
 }
 \keyword{internal}

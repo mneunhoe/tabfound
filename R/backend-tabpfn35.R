@@ -1083,16 +1083,24 @@ tabpfn35_many_class_decoder <- torch::nn_module(
     self$has_scaling <- !is.null(softmax_scaling_layer)
   },
 
+  # The training rows' keys, `(B, N, H * D)`. Split out, as the reference
+  # does, so a KV cache can hold these rather than the embeddings they
+  # come from: they are narrower, and a cached call skips the projection.
+  project_keys = function(train_emb) self$k_projection(train_emb),
+
   # @param train_emb `(B, N, E)`, already through the classification
   #   pre-head MLP; @param test_emb `(B, M, E)` likewise.
   # @param targets `(B, N)` ordinal class indices, 0-based, *raw* -- a
   #   non-finite one contributes nothing rather than being imputed.
+  # @param keys `project_keys(train_emb)`, when already at hand; then
+  #   `train_emb` is not read.
   # @return `(B, M, max_num_classes)` log-probabilities.
-  forward = function(train_emb, test_emb, targets) {
-    B <- test_emb$size(1); M <- test_emb$size(2); n_ctx <- train_emb$size(2)
+  forward = function(train_emb, test_emb, targets, keys = NULL) {
+    if (is.null(keys)) keys <- self$project_keys(train_emb)
+    B <- test_emb$size(1); M <- test_emb$size(2); n_ctx <- keys$size(2)
     D <- self$head_dim; H <- self$num_heads
     q <- self$q_projection(test_emb)$view(c(B, M, H, D))
-    k <- self$k_projection(train_emb)$view(c(B, n_ctx, H, D))
+    k <- keys$view(c(B, n_ctx, H, D))
     if (self$has_scaling) q <- self$softmax_scaling_layer(q, n_ctx)
 
     # Narrowed to the classes present, as the reference does; see
@@ -1146,22 +1154,29 @@ tabpfn35_heads <- torch::nn_module(
                          torch::torch_zeros(as.integer(num_buckets) + 1L))
   },
 
+  # Both streams go through the *same* pre-head MLP before the decoder
+  # projects them -- the reference builds its cached decoder keys from
+  # `mlp_classification(train_emb)`, not from the raw embeddings.
+  decoder_keys = function(train_emb) {
+    self$many_class_decoder$project_keys(self$mlp_classification(train_emb))
+  },
+
   # @param train_emb `(B, N, D)` post-norm training row embeddings, or
-  #   NULL for regression, which has no decoder.
+  #   NULL for regression, which has no decoder -- or when `decoder_keys`
+  #   is given, which is everything the decoder reads of them.
   # @param test_emb `(B, M, D)`; @param y_BN `(B, N)` raw targets.
   # @return `(B, M, n_out)` for the branch `task_type` selects.
-  forward = function(train_emb, test_emb, y_BN, task_type) {
+  forward = function(train_emb, test_emb, y_BN, task_type,
+                     decoder_keys = NULL) {
     if (identical(task_type, "regression")) {
       out <- self$mlp_regression(test_emb)
       # The reference projects in (rows, batch, embedding) order; keep the
       # same layout so the matmul sees the same shapes.
       return(self$output_projection(out$transpose(1L, 2L))$transpose(1L, 2L))
     }
-    # Both streams go through the *same* pre-head MLP before the decoder
-    # projects them -- the reference builds its cached decoder keys from
-    # `mlp_classification(train_emb)`, not from the raw embeddings.
-    self$many_class_decoder(self$mlp_classification(train_emb),
-                            self$mlp_classification(test_emb), y_BN)
+    if (is.null(decoder_keys)) decoder_keys <- self$decoder_keys(train_emb)
+    self$many_class_decoder(NULL, self$mlp_classification(test_emb), y_BN,
+                            keys = decoder_keys)
   }
 )
 
@@ -1219,12 +1234,17 @@ tabpfn35_fit_scaler <- function(x, n_train) {
 #'   vectors per column;
 #' * the key/value projections of each ICL block, one head wide because a
 #'   test row attends to one head;
-#' * the post-norm training row embeddings, which the classifier's
-#'   retrieval decoder reads.
+#' * for the classifier, the retrieval decoder's keys over the training
+#'   rows -- `mlp_classification` and `k_projection` applied once, at 384
+#'   floats a row, where the embeddings they come from are 1,024.
 #'
 #' As in v3, and unlike v2.6's cache, this one changes nothing: nothing is
 #' fitted on test rows, so a cached prediction and an uncached one are the
 #' same computation.
+#'
+#' Caches built before the decoder keys were held carry
+#' `train_embeddings` instead, and still load: the cached forward projects
+#' the keys from them on every call, as it used to.
 #'
 #' @param kv List of `list(key, value)`, one per ICL block. The keys are
 #'   post-`k_norm`.
@@ -1232,16 +1252,17 @@ tabpfn35_fit_scaler <- function(x, n_train) {
 #' @param ecdf_context The `(3, B, C, K)` bucket context.
 #' @param inducing_hidden List of inducing summaries, one per
 #'   distribution-embedder block.
-#' @param train_embeddings `(B, n_train, D)` post-norm row embeddings.
+#' @param decoder_keys `(B, n_train, H * D)` decoder keys, or `NULL` for a
+#'   regressor, which has no decoder.
 #' @param y_train `(B, n_train)` targets, for the classifier's decoder.
 #' @param n_train Number of training rows it was built from.
 #' @keywords internal
 tabpfn35_kv_cache <- function(kv, scaler, ecdf_context, inducing_hidden,
-                              train_embeddings, y_train, n_train) {
+                              decoder_keys, y_train, n_train) {
   structure(
     list(kv = kv, scaler = scaler, ecdf_context = ecdf_context,
          inducing_hidden = inducing_hidden,
-         train_embeddings = train_embeddings, y_train = y_train,
+         decoder_keys = decoder_keys, y_train = y_train,
          n_train = as.integer(n_train)),
     class = "tabpfn35_kv_cache"
   )
@@ -1253,7 +1274,6 @@ print.tabpfn35_kv_cache <- function(x, ...) {
   n_kv <- sum(vapply(x$kv, function(e) sum(vapply(e, bytes, numeric(1))),
                      numeric(1)))
   n_ind <- sum(vapply(x$inducing_hidden, bytes, numeric(1)))
-  n_emb <- bytes(x$train_embeddings)
   n_ecdf <- bytes(x$ecdf_context)
   cli::cli_text("{.strong TabPFN v3.5 KV cache}")
   cli::cli_bullets(c(
@@ -1261,7 +1281,13 @@ print.tabpfn35_kv_cache <- function(x, ...) {
     "*" = "{length(x$kv)} ICL block{?s}, {round(n_kv / 1e6, 1)} MB of key/value projections",
     "*" = "{length(x$inducing_hidden)} inducing summar{?y/ies}, {round(n_ind / 1e6, 1)} MB",
     "*" = "{round(n_ecdf / 1e6, 1)} MB of ECDF bucket context",
-    "*" = "{round(n_emb / 1e6, 1)} MB of training row embeddings"
+    if (!is.null(x$decoder_keys)) c(
+      "*" = "{round(bytes(x$decoder_keys) / 1e6, 1)} MB of decoder keys"
+    ),
+    if (!is.null(x$train_embeddings)) c(
+      "*" = "{round(bytes(x$train_embeddings) / 1e6, 1)} MB of training row \\
+             embeddings (an older cache; rebuild it to hold decoder keys)"
+    )
   ))
   invisible(x)
 }
@@ -1492,16 +1518,23 @@ tabpfn_v35_transformer <- torch::nn_module(
     train_emb <- x[, 1:n_train, ]
     test_emb  <- if (n_test > 0L) x[, (n_train + 1L):(n_train + n_test), ] else NULL
 
+    # What a cache keeps of the training rows is what the decoder reads of
+    # them -- its keys -- and nothing for a regressor, which reads nothing.
+    keys <- if (isTRUE(return_kv_cache) &&
+                identical(self$task_type, "multiclass")) {
+      self$heads$decoder_keys(train_emb)
+    }
     res <- list(
-      logits = if (n_test > 0L) self$decode(train_emb, test_emb, y_raw_BN) else NULL,
+      logits = if (n_test > 0L)
+        self$decode(train_emb, test_emb, y_raw_BN, decoder_keys = keys) else NULL,
       test_hidden = test_emb, train_hidden = train_emb
     )
     if (isTRUE(return_kv_cache)) {
       res$kv_cache <- tabpfn35_kv_cache(
         kv = icl$kv, scaler = s02$scaler, ecdf_context = s02$ecdf_context,
         inducing_hidden = s02$hidden,
-        train_embeddings = train_emb$detach(), y_train = y_raw_BN$detach(),
-        n_train = n_train
+        decoder_keys = if (!is.null(keys)) keys$detach(),
+        y_train = y_raw_BN$detach(), n_train = n_train
       )
     }
     res
@@ -1540,11 +1573,25 @@ tabpfn_v35_transformer <- torch::nn_module(
                         save_peak_memory_factor = save_peak_memory_factor)
     test_emb <- self$output_norm(icl$state)
 
-    train_emb <- cache$train_embeddings$to(device = test_emb$device)
+    dev <- test_emb$device
+    keys <- cache$decoder_keys
+    # A cache saved before it held decoder keys has the training row
+    # embeddings instead; the decoder projects the keys from them, which
+    # is the same number at the old per-call cost.
+    train_emb <- cache$train_embeddings
+    if (identical(self$task_type, "multiclass") && n_test > 0L &&
+        is.null(keys) && is.null(train_emb)) {
+      cli::cli_abort(c(
+        "This TabPFN v3.5 cache has nothing for the classifier's decoder.",
+        i = "It was built by a regressor; rebuild it with \\
+             {.fn tabfound_cache} on the classifier."
+      ))
+    }
     list(
       logits = if (n_test > 0L)
-        self$decode(train_emb, test_emb,
-                    cache$y_train$to(device = test_emb$device)) else NULL,
+        self$decode(if (!is.null(train_emb)) train_emb$to(device = dev),
+                    test_emb, cache$y_train$to(device = dev),
+                    decoder_keys = if (!is.null(keys)) keys$to(device = dev)) else NULL,
       test_hidden = test_emb, train_hidden = train_emb
     )
   },
@@ -1658,8 +1705,9 @@ tabpfn_v35_transformer <- torch::nn_module(
 
   #' Turn training and test row embeddings into per-row outputs.
   #' @keywords internal
-  decode = function(train_emb, test_emb, y_BN) {
-    out <- self$heads(train_emb, test_emb, y_BN, self$task_type)
+  decode = function(train_emb, test_emb, y_BN, decoder_keys = NULL) {
+    out <- self$heads(train_emb, test_emb, y_BN, self$task_type,
+                      decoder_keys = decoder_keys)
     # `_nan_safe_output`: an all-NaN column, or a class no training row
     # carries, can leave a NaN here. The reference zeroes them rather than
     # letting one propagate into the softmax and take the row with it.
@@ -2143,14 +2191,19 @@ tabpfn35_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   n_live <- .tabpfn_live_caches(opts, n_est)
   if (n_live > 0) {
     # The cached path keeps `icl_num_kv_heads_test` heads rather than all
-    # of them (one, in the published checkpoints), plus the training rows'
-    # embeddings and the ECDF context -- once per live member cache, which
-    # is one unless the cache is kept on the model.
+    # of them (one, in the published checkpoints), plus the classifier's
+    # decoder keys and the ECDF context -- once per live member cache,
+    # which is one unless the cache is kept on the model. The keys are
+    # counted for a regressor too, which keeps none: nothing here says
+    # which task the checkpoint will run, and they are 384 floats a row
+    # against the 3,072 of the key/value projections.
     d_icl <- e * n_cls
     kv_heads <- as.numeric(config$icl_num_kv_heads_test %||% icl_heads)
     head_dim <- d_icl / max(icl_heads, 1)
+    d_dec <- as.numeric(config$decoder_num_heads %||% 6) *
+      as.numeric(config$decoder_head_dim %||% 64)
     terms$persistent <- n_live * (l * 2 * n_context * kv_heads * head_dim +
-                                  n_context * d_icl + ecdf_ctx)
+                                  n_context * d_dec + ecdf_ctx)
   } else {
     terms$persistent <- terms$persistent + ecdf_ctx
   }
