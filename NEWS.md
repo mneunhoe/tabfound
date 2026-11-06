@@ -19,11 +19,13 @@
 * TabPFN `predict()` calls that span two or more `predict_chunk_size`
   chunks now condition on the training rows once for the call instead of
   once per chunk, building a temporary cache one ensemble member at a
-  time: 1.2-3x faster, more with larger training sets and more chunks. It
-  is used only where it gives the uncached answer (bit-identical on v2.5,
-  and on v2.6 per chunk, with a chunk whose constant or informative masks
-  differ run uncached), and only when `estimate_peak_memory()` says it
-  fits. Nothing is kept; `kv_cache = FALSE` still means no persistent
+  time: 1.2-3x faster, more with larger training sets and more chunks. On
+  v2.5 it is bit-identical to the uncached pass, and on v2.6 it is used
+  only on chunks where it gives the uncached answer (a chunk whose
+  constant or informative masks differ runs uncached). On v3 and v3.5 the
+  cached pass agrees to float32 rounding, about 1e-5 on probabilities,
+  inside the tolerance row chunking already has. It is built only when
+  `estimate_peak_memory()` says it fits. Nothing is kept; `kv_cache = FALSE` still means no persistent
   cache, and the new `chunk_cache = FALSE` turns this off (#66).
 * TabPFN ensemble regressors no longer build an `n_test x 5000` R matrix of
   averaged bucket probabilities for `type = "mean"` and `"quantiles"`,
