@@ -594,7 +594,10 @@ test_that("the Kumo predictors give the same answer with the cache on", {
   clf <- function(...) do.call(kumo_classifier, list(
     fake_ctx(tiny_kumo(), config = list(num_classes = 10L)),
     n_estimators = 2L, predict_chunk_size = CHUNK, ...))
-  a <- clf()$predict(clf()$fit(X, y), X_new, type = "prob")
+  # The baseline re-encodes the context per chunk: without
+  # `chunk_cache = FALSE` this 4-chunk call would build a cache of its own.
+  plain <- clf(chunk_cache = FALSE)
+  a <- plain$predict(plain$fit(X, y), X_new, type = "prob")
   b <- clf(kv_cache = TRUE)$predict(clf(kv_cache = TRUE)$fit(X, y), X_new,
                                     type = "prob")
   expect_equal(a, b, tolerance = 1e-5)
@@ -603,7 +606,8 @@ test_that("the Kumo predictors give the same answer with the cache on", {
   reg <- function(...) do.call(kumo_regressor, list(
     fake_ctx(tiny_kumo("regressor"), config = list(num_quantiles = 9L)),
     n_estimators = 2L, predict_chunk_size = CHUNK, ...))
-  expect_equal(reg()$predict(reg()$fit(X, yr), X_new),
+  plain <- reg(chunk_cache = FALSE)
+  expect_equal(plain$predict(plain$fit(X, yr), X_new),
                reg(kv_cache = TRUE)$predict(reg(kv_cache = TRUE)$fit(X, yr), X_new),
                tolerance = 1e-5)
 })
@@ -677,7 +681,7 @@ test_that("a Kumo classifier past 10 classes runs ECOC, cached and chunked", {
     n_estimators = 2L, predict_chunk_size = CHUNK, ...))
   st <- clf()$fit(X, y)
   expect_length(st$recipe$target$codebooks, 2L)
-  a <- clf()$predict(st, X_new, type = "prob")
+  a <- clf(chunk_cache = FALSE)$predict(st, X_new, type = "prob")
   expect_identical(dim(a), c(9L, 14L))
   expect_equal(unname(rowSums(a)), rep(1, 9L), tolerance = 1e-6)
   expect_true(all(a[, "e"] == 0))
@@ -686,6 +690,185 @@ test_that("a Kumo classifier past 10 classes runs ECOC, cached and chunked", {
   expect_equal(a, b, tolerance = 1e-5)
   ch <- clf(row_chunk_size = 16L, col_chunk_size = 2L, save_peak_memory_factor = 2L)
   expect_equal(ch$predict(ch$fit(X, y), X_new, type = "prob"), a, tolerance = 1e-5)
+})
+
+
+# ---------------------------------------------------------------------------
+# Kumo: a cache built for one predict() call (chunk_cache)
+# ---------------------------------------------------------------------------
+
+# Counts the member caches built, and how many were alive in the store
+# when each one was.
+kumo_count_builds <- function(env = parent.frame()) {
+  seen <- list(n = 0L, alive = integer())
+  orig <- member_cache
+  local_mocked_bindings(member_cache = function(store, i, build) {
+    orig(store, i, function() {
+      seen$n <<- seen$n + 1L
+      seen$alive <<- c(seen$alive, length(ls(store)))
+      build()
+    })
+  }, .env = env)
+  function() seen
+}
+
+kumo_spec <- function(head = "classifier", ...) {
+  ctor <- if (head == "classifier") kumo_classifier else kumo_regressor
+  cfg <- if (head == "classifier") list(num_classes = 10L) else list(num_quantiles = 9L)
+  do.call(ctor, list(fake_ctx(tiny_kumo(head), config = cfg),
+                     n_estimators = 3L, predict_chunk_size = CHUNK, ...))
+}
+
+test_that("Kumo's chunk_cache agrees with the uncached pass, cache by cache", {
+  X <- cache_test_matrix(n = 60L)
+  X_new <- cache_test_matrix(n = 20L, seed = 50L)        # 3 chunks of 7
+  cases <- list(
+    regressor = list(head = "regressor", y = as.numeric(X[, 1] * 2 + X[, 2]),
+                     type = "mean"),
+    binary = list(head = "classifier",
+                  y = factor(rep(c("a", "b"), length.out = 60L)), type = "prob"),
+    ecoc = list(head = "classifier",
+                y = factor(rep(letters[1:14], length.out = 60L)), type = "prob")
+  )
+  for (nm in names(cases)) {
+    cs <- cases[[nm]]
+    builds <- kumo_count_builds()
+    plain <- kumo_spec(cs$head, chunk_cache = FALSE)
+    auto <- kumo_spec(cs$head)
+    state <- auto$fit(X, cs$y)
+    ref <- plain$predict(state, X_new, type = cs$type)
+    expect_identical(builds()$n, 0L, info = nm)
+
+    got <- auto$predict(state, X_new, type = cs$type)
+    # One cache per member, each built once for all three chunks, and
+    # each built with the previous member's already dropped.
+    expect_identical(builds()$n, 3L, info = nm)
+    expect_identical(builds()$alive, c(0L, 0L, 0L), info = nm)
+    expect_equal(got, ref, tolerance = 1e-5, info = nm)
+    if (nm == "ecoc") expect_identical(dim(got), c(20L, 14L))
+
+    # The members' own outputs take the same path.
+    m_ref <- plain$predict_members(state, X_new)
+    m_got <- auto$predict_members(state, X_new)
+    expect_identical(builds()$n, 6L, info = nm)
+    expect_equal(m_got, m_ref, tolerance = 1e-5, info = nm)
+
+    # A single chunk has nothing to share a cache across.
+    one <- auto$predict(state, X_new[1:CHUNK, , drop = FALSE], type = cs$type)
+    expect_identical(builds()$n, 6L, info = nm)
+    expect_identical(one, plain$predict(state, X_new[1:CHUNK, , drop = FALSE],
+                                        type = cs$type), info = nm)
+    # And nothing is kept.
+    expect_null(state$kv_caches)
+  }
+})
+
+test_that("Kumo's per-call caches live one member at a time and are dropped", {
+  X <- cache_test_matrix(n = 40L); y <- as.numeric(X[, 1])
+  X_new <- cache_test_matrix(n = 15L, seed = 51L)
+  stores <- list()
+  orig <- .kumo_store
+  local_mocked_bindings(.kumo_store = function(...) {
+    src <- orig(...)
+    stores[[length(stores) + 1L]] <<- src$store
+    src
+  })
+  builds <- kumo_count_builds()
+  for (kv in c(FALSE, TRUE)) {
+    spec <- kumo_spec("regressor", kv_cache = kv)
+    spec$predict(spec$fit(X, y), X_new)
+  }
+  # `kv_cache = TRUE` builds per call too, now a member at a time.
+  expect_identical(builds()$alive, rep(0L, 6L))
+  expect_length(stores, 2L)
+  for (s in stores) expect_length(ls(s), 0L)
+})
+
+test_that("Kumo's chunk_cache steps aside where the cache would not fit", {
+  X <- cache_test_matrix(); y <- as.numeric(X[, 1])
+  X_new <- cache_test_matrix(n = 15L, seed = 52L)
+  builds <- kumo_count_builds()
+  local_mocked_bindings(.chunk_cache_fits = function(...) FALSE)
+  spec <- kumo_spec("regressor")
+  state <- spec$fit(X, y)
+  expect_identical(spec$predict(state, X_new),
+                   kumo_spec("regressor", chunk_cache = FALSE)$predict(state, X_new))
+  expect_identical(builds()$n, 0L)
+})
+
+test_that("Kumo's gate asks the memory estimate with the cache on", {
+  seen <- NULL
+  local_mocked_bindings(.chunk_cache_fits = function(ctx, task, n_context, n_query,
+                                                     n_features, opts,
+                                                     or_lower = FALSE) {
+    seen <<- list(task = task, n_context = n_context, n_query = n_query,
+                  n_features = n_features, opts = opts, or_lower = or_lower)
+    TRUE
+  })
+  X <- cache_test_matrix(n = 60L)
+  y <- factor(rep(letters[1:14], length.out = 60L))
+  spec <- kumo_spec("classifier", row_chunk_size = 16L)
+  spec$predict(spec$fit(X, y), cache_test_matrix(n = 15L, seed = 53L))
+  expect_identical(seen$task, "classification")
+  expect_equal(c(seen$n_context, seen$n_query, seen$n_features), c(60, 15, 4))
+  # The sub-tasks ECOC multiplies every term by, and the predictor's knobs.
+  expect_identical(seen$opts$n_classes, 14L)
+  expect_identical(seen$opts$n_estimators, 3L)
+  expect_identical(seen$opts$row_chunk_size, 16L)
+  expect_identical(as.integer(seen$opts$predict_chunk_size), CHUNK)
+  # A Kumo cache lowers the peak, so it may build past "ok" when it does.
+  expect_true(seen$or_lower)
+})
+
+test_that("the gate builds a cache that lowers the peak, on any verdict", {
+  ctx <- list(config = mem_config_kumo("small"), backend = get_backend("kumo"),
+              device = "cpu")
+  opts <- list(n_estimators = 8L, predict_chunk_size = 1024L)
+  # Tight with or without the cache: the plain rule refuses, the Kumo
+  # rule builds, since the cached estimate is the lower one.
+  local_mocked_bindings(.system_memory = function() {
+    list(total = 64e9, available = 20e9, source = "test")
+  })
+  on <- estimate_peak_memory(ctx$config, 8000, 4096, 10, backend = "kumo",
+                             task = "regression", kv_cache = TRUE,
+                             n_estimators = 8L, predict_chunk_size = 1024L)
+  off <- estimate_peak_memory(ctx$config, 8000, 4096, 10, backend = "kumo",
+                              task = "regression", kv_cache = FALSE,
+                              n_estimators = 8L, predict_chunk_size = 1024L)
+  expect_identical(on$verdict, "tight")
+  expect_lt(on$total_peak_bytes, off$total_peak_bytes)
+  expect_false(.chunk_cache_fits(ctx, "regression", 8000, 4096, 10, opts))
+  expect_true(.chunk_cache_fits(ctx, "regression", 8000, 4096, 10, opts,
+                                or_lower = TRUE))
+  # Where the cache would raise it, "ok" is still the only way in.
+  local_mocked_bindings(estimate_peak_memory = function(model, ..., kv_cache) {
+    list(verdict = "tight", total_peak_bytes = if (kv_cache) 2 else 1)
+  })
+  expect_false(.chunk_cache_fits(ctx, "regression", 8000, 4096, 10, opts,
+                                 or_lower = TRUE))
+})
+
+test_that("a Kumo chunk cache that cannot be built leaves the member uncached", {
+  X <- cache_test_matrix(); y <- factor(rep(c("a", "b", "c"), length.out = 30L))
+  X_new <- cache_test_matrix(n = 15L, seed = 54L)
+  spec <- kumo_spec()
+  state <- spec$fit(X, y)
+  plain <- kumo_spec(chunk_cache = FALSE)$predict(state, X_new, type = "prob")
+  # The build is the one call that transforms the training rows alone.
+  orig <- kumo_recipe_member
+  local_mocked_bindings(kumo_recipe_member = function(rec, X, m) {
+    if (nrow(X) == 30L) stop("no room")
+    orig(rec, X, m)
+  })
+  expect_identical(spec$predict(state, X_new, type = "prob"), plain)
+  # Asked for explicitly, the same failure is the caller's to see.
+  expect_error(kumo_spec(kv_cache = TRUE)$predict(state, X_new, type = "prob"),
+               "no room")
+})
+
+test_that("Kumo's chunk_cache is TRUE or FALSE", {
+  expect_error(kumo_spec(chunk_cache = NA), "TRUE.*FALSE")
+  expect_error(kumo_spec("regressor", chunk_cache = "auto"), "TRUE.*FALSE")
 })
 
 
