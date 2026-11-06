@@ -151,6 +151,54 @@ test_that("predict-time arguments the backend does not take are reported", {
 })
 
 
+test_that("categorical_features takes column names, matched at fit()", {
+  dir <- local_fake_backend()
+  # The fake backend's predictor ignores its declaration; this one keeps
+  # it on the fitted state, which is where a real backend uses it.
+  bk <- get("faketest", envir = tabfound:::.tabfound_backends)
+  bk$regressor <- function(ctx, categorical_features = NULL, ...) {
+    spec <- stub_regressor_spec()
+    fit0 <- spec$fit
+    spec$fit <- function(X, y) {
+      state <- fit0(X, y)
+      state$declared <- categorical_features
+      state
+    }
+    spec
+  }
+  assign("faketest", bk, envir = tabfound:::.tabfound_backends)
+
+  X <- data.frame(a = rnorm(20), b = rnorm(20), c = sample(0:4, 20, TRUE))
+  y <- rnorm(20)
+
+  # No "NAs introduced by coercion" on the way.
+  m <- expect_no_warning(fit(tabular_regressor(dir, categorical_features = "c"),
+                             X, y))
+  expect_identical(m$state$declared, 3L)
+  # The names are what the caller wrote, so they are what is kept: a refit
+  # on reordered columns finds the column where it now is.
+  expect_identical(m$model_ref$args$categorical_features, "c")
+  m2 <- fit(m, X[c("c", "a", "b")], y)
+  expect_identical(m2$state$declared, 1L)
+  # Positions still work as before.
+  expect_identical(
+    fit(tabular_regressor(dir, categorical_features = 3L), X, y)$state$declared,
+    3L
+  )
+
+  expect_error(fit(tabular_regressor(dir, categorical_features = c("c", "zz")),
+                   X, y),
+               "names 1 column not in")
+  expect_error(fit(tabular_regressor(dir, categorical_features = "c"),
+                   unname(as.matrix(X)), y),
+               "no column names")
+  expect_error(tabular_regressor(dir, categorical_features = TRUE),
+               "positions or column names")
+  expect_error(tabular_regressor(dir, categorical_features = NA_character_),
+               "missing or empty")
+})
+
+
 test_that("a fitted tabfound_fit survives a save/load round trip", {
   skip_if_not_installed("hardhat")
   dir <- local_fake_backend()

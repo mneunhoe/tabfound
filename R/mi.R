@@ -987,7 +987,10 @@ tabfound_complete <- function(x, action = 1L, include = FALSE, ...) {
     return(sets)
   }
   if (action %in% c("long", "stacked")) {
-    ids <- rownames(x$data) %||% as.character(seq_len(nrow(x$data)))
+    # As mice does: the frame's own row names, which R stores as integers
+    # unless someone set them. `rownames()` would turn the automatic ones
+    # into "1", "2", ... and hand mice-shaped code a character `.id`.
+    ids <- attr(x$data, "row.names") %||% seq_len(nrow(x$data))
     long <- do.call(rbind, lapply(seq_along(sets), function(i) {
       d <- sets[[i]]
       cbind(.imp = imp_id[[i]], .id = ids, d, stringsAsFactors = FALSE)

@@ -26,8 +26,9 @@ when \code{NULL}.}
 \item{device}{One of \code{"cpu"}, \code{"cuda"}, \code{"mps"}.}
 
 \item{categorical_features}{Integer vector of 1-based column indices to
-treat as categorical, \code{integer()} to declare that none are, or \code{NULL}
-to let the backend infer. Declaring is much stronger than inferring:
+treat as categorical, a character vector of column names (matched
+against \code{colnames(X)} at \code{\link[=fit]{fit()}}), \code{integer()} to declare that none
+are, or \code{NULL} to let the backend infer. Declaring is much stronger than inferring:
 on TabPFN, inference takes a column nobody declared as categorical
 only when it has fewer than four distinct values and the training
 set has more than 100 rows, so an ordinal-coded factor with five

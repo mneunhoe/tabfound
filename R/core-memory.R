@@ -1297,6 +1297,16 @@ print.tabfound_memory_estimate <- function(x, ...) {
                   "total_peak_bytes", "system_avail_bytes",
                   "system_total_bytes")], .fmt_bytes)
   stage <- names(which.max(x$stage_bytes))
+  # The peak is not the sum of the three terms: it adds the calibrated
+  # process intercept, scales by the safety factor, and never drops below
+  # the backend's measured floor. Without a line for the difference, a
+  # 6.6 GB model with a 174 MB forward pass reads as a 20 GB mistake.
+  overhead <- x$total_peak_bytes -
+    sum(x$weights_bytes, x$persistent_bytes, x$transient_bytes)
+  b$overhead <- .fmt_bytes(overhead)
+  overhead_line <- if (isTRUE(overhead > 0)) c(
+    "*" = "overhead {.strong {b$overhead}} (process baseline and safety margin)"
+  )
 
   cli::cli_text("{.strong memory preflight} <{x$backend}> on {.val {x$device}}")
   cli::cli_text("{.emph {x$dims[['n_context']]} context x \\
@@ -1308,6 +1318,7 @@ print.tabfound_memory_estimate <- function(x, ...) {
     "*" = "persistent {.strong {b$persistent_bytes}}",
     "*" = "transient {.strong {b$transient_bytes}}, \\
            largest stage {.val {stage}}",
+    overhead_line,
     ">" = "peak {.strong {b$total_peak_bytes}}",
     "i" = "available {.strong {b$system_avail_bytes}} of {b$system_total_bytes}"
   ))
