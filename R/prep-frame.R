@@ -163,11 +163,11 @@ fit_frame_expansion <- function(data, transform_text, transform_dates,
 
   expanded <- c(names(date_fits), names(text_fits))
   # A string column that is not text is categorical, and gets the level set
-  # `factor()` would have given it before mold -- recorded, so new rows are
-  # coded against the training levels rather than their own.
+  # `.coerce_for_mold()` would have given it before mold -- recorded, so new
+  # rows are coded against the training levels rather than their own.
   leftover_chr <- setdiff(nm[vapply(data, is.character, logical(1))], expanded)
   char_levels <- stats::setNames(
-    lapply(leftover_chr, function(n) levels(factor(data[[n]]))), leftover_chr)
+    lapply(leftover_chr, function(n) .code_point_levels(data[[n]])), leftover_chr)
 
   state <- structure(
     list(input_names = nm, durations = durations, instants = instants,
@@ -197,6 +197,10 @@ transform_frame_expansion <- function(data, state) {
       "{.arg newdata} is missing column{?s} the model expanded at fit: {.field {missing_cols}}."
     ))
   }
+  # Refused the way an unexpanded fit refuses them: the layout below is
+  # renamed to the fitted names by position, so a reordered or swapped
+  # column would otherwise arrive under a training column's name.
+  .check_column_names(state$input_names, names(data))
   if (state$transform_dates) {
     new_instants <- names(data)[vapply(data, .is_instant, logical(1))]
     surprise <- setdiff(intersect(new_instants, state$input_names), names(state$dates))

@@ -108,9 +108,14 @@ test_that("one missing value silently deletes a whole Mitra feature column", {
   expect_false(anyNA(p_na))
   expect_equal(p_na, fit_on(X_imp), tolerance = 1e-6)
 
-  # ...and the backend now says so, so `tabfound()` stops layering its own
-  # imputer in front of the parity-checked one.
-  expect_true(isTRUE(get_backend("mitra")$handles_missing))
+  # ...and the backend says so, so `tabfound()` stops layering its own
+  # imputer in front of the parity-checked one. It is the predictor that
+  # imputes, not the network -- the network still loses the column, as
+  # above -- which is the distinction the two flags draw.
+  spec <- get_backend("mitra")
+  expect_false(isTRUE(spec$handles_missing))
+  expect_true(isTRUE(spec$imputes_internally))
+  expect_true(.backend_covers_missing(spec))
 })
 
 

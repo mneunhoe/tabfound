@@ -1,5 +1,153 @@
 # tabfound (development version)
 
+* Fixed TabICL and TabFM classifiers fitted on a factor with a level no
+  training row has -- common in cross-validation folds, subsets, and any
+  `tabfound()` fit, since hardhat keeps the outcome's levels. The class
+  shifts and permutations were sized by the observed classes but undone
+  over the full level set, so TabFM mislabelled or merged classes, and
+  could predict the class it never saw, while TabICL failed with a
+  `dimnames` error. Only the observed classes now reach the network, as in
+  the reference wrappers; an unused level keeps its column, with
+  probability 0 (#32).
+* Fixed `predict()` on the engine API silently relabelling columns once
+  `fit()` had expanded a date or text column: the expanded frame was
+  renamed to the training names by position, so reordered columns, or a
+  column swapped for an unknown one, passed the schema check and the
+  predictions were for the wrong columns. The column names are now
+  checked before the expansion is replayed, and a reorder is refused as it
+  is on a fit with nothing to expand. The refusal's suggested fix,
+  `newdata[, c("a", "b")]`, is now code that runs (#33).
+* Fixed `tabfound_syn()` copying a large share of the real rows exactly
+  with its default `proper = TRUE`. The proper draw bootstrapped the
+  context, and a PFN reads a duplicated context row as a near-certain
+  lookup, so each variable came back almost deterministically from the
+  real row it was conditioned on: 34 to 45 of 60 rows per synthesis were
+  exact copies, against 4 to 5 with `proper = FALSE` (#34). `proper = TRUE`
+  now draws a subsample without replacement, as
+  `tabfound_impute(proper = "subsample")` does, with the same new
+  `proper_frac` (default 0.632), and copies 3 to 5. `proper = "bootstrap"`
+  keeps synthpop's definition on request. `proper` is now validated:
+  `"bayes"`, which used to run improper without a word, is an error, as is
+  any other unsupported value.
+* Fixed TabPFN regression ensembles and Kumo Tabular regressors losing
+  precision when the target's mean is large next to its spread -- years,
+  timestamps, prices. Both rescaled to the raw target in float32: at an
+  offset of 1e6, a target of sd 1 got quantiles on a grid of 1/16 and an
+  ensemble mean off by about 2 sd, and Kumo rounded `y + 1e7` to whole
+  numbers before it was standardized. The ensemble now summarises on the
+  z-scale borders and un-normalises in double, as the single-pass path
+  and `tabpfn` 9.x do; its means also move closer to the 9.2.0
+  reference. Kumo standardizes the target and inverts its quantile grid
+  in float64, where `sdm` works in the float32 the target arrives in;
+  at ordinary scales that moves a value by a float32 ulp. Shifting `y`
+  now shifts every mean, quantile and sample by exactly as much (#35).
+* Fixed TabICL and TabFM imputing a categorical column's missing values
+  with its mean code (1.6 is not a category) and passing a level unseen
+  at fit through as its R code. Declared categorical columns now go
+  through the reference wrappers' encoders: codes over the categories
+  seen at fit -- sorted for TabICL, in order of appearance for TabFM,
+  where a category seen only once also counts as unknown -- with missing
+  and unseen values as -1, and the columns moved in front of the numeric
+  ones, as `TransformToNumerical` orders them. Only numeric columns are
+  mean-imputed. `tabicl_classifier()` and `tabicl_regressor()` gain
+  `categorical_features`, so `tabfound()` now declares a frame's factors
+  to TabICL too (#36).
+* Imputation keeps a variable's type and support. An integer 0/1 column
+  with missing values stays an integer in `tabfound_impute()` (and in
+  `tabfound_syn()` when it has a single observed value), where it came
+  back double, observed cells included. `mice.impute.tabfound()` draws a
+  numeric 0/1 dummy from the classifier, as `tabfound_impute()` does,
+  rather than drawing continuous values such as 1.03 and -0.03, and an
+  ordered target comes back ordered (#37).
+* `as_mids()` builds the mids from the imputation's `where`, so cells that
+  `where` over-imputes reach `mice::complete()`. It errored when `where`
+  marked extra cells in a column with missing values, and returned the
+  original values for cells marked in a fully observed column (#38).
+* Fixed `tabfound_syn()` returning all-`NA` columns when a single-string
+  `method` was combined with a `visit_sequence` that leaves columns out.
+  The string was recycled to every column, so the unvisited ones were
+  neither synthesised nor carried through (#39); a scalar `"regression"`
+  or `"classification"` also errored when an unvisited column was of the
+  other kind. The string now applies to the visit sequence only, and the
+  other columns are carried through, as they are without `method`.
+* Fixed `tabfound_load()` re-reading `ensemble_configs_dir`: a directory
+  regenerated or deleted after the save (a `tempfile()` from another
+  session, say) gave the reloaded model other members, or failed with
+  "lexical error: invalid char in json text". A saved KV cache was still
+  accepted, because its guard checked only the training rows, so the
+  reloaded bundle mixed the old members' cache with the new configs and
+  its probabilities moved by up to 0.74 (#40). The configs are now read
+  in when the model is built and saved with it, and the cache guard
+  fingerprints the constructor arguments too. Older saves still load
+  while their directory exists, and say so clearly when it is gone.
+  Alongside: a relative local model directory is saved as an absolute
+  path, so a reload after `setwd()` no longer goes to the Hub; saving
+  over an earlier save of the other form (file or cached bundle)
+  replaces it; and refitting a fitted model no longer reuses the
+  categorical positions an earlier fit's text or date expansion moved.
+* Fitting Mitra, generating TabPFN ensemble configs, and seeded
+  `tabfound_impute()` and `tabfound_syn()` runs no longer reset the
+  caller's random number generator. They seed locally and put
+  `.Random.seed` back when they finish, so a cross-validation or
+  simulation loop around a fit no longer draws the same numbers on every
+  iteration. The seeded draws themselves are unchanged (#41).
+* Formula interface (`tabfound()`) (#42):
+  * A factor made inside the formula (`factor(k)`, `cut(x, 3)`,
+    `I(x > 0)`) is refused at fit with advice to make it a column of
+    `data`. It used to be one-hot encoded, against the one ordinal
+    column per factor these models take, and `predict()` then failed on
+    new data that lacked any of its levels.
+  * `categorical_features` takes predictor names, and positions now
+    count the predictors in the formula's order (`data`'s for `y ~ .`).
+    They used to count hardhat's molded columns, which put factors last,
+    so `1L` in `y ~ g + x1` declared `x1`.
+  * `print()` lists the predictors the model reads; `y ~ . - k` no
+    longer lists `k`.
+* Quantile predictions: `predict(m, x, "quantiles", c(-0.5, 1.5))` now
+  refuses out-of-range levels passed by position, as it already did for
+  `quantiles =`. Columns are named per level, so `c(1e-4, 0.5)` gives
+  `q0.0001 q0.5` rather than `q1e-04 q5e-01`, and levels that differ past
+  the seventh digit no longer share a name. In `tabfound()` predictions,
+  `type = "median"` gives `.pred`, `type = "grid"` gives `.pred_q<level>`
+  rather than `.pred_1` ... `.pred_999`, and a repeated level is made
+  unique instead of aborting. `quantile_grid_stat()` reads a vector as one
+  row and checks the grid's width against `levels` (#43).
+* TabPFN v2.5 and v2.6 classifiers refuse a target with more classes than
+  the checkpoint's 10-class head at `fit()`, as TabICL and Mitra already
+  did. v2.5 used to fail only at predict, with a dimnames error (#44).
+* A constant regression target no longer crashes v2.5 config generation in
+  `generate_ensemble_configs_native()`. A constant has no Yeo-Johnson
+  lambda to fit, so its members carry no target transform (#44).
+* TabPFN's `predict_members()$member_index` gives the members' positions in
+  the ensemble that was passed in, as documented, rather than renumbering
+  the members left after zero weights are dropped (#44).
+* `register_backend()` checks its name, hooks and aliases, and refuses to
+  replace a built-in backend unless `overwrite = TRUE`. During
+  auto-detection, a backend whose `detect()` errors is skipped with a
+  warning instead of breaking detection for every model (#44).
+* Fixed four places where TabPFN's preprocessing drifted from the
+  reference (#45). The SVD features gave a column whose spread is
+  rounding noise its own tiny scale instead of sklearn's 1, so it swamped
+  every component. The quantile reshapes computed their knots with
+  `quantile(type = 7)` and `approx()`, which on tied data put values half
+  a rank step from NumPy's. The fingerprint hashed R's `NA` bit pattern
+  rather than NumPy's NaN, so every row with a missing value got a
+  different fingerprint. And string columns were coded in the session's
+  collation order, which only matches sklearn's code-point order in the C
+  locale, so the codes and the category shuffles drawn from them depended
+  on how R was started. String columns are now coded in code-point order
+  everywhere, including `tabfound_impute()` and synthesis.
+* `tabular_classifier()` and `tabular_regressor()` take column names in
+  `categorical_features` as well as positions; names are matched against
+  `colnames(X)` at `fit()`. Before, a name warned "NAs introduced by
+  coercion" and then aborted as out of range. Names that match no column,
+  and declarations that are neither positions nor names, are refused with
+  a message saying which (#46).
+* `print(estimate_peak_memory())` has an "overhead" line for the process
+  baseline and safety margin, so its lines add up to the peak (#46).
+* `tabfound_complete(x, "long")$.id` follows mice: an integer for a frame
+  whose row names were never set, the row names otherwise. It was always
+  character (#46).
 * Architecture diagrams:
   * `plot_architecture(style = )` draws the same description five ways:
     `"cards"` (the default), `"tufte"` (a table with a dot per stage on a

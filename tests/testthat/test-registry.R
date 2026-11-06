@@ -228,6 +228,24 @@ test_that("a mistyped local path is reported as a path, not a Hub repo", {
   expect_error(resolve_artifacts(d), "missing model artifacts")
 })
 
+test_that("a relative model directory is saved as an absolute one", {
+  dir <- local_fake_backend()
+  # Typed relative to where the session happens to be. Recorded as typed,
+  # it named nothing after `setwd()`, and `tabfound_load()` went to the Hub.
+  m <- withr::with_dir(dirname(dir), fit(
+    tabular_classifier(basename(dir)), matrix(rnorm(20), ncol = 2),
+    factor(rep(c("a", "b"), 5))))
+  expect_identical(m$model_ref$model, normalizePath(dir))
+
+  f <- withr::local_tempfile(fileext = ".tabfound")
+  tabfound_save(m, f)
+  back <- withr::with_dir(withr::local_tempdir(), tabfound_load(f))
+  expect_identical(back$model_ref$model, normalizePath(dir))
+  new <- matrix(rnorm(6), ncol = 2)
+  expect_identical(predict(back, new, type = "prob"),
+                   predict(m, new, type = "prob"))
+})
+
 
 test_that("tabfm and tabicl configs do not both claim a model", {
   # These two architectures share most of their config field names --

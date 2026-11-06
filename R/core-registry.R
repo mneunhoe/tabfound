@@ -358,8 +358,17 @@ load_backend_model <- function(model, task, backend = NULL,
   device <- resolve_device(device)
   # Keep the caller's original string: it is what `tabfound_save()`
   # records, so a reloaded model re-resolves through the same path rather
-  # than hard-coding today's cache location.
+  # than hard-coding today's cache location. A local directory is the one
+  # exception: a relative one names a different place, or nothing, after
+  # `setwd()`, and `tabfound_load()` would then take it for a Hub repo id.
+  # Catalogue ids and aliases are checked first because they win over a
+  # directory of the same name when resolving, too.
   model_ref <- model
+  if (is.character(model) && length(model) == 1L &&
+      is.null(.catalog_id(model, task)) &&
+      identical(expand_model_alias(model), model) && dir.exists(model)) {
+    model_ref <- normalizePath(model, mustWork = TRUE)
+  }
   resolved <- .resolve_backend_config(model, task, backend, subfolder)
   paths <- resolved$paths
   config <- resolved$config
