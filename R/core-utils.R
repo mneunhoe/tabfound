@@ -382,6 +382,42 @@ chunk_apply <- function(X, chunk_size, fn) {
   if (is.null(member_weights)) seq_len(n) else which(member_weights > 0)
 }
 
+# Class labels as the network sees them: only the classes that occur.
+#
+# A factor keeps levels that no training row has -- a cross-validation
+# fold, a subset, or `tabfound()` itself, since hardhat keeps the
+# outcome's levels. The reference wrappers label-encode the observed
+# classes, so the network is sized, shifted and permuted over those
+# alone. Coding the full level set instead leaves gaps in the labels,
+# and every class permutation built from the observed count then points
+# at the wrong column. `observed` holds the 1-based positions of the
+# observed classes in `levels`, for [.expand_observed_classes()].
+# @keywords internal
+.encode_observed_classes <- function(y) {
+  if (is.factor(y)) {
+    levels_ <- levels(y); code <- as.integer(y)
+  } else {
+    levels_ <- sort(unique(y)); code <- match(y, levels_)
+  }
+  observed <- sort(unique(code))
+  list(levels = levels_, observed = observed,
+       y_int = match(code, observed) - 1L)
+}
+
+# Back from the observed classes to one column per level. A class the fit
+# never saw gets `fill`: probability 0, or logit `-Inf`, which a softmax
+# turns into that same 0. A state fitted before `observed` was recorded
+# coded every level, so it has nothing to expand.
+# @keywords internal
+.expand_observed_classes <- function(m, state, fill) {
+  observed <- state$observed
+  n_levels <- length(state$class_levels)
+  if (is.null(observed) || length(observed) == n_levels) return(m)
+  full <- matrix(fill, nrow(m), n_levels)
+  full[, observed] <- m
+  full
+}
+
 # What `predict_members()` returns for a classifier, whichever backend:
 # the members' logits with the class levels as column names, which
 # members they are, their weights, and how the backend combines them.
