@@ -476,22 +476,71 @@ tabfm_model <- torch::nn_module(
     torch::torch_cat(list(cls, emb), dim = 3L)
   },
 
+  # The first row stage over the training rows, a chunk of rows at a
+  # time. Each row is its own sequence over its columns, so splitting the
+  # rows changes only the batch every matmul sees -- but unchunked, the
+  # SwiGLU intermediates over every training row at full width are what
+  # the pre-pass peaks on.
+  # @keywords internal
+  row_stage_1 = function(emb, row_chunk_size = NULL) {
+    n <- emb$size(2)
+    size <- suppressWarnings(as.integer(row_chunk_size %||% NA_integer_))
+    if (is.na(size) || size < 1L || size >= n) {
+      return(self$row_interactor(self$add_cls(emb)))
+    }
+    parts <- list()
+    for (s in seq(1L, n, by = size)) {
+      len <- min(s + size - 1L, n) - s + 1L
+      parts[[length(parts) + 1L]] <-
+        self$row_interactor(self$add_cls(emb$narrow(2L, s, len)))
+      collect_between_layers(parts[[length(parts)]])
+    }
+    torch::torch_cat(parts, dim = 2L)
+  },
+
+  # Both column stages' summaries, from the training rows.
+  #
+  # @param x,y The training rows only, `x` already through
+  #   `fill_missing()`.
+  # @return `list(hidden, out)`: the summaries as a cache stores them,
+  #   and the second column stage's output over the training rows.
+  # @keywords internal
+  prepass = function(x, y, train_size, cat_mask = NULL, col_chunk_size = NULL,
+                     row_chunk_size = NULL) {
+    emb <- self$cell_embedder(x, y, train_size, cat_mask)
+    c1 <- self$col_embedder$build_hidden(emb, train_size, col_chunk_size)
+    emb <- self$row_stage_1(c1$out, row_chunk_size)
+    c2 <- self$col_embedder_2$build_hidden(emb, train_size, col_chunk_size)
+    list(hidden = list(c1$hidden, c2$hidden), out = c2$out)
+  },
+
   # Everything the training rows contribute to a prediction.
   #
   # @param x `(B, train_size, H)` — the training rows only.
   # @param y `(B, train_size)`; @param train_size `(B)` long.
   # @param cat_mask As in `forward()`. A cache is only valid for the mask
   #   it was built with, since the mask changes how cells are embedded.
+  # @param row_chunk_size Rows per pass, as for `forward()`. A cache build
+  #   otherwise runs every stage over all the training rows at full width.
   build_kv_cache = function(x, y, train_size, cat_mask = NULL,
-                            col_chunk_size = NULL) {
+                            col_chunk_size = NULL, row_chunk_size = NULL) {
     x <- self$fill_missing(x)
-    emb <- self$cell_embedder(x, y, train_size, cat_mask)
-    c1 <- self$col_embedder$build_hidden(emb, train_size, col_chunk_size)
-    emb <- self$row_interactor(self$add_cls(c1$out))
-    c2 <- self$col_embedder_2$build_hidden(emb, train_size, col_chunk_size)
-    reps <- self$row_interactor_2(c2$out)
+    pre <- self$prepass(x, y, train_size, cat_mask, col_chunk_size,
+                        row_chunk_size)
+    size <- suppressWarnings(as.integer(row_chunk_size %||% NA_integer_))
+    reps <- if (is.na(size) || size < 1L || size >= x$size(2)) {
+      self$row_interactor_2(pre$out)
+    } else {
+      # Through the chunked driver against the summaries, as an uncached
+      # chunked pass does it, rather than holding the second column
+      # stage's output over every training row for the last row stage.
+      pre$out <- NULL
+      self$stages_0_to_1(x, y, train_size, cat_mask,
+                         col_hidden = pre$hidden, row_chunk_size = size,
+                         dump = FALSE)
+    }
     tabfm_kv_cache(
-      col_hidden   = list(c1$hidden, c2$hidden),
+      col_hidden   = pre$hidden,
       icl_kv       = self$icl_predictor$build_kv(reps, y, train_size),
       n_train      = x$size(2),
       n_features   = x$size(3),
@@ -547,13 +596,9 @@ tabfm_model <- torch::nn_module(
       if (n_train <= 0L) {
         cli::cli_abort("Row chunking needs either labelled rows or a cache.")
       }
-      emb <- self$cell_embedder(x$narrow(2L, 1L, n_train),
-                                y$narrow(2L, 1L, n_train),
-                                train_size, cat_mask)
-      c1 <- self$col_embedder$build_hidden(emb, train_size, col_chunk_size)
-      emb <- self$row_interactor(self$add_cls(c1$out))
-      c2 <- self$col_embedder_2$build_hidden(emb, train_size, col_chunk_size)
-      hidden <- list(c1$hidden, c2$hidden)
+      hidden <- self$prepass(x$narrow(2L, 1L, n_train),
+                             y$narrow(2L, 1L, n_train), train_size, cat_mask,
+                             col_chunk_size, size)$hidden
     }
 
     # Stage outputs are dumped when TABFOUND_DUMP_DIR is set, under the
@@ -808,7 +853,8 @@ tabfm_subfolder_for <- function(task) {
   cache <- member_cache(cache_store, i, function() {
     b <- .tabfm_batch(X_train, mem$y, X_train[0L, , drop = FALSE], cat_mask, dev)
     torch::with_no_grad({
-      net$build_kv_cache(b$x, b$y, b$train_size, b$cat_mask, col_chunk_size)
+      net$build_kv_cache(b$x, b$y, b$train_size, b$cat_mask, col_chunk_size,
+                         row_chunk_size)
     })
   })
   x_te <- as_float_tensor(as.matrix(X_test), device = dev)$unsqueeze(1L)

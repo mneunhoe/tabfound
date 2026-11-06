@@ -207,7 +207,7 @@ tabicl_col_embedding <- torch::nn_module(
     cc <- suppressWarnings(as.integer(col_chunk_size %||% NA_integer_))
     if (is.na(cc) || cc < 1L || cc >= hc) {
       src <- self$add_target(self$in_linear(features), features, y_train)
-      built <- self$tf_col$build_hidden(src)
+      built <- self$tf_col$build_hidden(src, want_out = want_out)
       return(list(
         out = if (isTRUE(want_out))
           built$src$permute(c(1L, 3L, 2L, 4L))$contiguous() else NULL,
@@ -220,7 +220,7 @@ tabicl_col_embedding <- torch::nn_module(
       len <- min(s + cc - 1L, hc) - s + 1L
       f <- features$narrow(2L, s, len)
       built <- self$tf_col$build_hidden(
-        self$add_target(self$in_linear(f), f, y_train)
+        self$add_target(self$in_linear(f), f, y_train), want_out = want_out
       )
       if (isTRUE(want_out)) outs[[length(outs) + 1L]] <- built$src
       # Concatenated on the column axis, in slice order, so the whole
@@ -234,7 +234,10 @@ tabicl_col_embedding <- torch::nn_module(
           hids[[i]][[length(hids[[i]]) + 1L]] <- built$hidden[[i]]
         }
       }
-      collect_between_layers(built$src)
+      # Without the output there is no carried tensor to size the
+      # collection by, but the slice's intermediates are as large as ever.
+      if (isTRUE(want_out)) collect_between_layers(built$src)
+      else collect_between_chunks()
     }
     out <- if (!isTRUE(want_out)) NULL else {
       src <- if (length(outs) == 1L) outs[[1L]] else
@@ -427,10 +430,14 @@ tabicl_ic_learning <- torch::nn_module(
   },
 
   # @param reps `(B, T, d_model)`; @param y_train `(B, train_size)`.
+  # @return `(B, T - train_size, out_dim)`: the test rows only. The
+  #   labelled rows' outputs are never read, and the decoder is the widest
+  #   matmul in the stage (999 quantiles on the regressor).
   forward = function(reps, y_train, save_peak_memory_factor = NULL) {
     r <- self$add_target(reps, y_train)
     src <- self$tf_icl(r, train_size = y_train$size(2),
-                       save_peak_memory_factor = save_peak_memory_factor)
+                       save_peak_memory_factor = save_peak_memory_factor,
+                       test_only = TRUE)
     self$decoder(self$ln(src))
   }
 )
@@ -464,9 +471,26 @@ tabicl_model <- torch::nn_module(
   #
   # @param x `(B, train_size, H)` — the labelled rows only.
   # @param y_train `(B, train_size)`.
-  build_kv_cache = function(x, y_train, col_chunk_size = NULL) {
-    built <- self$col_embedder$build_hidden(x, y_train, col_chunk_size)
-    reps <- self$row_interactor(built$out)
+  # @param row_chunk_size Rows per pass through the column and row stages,
+  #   as for `forward()`. Without it a cache build holds the whole
+  #   `(B, train_size, HC, E)` column embedding and the row stage over it,
+  #   which gave back most of what chunking an uncached pass saves.
+  build_kv_cache = function(x, y_train, col_chunk_size = NULL,
+                            row_chunk_size = NULL) {
+    n_train <- y_train$size(2)
+    size <- suppressWarnings(as.integer(row_chunk_size %||% NA_integer_))
+    if (is.na(size) || size < 1L || size >= n_train) {
+      built <- self$col_embedder$build_hidden(x, y_train, col_chunk_size)
+      reps <- self$row_interactor(built$out)
+    } else {
+      # The summaries first, then the labelled rows a chunk at a time
+      # against them -- the same driver the uncached chunked pass uses,
+      # so the two agree to the same rounding.
+      built <- self$col_embedder$build_hidden(x, y_train, col_chunk_size,
+                                              want_out = FALSE)
+      reps <- self$stages_0_to_1(x, y_train, col_hidden = built$hidden,
+                                 row_chunk_size = size)
+    }
     tabicl_kv_cache(
       col_hidden = built$hidden,
       icl_kv     = self$icl_predictor$build_kv(reps, y_train),
@@ -556,7 +580,8 @@ tabicl_model <- torch::nn_module(
   #   `y_train` is ignored and every row of `x` is a row to predict.
   # @param row_chunk_size Rows per pass through the column and row
   #   stages; see `stages_0_to_1()`.
-  # @return `(B, T, out_dim)` — logits over classes, or quantile levels.
+  # @return `(B, T - train_size, out_dim)` — logits over classes, or
+  #   quantile levels, for the test rows; with a cache, for every row.
   forward = function(x, y_train, kv_cache = NULL, row_chunk_size = NULL,
                      save_peak_memory_factor = NULL, col_chunk_size = NULL) {
     if (!is.null(kv_cache)) {
@@ -712,8 +737,8 @@ tabicl_task_of <- function(config) {
 # output block. `cache_store` is NULL when caching is off.
 #
 # The two branches differ only in what the network is handed: with a cache
-# the training rows are left out of the batch entirely, so the forward
-# pass is over the test chunk alone and its whole output is wanted.
+# the training rows are left out of the batch entirely. Either way the
+# network returns the test rows alone.
 # @keywords internal
 .tabicl_member_out <- function(net, dev, mem, n_train, cache_store, i,
                                row_chunk_size = NULL,
@@ -728,11 +753,13 @@ tabicl_task_of <- function(config) {
           save_peak_memory_factor = save_peak_memory_factor,
           col_chunk_size = col_chunk_size)
     })
-    return(out[1, (b$n_train + 1L):out$size(2), ])
+    return(out[1, , ])
   }
   cache <- member_cache(cache_store, i, function() {
     b <- .tabicl_batch(X_train, mem$y, X_train[0L, , drop = FALSE], dev)
-    torch::with_no_grad({ net$build_kv_cache(b$x, b$y, col_chunk_size) })
+    torch::with_no_grad({
+      net$build_kv_cache(b$x, b$y, col_chunk_size, row_chunk_size)
+    })
   })
   x_te <- as_float_tensor(as.matrix(X_test), device = dev)$unsqueeze(1L)
   out <- torch::with_no_grad({
@@ -1043,12 +1070,23 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
       blk <- .tabicl_member_out(net, dev, members$get(i), state$n_train, caches,
                                 i, row_chunk_size, save_peak_memory_factor,
                                 col_chunk_size)
-      grid <- as.matrix(blk$cpu())
       if (return_members) {
-        raw[[length(raw) + 1L]] <- invert_target_scaler(grid, state$scaler)
+        raw[[length(raw) + 1L]] <- invert_target_scaler(as.matrix(blk$cpu()),
+                                                        state$scaler)
         next
       }
-      stat <- quantile_dist_stat(grid, levels_, type, quantiles)
+      stat <- if (identical(type, "mean")) {
+        # A mean does not care about order, so the 999-level grid is not
+        # sorted at all. Where the grid has crossings the summation order
+        # differs from the reference's mean of the sorted grid, which moves
+        # the result by an ulp or two (1.4e-15 at most, measured).
+        rowMeans(as.matrix(blk$cpu()))
+      } else {
+        # Sorting each row in R is a per-row `apply()`; the device sorts
+        # the whole block at once, and to the same order.
+        grid <- as.matrix(torch::torch_sort(blk, dim = -1L)[[1]]$cpu())
+        quantile_dist_stat(grid, levels_, type, quantiles, sorted = TRUE)
+      }
       stat <- invert_target_scaler(stat, state$scaler)
       if (!is.null(member_weights)) stat <- stat * member_weights[[i]]
       acc <- if (is.null(acc)) stat else acc + stat
@@ -1289,7 +1327,7 @@ tabicl_describe <- function(config, task) {
 #' TabICL's peak-memory shapes
 #'
 #' Three stages with three different peaks, so the estimate takes the
-#' maximum: the column embedder is wide (`rows x column-groups x
+#' maximum: the column embedder is wide (`rows x (columns + CLS slots) x
 #' embed_dim`) but kept linear in rows by its inducing points, the row
 #' interactor is the same width over a short sequence, and the in-context
 #' stage is quadratic in rows but only `embed_dim * row_num_cls` wide.
@@ -1299,13 +1337,24 @@ tabicl_describe <- function(config, task) {
 #' @keywords internal
 tabicl_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   n_est <- max(1, as.numeric(opts$n_estimators %||% 1))
+  n_cls <- as.numeric(config$row_num_cls %||% 4)
   .icl_family_terms(
     n_context    = n_context,
     n_query      = .resident_query(n_query, opts),
     n_features   = n_features,
     embed_dim    = as.numeric(config$embed_dim),
-    group_size   = as.numeric(config$col_feature_group_size %||% 3),
-    n_cls        = as.numeric(config$row_num_cls %||% 4),
+    # One token per *column*, not per group of them. `group_cells()`
+    # stacks `col_feature_group_size` cyclic shifts of the columns as
+    # channels, which keeps all p of them, and prepends `row_num_cls`
+    # sentinel columns that the column stage carries like any other and
+    # the row stage turns into CLS tokens. Sizing the column stage as
+    # `ceiling(p / 3)` tokens and the row stage as that plus the CLS
+    # slots put it at 4 + 4 tokens for p = 10 where the network runs 14
+    # through both, and let a fitted `act_copies` of 141 absorb the
+    # difference at the one shape it was fitted on.
+    group_size   = 1,
+    cell_tokens  = n_features + n_cls,
+    n_cls        = n_cls,
     col_heads    = as.numeric(config$col_nhead %||% 8),
     row_heads    = as.numeric(config$row_nhead %||% 8),
     icl_heads    = as.numeric(config$icl_nhead %||% 8),

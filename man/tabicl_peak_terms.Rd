@@ -16,7 +16,7 @@ already be the resident chunk (see \code{\link[=.resident_query]{.resident_query
 }
 \description{
 Three stages with three different peaks, so the estimate takes the
-maximum: the column embedder is wide (\verb{rows x column-groups x embed_dim}) but kept linear in rows by its inducing points, the row
+maximum: the column embedder is wide (\verb{rows x (columns + CLS slots) x embed_dim}) but kept linear in rows by its inducing points, the row
 interactor is the same width over a short sequence, and the in-context
 stage is quadratic in rows but only \code{embed_dim * row_num_cls} wide.
 Summing them would roughly treble the answer.

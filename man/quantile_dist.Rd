@@ -4,12 +4,15 @@
 \alias{quantile_dist}
 \title{Build a quantile distribution from a predicted grid}
 \usage{
-quantile_dist(grid, alpha)
+quantile_dist(grid, alpha, sorted = FALSE)
 }
 \arguments{
 \item{grid}{Numeric matrix \verb{(n_rows, n_levels)} of predicted quantiles.}
 
 \item{alpha}{Numeric vector of level probabilities, ascending.}
+
+\item{sorted}{\code{TRUE} when every row of \code{grid} is already ascending, as
+one sorted on the device is; the row-wise sort is then skipped.}
 }
 \description{
 Build a quantile distribution from a predicted grid

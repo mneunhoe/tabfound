@@ -702,6 +702,18 @@ tabpfn_forward <- function(net, x_train, y_train, x_test, col_emb,
   do.call(net, args)
 }
 
+# Would `cache` give `x_test` the answer an uncached pass over `x_train`
+# and `x_test` would? Yes, up to the float32 rounding of a different
+# batch shape, on every network whose cache holds only what the training
+# rows determine. v2.6 is the one that fits two masks over train and test
+# together, so its cache can disagree, and it is the one that says
+# `cache_needs_check` and answers the question itself.
+# @keywords internal
+tabpfn_cache_matches <- function(net, cache, x_train, x_test) {
+  if (!isTRUE(net$cache_needs_check)) return(TRUE)
+  isTRUE(net$cache_matches(cache, x_train, x_test))
+}
+
 
 #' Fit each member's pipeline once, for one `predict()` call
 #'
@@ -741,6 +753,10 @@ member_pipeline_store <- function(X_train, configs,
 #' forward pass per member over the training rows; after that a prediction
 #' costs only the test rows, however many batches they arrive in.
 #'
+#' All of them at once is what a persistent cache ([tabfound_cache()])
+#' keeps. A cache built for one `predict()` call is built a member at a
+#' time instead, by [build_member_kv_cache()], so only one is ever alive.
+#'
 #' Only backends whose network advertises `supports_kv_cache` can do this.
 #'
 #' @param net,col_emb Loaded network and column embeddings.
@@ -766,68 +782,155 @@ build_member_kv_caches <- function(net, col_emb, X_train, y_train, configs,
   pipelines <- pipelines %||%
     member_pipeline_store(X_tr, configs, categorical_features)
   lapply(seq_along(configs), function(i) {
-    cfg <- configs[[i]]
-    mem <- pipelines(i)
-    x_tr <- as_float_tensor(mem$X_train, device = device)$unsqueeze(1L)
-    y_tr <- as_float_tensor(
-      matrix(as.numeric(member_y(cfg, y_train)), ncol = 1L), device = device
-    )$squeeze(-1L)$unsqueeze(1L)
-    no_rows <- torch::torch_zeros(c(1L, 0L, x_tr$size(3)), device = device)
-    torch::with_no_grad(
-      tabpfn_forward(net, x_tr, y_tr, no_rows, col_emb, return_kv_cache = TRUE,
-                     save_peak_memory_factor = save_peak_memory_factor,
-                     row_chunk_size = row_chunk_size,
-                     col_chunk_size = col_chunk_size)
-    )$kv_cache
+    build_member_kv_cache(net, col_emb, i, y_train, configs, member_y,
+                          pipelines, device = device,
+                          save_peak_memory_factor = save_peak_memory_factor,
+                          row_chunk_size = row_chunk_size,
+                          col_chunk_size = col_chunk_size)
   })
 }
 
-
-#' Run a full ensemble prediction (regressor), averaging bar-dist probs.
+#' Build one ensemble member's KV cache
 #'
-#' Every member's output is re-binned onto the shared border grid before
-#' averaging, including members whose target transform is the identity.
-#' That looks redundant -- the source and destination grids are the same
-#' tensor -- but it is not: a `FullSupportBarDistribution` puts half-normal
-#' tails on its outer buckets, so evaluating its CDF at its own borders
-#' re-quantises the tail mass rather than reproducing it. Skipping the
-#' round trip for identity members shifts the predicted mean by ~1e-4 of
-#' its own scale, which is 500x the error that remains once it is done.
-#'
-#' @param net       Loaded `per_feature_transformer` (regressor head).
-#' @param col_emb   Pre-generated column embedding tensor.
-#' @param X_train,X_test Numeric matrices of raw inputs.
-#' @param y_train   Numeric vector of raw regression targets.
-#' @param configs   List of regressor ensemble-member specs; each must
-#'   have `target_transform = NULL`.
-#' @param borders   `torch_tensor` of length `n_bar_bins + 1` -- the
-#'   model's `criterion$borders`, which live in the **z-normalized
-#'   target space** (after Python's `(y - mean) / std` step). The
-#'   function un-standardizes at the end.
-#' @param member_weights Optional weight per member; `NULL` averages them
-#'   uniformly, which is the reference's combine and stays bit-identical
-#'   to it.
-#' @param return_members Also return each member's translated bucket
-#'   probabilities, as `$members` (a list of `(n_test, n_bins)` matrices).
-#' @return List with `mean`, `quantiles`, etc. on the RAW y scale.
+#' @inheritParams build_member_kv_caches
+#' @param i The member's index into `configs`.
+#' @param pipelines A [member_pipeline_store()] over the training rows.
+#' @return That member's cache.
 #' @keywords internal
-apply_ensemble_predict_regressor <- function(net, col_emb,
-                                              X_train, X_test, y_train,
-                                              configs, borders,
-                                              quantiles = c(0.1, 0.5, 0.9),
-                                              device = "cpu",
-                                              softmax_temperature = 1,
-                                              trace_dir = NULL,
-                                              categorical_features = integer(),
-                                              kv_caches = NULL,
-                                              save_peak_memory_factor = NULL,
-                                              row_chunk_size = NA_integer_,
-                                              col_chunk_size = NA_integer_,
-                                              pipelines = NULL,
-                                              member_weights = NULL,
-                                              return_members = FALSE) {
-  X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
-  storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
+build_member_kv_cache <- function(net, col_emb, i, y_train, configs, member_y,
+                                  pipelines, device = "cpu",
+                                  save_peak_memory_factor = NULL,
+                                  row_chunk_size = NA_integer_,
+                                  col_chunk_size = NA_integer_) {
+  mem <- pipelines(i)
+  x_tr <- as_float_tensor(mem$X_train, device = device)$unsqueeze(1L)
+  y_tr <- as_float_tensor(
+    matrix(as.numeric(member_y(configs[[i]], y_train)), ncol = 1L),
+    device = device
+  )$squeeze(-1L)$unsqueeze(1L)
+  no_rows <- torch::torch_zeros(c(1L, 0L, x_tr$size(3)), device = device)
+  torch::with_no_grad(
+    tabpfn_forward(net, x_tr, y_tr, no_rows, col_emb, return_kv_cache = TRUE,
+                   save_peak_memory_factor = save_peak_memory_factor,
+                   row_chunk_size = row_chunk_size,
+                   col_chunk_size = col_chunk_size)
+  )$kv_cache
+}
+
+
+#' Run every member over every chunk, one member at a time
+#'
+#' The ensemble's loop nest, turned inside out. Chunks outer and members
+#' inner is the natural order -- one chunk's answer is finished before the
+#' next starts -- but it means every member's KV cache has to be alive for
+#' the whole call, since each chunk needs all of them: eight members held
+#' eight caches at once. Members outer needs only the one being run. So
+#' each member's cache is built, used on every chunk, and dropped before
+#' the next member's is built.
+#'
+#' The arithmetic does not move. Every chunk keeps its own accumulator,
+#' and each one sees the members added in the same order, with the same
+#' weights, as it did when the chunk ran them all in turn; the finishing
+#' step then runs per chunk on the same shapes as before. Only the order
+#' in which the (member, chunk) passes are scheduled changes, and no pass
+#' reads another's result.
+#'
+#' @param X Matrix of test rows.
+#' @param chunk_size Max rows per pass.
+#' @param n_members Members to run: `length(configs)`, or 1 for a single
+#'   forward pass.
+#' @param steps `list(start, add, finish)`: `start(X_chunk)` makes a
+#'   chunk's accumulator, `add(acc, i, cache)` runs member `i` on it and
+#'   returns the updated accumulator, `finish(acc)` turns it into that
+#'   chunk's result. See [ensemble_steps_classifier()].
+#' @param member_cache Function of the member index returning its cache,
+#'   or `NULL` to run it uncached. Called once per member, and whatever it
+#'   returns is released before the next call.
+#' @return A list of per-chunk results, in row order.
+#' @keywords internal
+run_members_outer <- function(X, chunk_size, n_members, steps,
+                              member_cache = function(i) NULL) {
+  n <- nrow(X)
+  chunk_size <- as.integer(chunk_size)
+  starts <- seq(1L, max(n, 1L), by = chunk_size)
+  accs <- lapply(starts, function(s) {
+    steps$start(X[s:min(s + chunk_size - 1L, n), , drop = FALSE])
+  })
+  for (i in seq_len(n_members)) {
+    # Between members: the last one's cache was dropped below, but it is a
+    # torch allocation R's collector cannot see, and the next build would
+    # otherwise allocate beside it.
+    if (i > 1L) collect_between_chunks()
+    cache <- member_cache(i)
+    for (k in seq_along(accs)) {
+      if (k > 1L) collect_between_chunks()
+      accs[[k]] <- steps$add(accs[[k]], i, cache)
+    }
+    cache <- NULL
+  }
+  out <- vector("list", length(accs))
+  for (k in seq_along(accs)) {
+    out[[k]] <- steps$finish(accs[[k]])
+    accs[k] <- list(NULL)
+  }
+  out
+}
+
+
+# The cache a member's pass over one chunk uses, and the training tensor
+# it needs. `exact_cache_only` is set for a cache `predict()` built on its
+# own initiative (`chunk_cache`), which may only be used where it gives
+# the uncached answer: a chunk it would not runs uncached instead. A
+# cache the caller asked for is used as asked.
+# @keywords internal
+.pick_cache <- function(net, cache, mem, X_te_t, device, exact_cache_only,
+                        trace_dir) {
+  train_t <- function() {
+    torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
+                        device = device)$unsqueeze(1L)
+  }
+  X_tr_t <- NULL
+  if (!is.null(cache) && isTRUE(exact_cache_only) &&
+      isTRUE(net$cache_needs_check)) {
+    X_tr_t <- train_t()
+    if (!tabpfn_cache_matches(net, cache, X_tr_t, X_te_t)) cache <- NULL
+  }
+  if (is.null(X_tr_t) && (is.null(cache) || !is.null(trace_dir))) {
+    X_tr_t <- train_t()
+  }
+  list(cache = cache, X_tr_t = X_tr_t)
+}
+
+
+#' The per-member steps of a regressor ensemble
+#'
+#' [apply_ensemble_predict_regressor()] taken apart, so the member loop
+#' can be driven from outside: by that function over one chunk, or by
+#' [run_members_outer()] over all of them a member at a time. The
+#' arguments are that function's, less the test rows (which `start()`
+#' takes) and the caches (which `add()` takes, one member's at a time).
+#'
+#' @inheritParams apply_ensemble_predict_regressor
+#' @param exact_cache_only Use a cache passed to `add()` only on a chunk
+#'   it gives the uncached answer; run the others uncached. See
+#'   [tabpfn_classifier()]'s `chunk_cache`.
+#' @return `list(start, add, finish)`; see [run_members_outer()].
+#' @keywords internal
+ensemble_steps_regressor <- function(net, col_emb, X_train, y_train,
+                                     configs, borders,
+                                     quantiles = c(0.1, 0.5, 0.9),
+                                     device = "cpu",
+                                     softmax_temperature = 1,
+                                     trace_dir = NULL,
+                                     categorical_features = integer(),
+                                     save_peak_memory_factor = NULL,
+                                     row_chunk_size = NA_integer_,
+                                     col_chunk_size = NA_integer_,
+                                     pipelines = NULL,
+                                     member_weights = NULL,
+                                     return_members = FALSE,
+                                     exact_cache_only = FALSE) {
+  X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
   pipelines <- pipelines %||%
     member_pipeline_store(X_tr, configs, categorical_features)
   y_raw <- as.numeric(y_train)
@@ -835,15 +938,14 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
   y_std  <- sqrt(mean((y_raw - y_mean) ^ 2)) + 1e-20   # population std + eps
   y_z    <- (y_raw - y_mean) / y_std
 
-  n_bins <- as.integer(borders$size(1)) - 1L
-  acc_probs <- NULL
-  members <- if (isTRUE(return_members)) vector("list", length(configs))
+  start <- function(X_test) {
+    X_te <- as.matrix(X_test); storage.mode(X_te) <- "double"
+    list(X_te = X_te, acc_probs = NULL,
+         members = if (isTRUE(return_members)) vector("list", length(configs)))
+  }
 
-  for (i in seq_along(configs)) {
+  add <- function(st, i, cache = NULL) {
     cfg <- configs[[i]]
-    # Between members: this iteration's transients are dead but R's gc
-    # cannot see the torch allocations holding them.
-    if (i > 1L) collect_between_chunks()
     mem <- pipelines(i)
 
     # Per-member y: optional target_transform (yeojohnson + StandardScaler)
@@ -857,17 +959,15 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
     # With a cache the network never looks at the training rows, so
     # transforming and uploading them is work whose whole result is
     # discarded -- which is the cost `kv_cache = TRUE` exists to avoid.
-    # The trace hook is the one consumer that still wants them.
-    cache <- if (is.null(kv_caches)) NULL else kv_caches[[i]]
-    want_train <- is.null(cache) || !is.null(trace_dir)
-    X_tr_t <- if (want_train) {
-      torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
-                          device = device)$unsqueeze(1L)
-    }
-    X_te_t <- torch::torch_tensor(transform_member_pipeline(X_te, mem),
+    # The trace hook is the one consumer that still wants them, and so is
+    # the check on a cache that has to give the uncached answer.
+    X_te_t <- torch::torch_tensor(transform_member_pipeline(st$X_te, mem),
                                    dtype = torch::torch_float(),
                                    device = device)$unsqueeze(1L)
-    y_tr_t <- if (want_train) {
+    picked <- .pick_cache(net, cache, mem, X_te_t, device, exact_cache_only,
+                          trace_dir)
+    cache <- picked$cache; X_tr_t <- picked$X_tr_t
+    y_tr_t <- if (!is.null(X_tr_t)) {
       torch::torch_tensor(y_for_model, dtype = torch::torch_float(),
                           device = device)$unsqueeze(1L)
     }
@@ -907,42 +1007,199 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
       }
     }
     probs <- translate_probs_across_borders_r(logits_c, frm = borders_t, to = borders)
-    if (!is.null(members)) members[[i]] <- as.matrix(probs$cpu())
+    if (!is.null(st$members)) st$members[[i]] <- as.matrix(probs$cpu())
     if (!is.null(member_weights)) probs <- probs * member_weights[[i]]
-    acc_probs <- if (is.null(acc_probs)) probs else acc_probs + probs
+    st$acc_probs <- if (is.null(st$acc_probs)) probs else st$acc_probs + probs
+    st
   }
-  avg_probs <- if (is.null(member_weights)) acc_probs / length(configs) else
-    acc_probs / sum(member_weights)
 
-  # The reference does
-  #   logits = (sum_members probs) / n ; logits = logits.log()
-  #   criterion.mean(logits) / criterion.icdf(logits, q)
-  # Taking the log and letting the head softmax it back is a round trip,
-  # but it is the reference's round trip -- and the head is not a plain
-  # weighted midpoint (see `bar_logits_to_mean()`'s half-normal tails),
-  # so the averaged probabilities have to go through it.
-  #
-  # The head summarises on the z-scale borders, and `* y_std + y_mean`
-  # happens afterwards in R doubles, as in tabpfn 9.x's
-  # `_logits_to_output()`. Both summaries are affine-equivariant in the
-  # borders, so this is the same distribution; rescaling the float32
-  # borders first instead leaves them no digits for the spread once
-  # `mean(y)` is large next to `sd(y)`.
-  pseudo_logits <- torch::torch_log(avg_probs)
+  finish <- function(st) {
+    avg_probs <- if (is.null(member_weights)) st$acc_probs / length(configs) else
+      st$acc_probs / sum(member_weights)
 
-  pred_mean <- bar_logits_to_mean(pseudo_logits, borders)
-  q <- bar_logits_to_quantiles(pseudo_logits, borders, quantiles)
+    # The reference does
+    #   logits = (sum_members probs) / n ; logits = logits.log()
+    #   criterion.mean(logits) / criterion.icdf(logits, q)
+    # Taking the log and letting the head softmax it back is a round trip,
+    # but it is the reference's round trip -- and the head is not a plain
+    # weighted midpoint (see `bar_logits_to_mean()`'s half-normal tails),
+    # so the averaged probabilities have to go through it.
+    #
+    # The head summarises on the z-scale borders, and `* y_std + y_mean`
+    # happens afterwards in R doubles, as in tabpfn 9.x's
+    # `_logits_to_output()`. Both summaries are affine-equivariant in the
+    # borders, so this is the same distribution; rescaling the float32
+    # borders first instead leaves them no digits for the spread once
+    # `mean(y)` is large next to `sd(y)`.
+    pseudo_logits <- torch::torch_log(avg_probs)
 
-  list(
-    mean       = as.numeric(pred_mean$cpu()) * y_std + y_mean,
-    quantiles  = as.matrix(q$cpu()) * y_std + y_mean,
-    avg_probs  = as.matrix(avg_probs$cpu()),
-    members    = members
-  )
+    pred_mean <- bar_logits_to_mean(pseudo_logits, borders)
+    q <- bar_logits_to_quantiles(pseudo_logits, borders, quantiles)
+
+    list(
+      mean       = as.numeric(pred_mean$cpu()) * y_std + y_mean,
+      quantiles  = as.matrix(q$cpu()) * y_std + y_mean,
+      avg_probs  = as.matrix(avg_probs$cpu()),
+      members    = st$members
+    )
+  }
+
+  list(start = start, add = add, finish = finish)
+}
+
+
+#' Run a full ensemble prediction (regressor), averaging bar-dist probs.
+#'
+#' Every member's output is re-binned onto the shared border grid before
+#' averaging, including members whose target transform is the identity.
+#' That looks redundant -- the source and destination grids are the same
+#' tensor -- but it is not: a `FullSupportBarDistribution` puts half-normal
+#' tails on its outer buckets, so evaluating its CDF at its own borders
+#' re-quantises the tail mass rather than reproducing it. Skipping the
+#' round trip for identity members shifts the predicted mean by ~1e-4 of
+#' its own scale, which is 500x the error that remains once it is done.
+#'
+#' One chunk of test rows, every member in turn. The predictor itself
+#' drives [ensemble_steps_regressor()] through [run_members_outer()]
+#' instead, which gives the same numbers a member at a time.
+#'
+#' @param net       Loaded `per_feature_transformer` (regressor head).
+#' @param col_emb   Pre-generated column embedding tensor.
+#' @param X_train,X_test Numeric matrices of raw inputs.
+#' @param y_train   Numeric vector of raw regression targets.
+#' @param configs   List of regressor ensemble-member specs; each must
+#'   have `target_transform = NULL`.
+#' @param borders   `torch_tensor` of length `n_bar_bins + 1` -- the
+#'   model's `criterion$borders`, which live in the **z-normalized
+#'   target space** (after Python's `(y - mean) / std` step). The
+#'   function un-standardizes at the end.
+#' @param member_weights Optional weight per member; `NULL` averages them
+#'   uniformly, which is the reference's combine and stays bit-identical
+#'   to it.
+#' @param return_members Also return each member's translated bucket
+#'   probabilities, as `$members` (a list of `(n_test, n_bins)` matrices).
+#' @return List with `mean`, `quantiles`, etc. on the RAW y scale.
+#' @keywords internal
+apply_ensemble_predict_regressor <- function(net, col_emb,
+                                              X_train, X_test, y_train,
+                                              configs, borders,
+                                              quantiles = c(0.1, 0.5, 0.9),
+                                              device = "cpu",
+                                              softmax_temperature = 1,
+                                              trace_dir = NULL,
+                                              categorical_features = integer(),
+                                              kv_caches = NULL,
+                                              save_peak_memory_factor = NULL,
+                                              row_chunk_size = NA_integer_,
+                                              col_chunk_size = NA_integer_,
+                                              pipelines = NULL,
+                                              member_weights = NULL,
+                                              return_members = FALSE) {
+  steps <- ensemble_steps_regressor(
+    net, col_emb, X_train, y_train, configs, borders,
+    quantiles = quantiles, device = device,
+    softmax_temperature = softmax_temperature, trace_dir = trace_dir,
+    categorical_features = categorical_features,
+    save_peak_memory_factor = save_peak_memory_factor,
+    row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
+    pipelines = pipelines, member_weights = member_weights,
+    return_members = return_members)
+  st <- steps$start(X_test)
+  for (i in seq_along(configs)) {
+    # Between members: this iteration's transients are dead but R's gc
+    # cannot see the torch allocations holding them.
+    if (i > 1L) collect_between_chunks()
+    st <- steps$add(st, i, if (is.null(kv_caches)) NULL else kv_caches[[i]])
+  }
+  steps$finish(st)
+}
+
+
+#' The per-member steps of a classifier ensemble
+#'
+#' [apply_ensemble_predict_classifier()] taken apart; see
+#' [ensemble_steps_regressor()].
+#'
+#' @inheritParams apply_ensemble_predict_classifier
+#' @inheritParams ensemble_steps_regressor
+#' @return `list(start, add, finish)`; see [run_members_outer()].
+#' @keywords internal
+ensemble_steps_classifier <- function(net, col_emb, X_train, y_train,
+                                      configs, n_classes,
+                                      device = "cpu",
+                                      softmax_temperature = 1,
+                                      trace_dir = NULL,
+                                      categorical_features = integer(),
+                                      save_peak_memory_factor = NULL,
+                                      row_chunk_size = NA_integer_,
+                                      col_chunk_size = NA_integer_,
+                                      pipelines = NULL,
+                                      member_weights = NULL,
+                                      return_members = FALSE,
+                                      exact_cache_only = FALSE) {
+  X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
+  pipelines <- pipelines %||%
+    member_pipeline_store(X_tr, configs, categorical_features)
+  y_int <- as.integer(y_train)
+
+  start <- function(X_test) {
+    X_te <- as.matrix(X_test); storage.mode(X_te) <- "double"
+    list(X_te = X_te, acc = array(0, dim = c(nrow(X_te), n_classes)),
+         members = if (isTRUE(return_members)) vector("list", length(configs)))
+  }
+
+  add <- function(st, i, cache = NULL) {
+    cfg <- configs[[i]]
+    mem <- pipelines(i)
+    y_perm <- cfg$class_perm[y_int + 1L]
+    # See the regressor: with a cache the training side is discarded.
+    X_te_t <- torch::torch_tensor(transform_member_pipeline(st$X_te, mem),
+                                   dtype = torch::torch_float(),
+                                   device = device)$unsqueeze(1L)
+    picked <- .pick_cache(net, cache, mem, X_te_t, device, exact_cache_only,
+                          trace_dir)
+    cache <- picked$cache; X_tr_t <- picked$X_tr_t
+    y_tr_t <- if (!is.null(X_tr_t)) {
+      torch::torch_tensor(as.numeric(y_perm), dtype = torch::torch_float(),
+                          device = device)$unsqueeze(1L)
+    }
+    out <- torch::with_no_grad({
+      tabpfn_forward(net, if (is.null(cache)) X_tr_t else NULL,
+                     if (is.null(cache)) y_tr_t else NULL, X_te_t, col_emb,
+                     kv_cache = cache,
+                     save_peak_memory_factor = save_peak_memory_factor,
+                     row_chunk_size = row_chunk_size,
+                     col_chunk_size = col_chunk_size)
+    })
+    logits <- out$logits[1, , 1:n_classes]
+    if (!is.null(st$members)) {
+      st$members[[i]] <- apply_class_permutation_inverse(
+        as.matrix(logits$cpu()), cfg$class_perm + 1L)
+    }
+    if (softmax_temperature != 1) logits <- logits / softmax_temperature
+    trace_member(trace_dir, i, X_tr_t$squeeze(1L), X_te_t$squeeze(1L),
+                 y_tr_t$squeeze(1L), out$logits$squeeze(1L))
+    probs  <- as.matrix(torch::nnf_softmax(logits, dim = -1L)$cpu())
+    probs  <- apply_class_permutation_inverse(probs, cfg$class_perm + 1L)
+    if (!is.null(member_weights)) probs <- probs * member_weights[[i]]
+    st$acc <- st$acc + probs
+    st
+  }
+
+  finish <- function(st) {
+    probs <- if (is.null(member_weights)) st$acc / length(configs) else
+      st$acc / sum(member_weights)
+    if (is.null(st$members)) probs else list(probs = probs, members = st$members)
+  }
+
+  list(start = start, add = add, finish = finish)
 }
 
 
 #' Run a full ensemble prediction (classifier), averaging probs across members.
+#'
+#' One chunk of test rows, every member in turn; see
+#' [apply_ensemble_predict_regressor()] for how the predictor runs it.
 #'
 #' @param net       Loaded `per_feature_transformer` (classifier head).
 #' @param col_emb   Pre-generated column embedding tensor (from
@@ -975,57 +1232,20 @@ apply_ensemble_predict_classifier <- function(net, col_emb,
                                                pipelines = NULL,
                                                member_weights = NULL,
                                                return_members = FALSE) {
-  X_tr <- as.matrix(X_train); X_te <- as.matrix(X_test)
-  storage.mode(X_tr) <- "double"; storage.mode(X_te) <- "double"
-  pipelines <- pipelines %||%
-    member_pipeline_store(X_tr, configs, categorical_features)
-  y_int <- as.integer(y_train)
-  acc <- array(0, dim = c(nrow(X_te), n_classes))
-  members <- if (isTRUE(return_members)) vector("list", length(configs))
-
+  steps <- ensemble_steps_classifier(
+    net, col_emb, X_train, y_train, configs, n_classes,
+    device = device, softmax_temperature = softmax_temperature,
+    trace_dir = trace_dir, categorical_features = categorical_features,
+    save_peak_memory_factor = save_peak_memory_factor,
+    row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
+    pipelines = pipelines, member_weights = member_weights,
+    return_members = return_members)
+  st <- steps$start(X_test)
   for (i in seq_along(configs)) {
-    cfg <- configs[[i]]
     if (i > 1L) collect_between_chunks()
-    mem <- pipelines(i)
-    y_perm <- cfg$class_perm[y_int + 1L]
-    # See the regressor: with a cache the training side is discarded.
-    cache <- if (is.null(kv_caches)) NULL else kv_caches[[i]]
-    want_train <- is.null(cache) || !is.null(trace_dir)
-    X_tr_t <- if (want_train) {
-      torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
-                          device = device)$unsqueeze(1L)
-    }
-    X_te_t <- torch::torch_tensor(transform_member_pipeline(X_te, mem),
-                                   dtype = torch::torch_float(),
-                                   device = device)$unsqueeze(1L)
-    y_tr_t <- if (want_train) {
-      torch::torch_tensor(as.numeric(y_perm), dtype = torch::torch_float(),
-                          device = device)$unsqueeze(1L)
-    }
-    out <- torch::with_no_grad({
-      tabpfn_forward(net, if (is.null(cache)) X_tr_t else NULL,
-                     if (is.null(cache)) y_tr_t else NULL, X_te_t, col_emb,
-                     kv_cache = cache,
-                     save_peak_memory_factor = save_peak_memory_factor,
-                     row_chunk_size = row_chunk_size,
-                     col_chunk_size = col_chunk_size)
-    })
-    logits <- out$logits[1, , 1:n_classes]
-    if (!is.null(members)) {
-      members[[i]] <- apply_class_permutation_inverse(
-        as.matrix(logits$cpu()), cfg$class_perm + 1L)
-    }
-    if (softmax_temperature != 1) logits <- logits / softmax_temperature
-    trace_member(trace_dir, i, X_tr_t$squeeze(1L), X_te_t$squeeze(1L),
-                 y_tr_t$squeeze(1L), out$logits$squeeze(1L))
-    probs  <- as.matrix(torch::nnf_softmax(logits, dim = -1L)$cpu())
-    probs  <- apply_class_permutation_inverse(probs, cfg$class_perm + 1L)
-    if (!is.null(member_weights)) probs <- probs * member_weights[[i]]
-    acc <- acc + probs
+    st <- steps$add(st, i, if (is.null(kv_caches)) NULL else kv_caches[[i]])
   }
-  probs <- if (is.null(member_weights)) acc / length(configs) else
-    acc / sum(member_weights)
-  if (is.null(members)) probs else list(probs = probs, members = members)
+  steps$finish(st)
 }
 
 

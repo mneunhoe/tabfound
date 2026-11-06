@@ -41,7 +41,10 @@ peak = max( floor,
   Between 0.6 GB and 2.7 GB depending on backend; 9.5 GB for TabFM.
 * **persistent** — the fitted context, plus one KV cache per ensemble
   member when `kv_cache = TRUE`. `kv_cache` does not save memory; it
-  moves it here out of the transient term.
+  moves it here out of the transient term. The TabPFN backends are the
+  exception to "per member": they build one member's cache, run it over
+  every chunk and drop it before the next, so the call holds one; only a
+  cache kept by `tabfound_cache()` holds every member's.
 * **transient** — the forward pass. The **maximum** over stages, never
   the sum: only one is live at a time. Each stage contributes four kinds
   of term: `act`, the activation a live block holds, multiplied by
@@ -141,6 +144,34 @@ it lifted every estimate for that backend by a factor of two. Those
 points now set `floor_bytes` and are excluded from the safety factor,
 which exists to cover the slope.
 
+**6. TabICL, re-measured 2026-11-06 (#68, #78).** Two of the numbers
+above were artefacts, and TabICL's constants were refitted from scratch
+once both were gone. The between-layer collection used to be a level-0
+one, which leaves promoted tensors alive; since #68 it is a full one
+above a 64 MB carried state, and the large points of the TabICL grid
+fell by a third to a half (4,096 × 120: 18.1 → 9.9 GB; 16,384 × 120:
+42.3 → 30.7 GB; 32,768 × 120, which used to die, finishes at 38.2 GB).
+And `tabicl_peak_terms()` sized the column tokens as `ceiling(p / 3)`
+where the network carries all p columns plus the four CLS slots, which
+is what an `act_copies` of 141 had been absorbing. With both corrected
+it is **28.5**, the pre-pass's 34 (the pre-pass is the very column stage
+an unchunked forward runs, so the two are the same order), and the
+safety factor 1.31. The grids measured under a load average of 30 came
+back up to 30% low at the top and were measured again on a quieter
+machine; treat the largest points as good to ±15%.
+
+The ensemble factor rose instead (0.68 → 1.03 per doubling). It is
+fitted at 800 × 32, where eight members add a near-constant 2 GB of
+allocator growth to a one-member transient of about 0.5 GB. The same
+sweep at 4,000 × 50 (`measurements/ensemble-tabicl-4000x50.json`) moves
+by 3% out to 32 members. The factor multiplies the transient, so it
+cannot describe a cost that is additive; the small point's factor is
+shipped because the large one does not contradict it, and multi-member
+estimates at working size are now the most conservative number the
+guard produces: 47.9 GB for eight members at 6,000 × 90, which measures
+10.7 GB. One member there is 13.3 against 10.0. At the small end the
+estimate is the 4.0 GB floor, against 1.0–2.5 GB measured.
+
 ### Where the estimator and the field reports still disagree
 
 The hand-off records TabICL completing a 6,426 × 90 fold in 66 s at its
@@ -173,7 +204,7 @@ exactly 1.
 | `tabpfn` | 12 | 6,400 | 1.00–2.00 | 1.42 | 2.1 GB |
 | `tabpfn26` | 12 | 6,400 | 1.00–2.22 | 1.28 | 2.4 GB |
 | `tabpfn3` | **21** | **32,768** | 1.00–1.59 | 1.33 | 2.4 GB |
-| `tabicl` | 12 | 6,400 | 1.00–1.97 | 1.43 | — |
+| `tabicl` | 40 of 44 | **32,768** | 1.00–1.96 | 1.31 | 4.0 GB |
 | `mitra` | 11 of 12 | 6,400 | 1.00–2.25 | 1.26 | — |
 | `tabfm` | 8 | 1,600 | 1.00–1.51 | 1.27 | 20.4 GB |
 
@@ -400,7 +431,12 @@ statistics, the inducing summary of each distribution-embedder block, the
 one-head key/value projections of each of the 24 ICL blocks, and the
 training rows' final embeddings, which the classifier's retrieval decoder
 reads. Every one of those is a function of the training rows alone, so
-the cached and uncached paths are the same computation.
+the cached and uncached paths answer the same question. They are not
+literally the same computation — the test rows go through without the
+training rows beside them, so the matmuls see other batch shapes — and
+agreement is promised only up to float32 rounding: a few 1e-7 on the
+logits where it has shown up, and bit-identical on the released v3 and
+v3.5 weights at every shape measured on this machine.
 
 **The other three backends pay nothing either**, for the same structural
 reason, but each holds a different shape of thing.
@@ -435,7 +471,17 @@ changes shape. The cost is memory. Mitra has no multi-query path, so
 every head has to be kept: `2 * n_layers * F * S * dim` floats, where `F`
 counts the target column. `print()` on the cache reports the figure.
 
-Either way it is off by default.
+Either way it is off by default. Off means nothing is *kept*, though: on
+the TabPFN backends a `predict()` call that spans two or more chunks
+builds a cache for itself (`chunk_cache = TRUE`, the default) — one
+member's at a time, used across that call's chunks and dropped — because
+that is where re-encoding the context per chunk costs the most. It is
+used only where it gives the uncached answer: bit for bit on v2.5; on
+v2.6 only for chunks whose two masks over train and that chunk equal the
+train-only ones, with any other chunk run uncached; within the float32
+rounding described below on v3 and v3.5. And it is built only when the
+estimate with the cache on comes back `"ok"`: the `persistent` term
+above is the gate. `chunk_cache = FALSE` re-encodes per chunk, as before.
 
 What the cache spares is the *forward pass* over the training rows. It
 used to spare only that: the member's preprocessing was still fitted, and
@@ -620,7 +666,8 @@ Six things it is careful about, because getting them wrong would make
 the number useless. A backend's stages have very different peaks, so the
 transient term is the largest one, not their sum. `kv_cache` does not
 save memory, it *moves* it — out of the transient term, into one cache
-per member held for the whole `predict()` call. An ensemble raises the
+per member held for the whole `predict()` call (on TabPFN, one member's
+cache at a time). An ensemble raises the
 peak, but nothing like `n_estimators ×`: members run sequentially, so the
 live set is one member's, while the resident high-water mark climbs
 roughly with `log2(n_estimators)` as the allocator takes bigger arenas and

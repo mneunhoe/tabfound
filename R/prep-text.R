@@ -111,10 +111,10 @@
 
 # Document-term counts over a fixed vocabulary, as a sparse matrix. An
 # n-gram outside the vocabulary is dropped, which is what `transform` does
-# with terms it did not see at fit.
+# with terms it did not see at fit. `ng` is `docs`' n-grams, when the
+# caller already has them.
 # @keywords internal
-.ngram_counts <- function(docs, vocabulary) {
-  ng <- .char_wb_ngrams(docs)
+.ngram_counts <- function(docs, vocabulary, ng = .char_wb_ngrams(docs)) {
   j <- match(ng$gram, vocabulary)
   keep <- !is.na(j)
   Matrix::sparseMatrix(
@@ -135,12 +135,12 @@
 #' `"b"` -- a different vocabulary order and so a different matrix.
 #'
 #' @param docs Character vector, `NA` already replaced by `""`.
+#' @param ng `.char_wb_ngrams(docs)`, when the caller already has it.
 #' @return A fit for [transform_tfidf()].
 #' @keywords internal
-fit_tfidf <- function(docs) {
-  ng <- .char_wb_ngrams(docs)
+fit_tfidf <- function(docs, ng = .char_wb_ngrams(docs)) {
   vocabulary <- sort(unique(ng$gram), method = "radix")
-  counts <- .ngram_counts(docs, vocabulary)
+  counts <- .ngram_counts(docs, vocabulary, ng)
   n <- nrow(counts)
   # Documents containing each term: nonzeros per column.
   df <- diff(counts@p)
@@ -155,10 +155,11 @@ fit_tfidf <- function(docs) {
 #' all-zero row (a missing string, or one sharing no n-gram with the
 #' vocabulary) stays all zero.
 #'
+#' @inheritParams fit_tfidf
 #' @return A `dgCMatrix`, documents by vocabulary.
 #' @keywords internal
-transform_tfidf <- function(docs, fit) {
-  x <- .ngram_counts(docs, fit$vocabulary)
+transform_tfidf <- function(docs, fit, ng = .char_wb_ngrams(docs)) {
+  x <- .ngram_counts(docs, fit$vocabulary, ng)
   # On the nonzeros directly, in the reference's operations: one multiply
   # by the column's idf, then one *division* by the row's norm. Scaling by
   # a reciprocal instead differs in the last bit, which is enough to land
@@ -179,36 +180,19 @@ transform_tfidf <- function(docs, fit) {
 # `m x n` matrix the result is `m x min(m, n)`, which is how the basis
 # shrinks when the matrix has fewer rows than the 40 columns asked for.
 #
-# The pivot is the first entry of largest magnitude in the column, as
-# LAPACK's `idamax` chooses it. Written out rather than taken from
-# `Matrix::lu()`, which only factorises square matrices.
+# `Matrix::lu()` on a dense matrix is LAPACK's `dgetrf`, which is what
+# scipy calls too: partial pivoting on the first entry of largest magnitude
+# in the column (`idamax`), for rectangular input as well as square.
+# `expand2()` gives `A = P1. %*% L %*% U` with `L` already `m x min(m, n)`.
+# The blocked `dgetrf` sums in another order than a column-at-a-time
+# elimination would, so the basis moves in the last bits only.
+#
+# A rank-deficient basis has an exactly zero pivot now and then. `dgetrf`
+# carries on past it, as scipy does; only the warning is switched off.
 # @keywords internal
 .lu_permute_l <- function(A) {
-  m <- nrow(A); n <- ncol(A); p <- min(m, n)
-  perm <- seq_len(m)
-  for (k in seq_len(p)) {
-    piv <- k - 1L + which.max(abs(A[k:m, k]))
-    if (piv != k) {
-      A[c(k, piv), ] <- A[c(piv, k), ]
-      perm[c(k, piv)] <- perm[c(piv, k)]
-    }
-    if (k < m && A[k, k] != 0) {
-      rows <- (k + 1L):m
-      A[rows, k] <- A[rows, k] / A[k, k]
-      if (k < n) {
-        cols <- (k + 1L):n
-        A[rows, cols] <- A[rows, cols] -
-          A[rows, k, drop = FALSE] %*% A[k, cols, drop = FALSE]
-      }
-    }
-  }
-  L <- A[, seq_len(p), drop = FALSE]
-  L[upper.tri(L)] <- 0
-  diag(L) <- 1
-  # `A[perm, ] = L U`, so the unpermuted rows of `L` are `P %*% L`.
-  PL <- matrix(0, m, p)
-  PL[perm, ] <- L
-  PL
+  e <- Matrix::expand2(Matrix::lu(A, warnSing = FALSE))
+  as.matrix(e$P1. %*% e$L)
 }
 
 # `svd_flip(u, v, u_based_decision = FALSE)`: make the largest-magnitude
@@ -317,9 +301,20 @@ randomized_svd <- function(M, n_components, seed = 0L, n_oversamples = 10L,
 #' @return A fit for [transform_string_encoder()].
 #' @keywords internal
 fit_string_encoder <- function(x, name, n_components = 30L, seed = 0L) {
+  .fit_string_encoder_encoded(x, name, n_components, seed)$fit
+}
+
+# `fit_string_encoder()`, also returning what `transform_string_encoder()`
+# makes of the training column -- the fit has already computed it, so a
+# caller about to encode the same column takes it from here. The n-grams
+# are built once, for the vocabulary and the counts both.
+# @keywords internal
+.fit_string_encoder_encoded <- function(x, name, n_components = 30L, seed = 0L) {
   docs <- .text_as_docs(x)
-  tfidf <- fit_tfidf(docs)
-  X <- transform_tfidf(docs, tfidf)
+  ng <- .char_wb_ngrams(docs)
+  tfidf <- fit_tfidf(docs, ng)
+  X <- transform_tfidf(docs, tfidf, ng)
+  rm(ng)
   k <- as.integer(n_components)
 
   if (min(dim(X)) > k) {
@@ -336,12 +331,22 @@ fit_string_encoder <- function(x, name, n_components = 30L, seed = 0L) {
   scaling <- .block_scaling_factor(result)
   n_out <- ncol(result)
   digits <- nchar(as.character(n_out - 1L))
-  structure(
+  fit <- structure(
     list(name = name, tfidf = tfidf, projection = projection, mode = mode,
          n_out = n_out, scaling = scaling,
          outputs = sprintf("%s_%0*d", name, digits, seq_len(n_out) - 1L)),
     class = "tabfound_string_fit"
   )
+  list(fit = fit, encoded = .finish_string_encoding(result, fit))
+}
+
+# The last step of an encoding, shared so that the training encoding the
+# fit hands back is the one `transform_string_encoder()` would make.
+# @keywords internal
+.finish_string_encoding <- function(result, fit) {
+  result <- result / fit$scaling
+  dimnames(result) <- list(NULL, fit$outputs)
+  result
 }
 
 #' Apply a fitted `StringEncoder`
@@ -360,9 +365,7 @@ transform_string_encoder <- function(x, fit) {
   } else {
     as.matrix(X[, seq_len(fit$n_out), drop = FALSE])
   }
-  result <- result / fit$scaling
-  dimnames(result) <- list(NULL, fit$outputs)
-  result
+  .finish_string_encoding(result, fit)
 }
 
 # `ToStr(convert_category = TRUE)` then `fill_nulls("")`: labels for a

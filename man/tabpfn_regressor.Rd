@@ -12,6 +12,7 @@ tabpfn_regressor(
   trace_dir = NULL,
   categorical_features = NULL,
   kv_cache = FALSE,
+  chunk_cache = TRUE,
   save_peak_memory_factor = NULL,
   row_chunk_size = NA_integer_,
   col_chunk_size = NA_integer_,
@@ -52,13 +53,44 @@ declaration here must agree with it.}
 call and reuse that across every prediction chunk and ensemble
 member, instead of rebuilding the whole context per chunk. Cuts the
 cost of predicting many rows from \code{n_members * n_chunks} passes over
-the training set to \code{n_members}. Off by default. On \code{tabpfn} and
-\code{tabpfn3} it is exactly equivalent to an uncached pass, because every
-statistic those architectures fit comes from the training rows alone.
-On \code{tabpfn26} it is not: that generation fits its constant-column and
-informative-feature masks over train and test together, so caching
-them can change the prediction -- see \code{\link[=tabpfn26_kv_cache]{tabpfn26_kv_cache()}}.
-Supported by the \code{tabpfn} (v2.5), \code{tabpfn26} and \code{tabpfn3} backends.}
+the training set to \code{n_members}. An ensemble builds one member's
+cache at a time, runs it over every chunk and drops it before
+building the next, so the call holds one cache rather than one per
+member; \code{\link[=tabfound_cache]{tabfound_cache()}} is what keeps every member's, on the model.
+Off by default, which means no cache is \emph{kept}; a call spanning
+several chunks may still build one for itself, see \code{chunk_cache}.
+
+How close a cached pass is to an uncached one depends on the
+generation. On \code{tabpfn} (v2.5) it is bit-identical. On \code{tabpfn3} and
+\code{tabpfn35} every statistic comes from the training rows alone, so it
+answers the same question, but it is not the same computation: the
+test rows reach the network without the training rows beside them, so
+every matmul sees a different batch shape and agreement is promised
+only up to float32 rounding (a few 1e-7 on the logits where it has
+been seen; bit-identical on the released weights in every case
+measured on CPU). On \code{tabpfn26} it can
+be a different answer: that generation fits its constant-column and
+informative-feature masks over train and test together, and a cache
+fits them on train alone -- see \code{\link[=tabpfn26_kv_cache]{tabpfn26_kv_cache()}}. With
+\code{kv_cache = TRUE} the cache is used regardless, as the reference does.
+Supported by the \code{tabpfn} (v2.5), \code{tabpfn26}, \code{tabpfn3} and
+\code{tabpfn35} backends.}
+
+\item{chunk_cache}{When the cache is off (\code{kv_cache = FALSE}, and none
+kept by \code{\link[=tabfound_cache]{tabfound_cache()}}) and a \code{predict()} call spans two or more
+\code{predict_chunk_size} chunks, condition on the training rows once for
+that call and reuse it across the chunks, instead of re-encoding the
+whole context for every chunk -- typically 1.5 to 3 times faster,
+more with more chunks and a larger training set. Nothing is kept: each member's cache is built, used and
+dropped within the call. It is used only where it gives the uncached
+answer -- bit for bit on \code{tabpfn}, within the float32 rounding
+\code{kv_cache} describes on \code{tabpfn3} and \code{tabpfn35}, and on \code{tabpfn26}
+only for chunks whose masks over train and that chunk equal the
+train-only ones; any other chunk runs uncached. It is also skipped
+when \code{\link[=estimate_peak_memory]{estimate_peak_memory()}} finds that the cache would not leave the
+call comfortable room. \code{TRUE} by default; \code{FALSE} re-encodes the
+context for every chunk, as before. \code{kv_cache = TRUE} overrides both
+checks.}
 
 \item{save_peak_memory_factor}{Integer, or \code{NULL} (default) to disable.
 Splits each sublayer's work into this many chunks, shrinking the
