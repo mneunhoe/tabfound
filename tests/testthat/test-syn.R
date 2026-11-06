@@ -56,6 +56,19 @@ test_that("every column is synthesised, with its own type and shape", {
 })
 
 
+test_that("an integer column with one observed 0/1 value stays an integer", {
+  # One distinct value is not a dummy to `.syn_column_plan()`, so it falls
+  # back to the imputation plan, which has to keep the storage mode too.
+  d <- syn_test_df()
+  d$one <- NA_integer_
+  d$one[1:3] <- 1L
+  s <- tabfound_syn(d, m = 1L, models = stub_models(), seed = 1L,
+                    verbose = FALSE)
+  expect_type(s$syn[[1]]$one, "integer")
+  expect_true(all(s$syn[[1]]$one %in% c(1L, NA)))
+})
+
+
 test_that("a seed makes the whole synthesis reproducible", {
   d <- syn_test_df()
   a <- tabfound_syn(d, m = 2L, models = stub_models(), seed = 42L,
