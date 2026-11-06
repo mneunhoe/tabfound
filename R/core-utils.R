@@ -262,6 +262,45 @@ set_names <- function(x, nms) {
   x
 }
 
+# Seeding without touching the caller's stream. A bare `set.seed()` inside
+# a fit replaces the caller's `.Random.seed`, so every draw after the fit
+# is the same whatever the caller seeded -- a cross-validation or
+# simulation loop around it would repeat itself. These save the state on
+# entry and put it back when `envir`'s function exits, removing it again
+# if there was none (a fresh session has no `.Random.seed` until the first
+# draw). withr does the same, but it is only a suggested package.
+#
+# `.local_rng()` only schedules the restore, for a function that seeds
+# repeatedly with `set.seed()`; `.local_seed()` also seeds once. The
+# restore runs `after = FALSE`, so with nested calls the state saved first
+# -- the caller's -- is the one put back last.
+# @keywords internal
+.local_rng <- function(envir = parent.frame()) {
+  genv <- globalenv()
+  state <- if (exists(".Random.seed", envir = genv, inherits = FALSE)) {
+    get(".Random.seed", envir = genv, inherits = FALSE)
+  }
+  restore <- function() {
+    if (is.null(state)) {
+      if (exists(".Random.seed", envir = genv, inherits = FALSE)) {
+        rm(".Random.seed", envir = genv)
+      }
+    } else {
+      assign(".Random.seed", state, envir = genv)
+    }
+  }
+  do.call(base::on.exit,
+          list(as.call(list(restore)), add = TRUE, after = FALSE),
+          envir = envir)
+  invisible(state)
+}
+
+# @rdname .local_rng
+.local_seed <- function(seed, envir = parent.frame()) {
+  .local_rng(envir)
+  set.seed(seed)
+}
+
 #' Locate a file shipped in `inst/`, falling back to a source checkout
 #'
 #' During development the package is often loaded with `pkgload::load_all()`

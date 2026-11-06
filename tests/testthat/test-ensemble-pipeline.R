@@ -258,6 +258,28 @@ test_that("the native generator writes configs its own pipeline can read", {
 })
 
 
+test_that("the native generator leaves the caller's random stream alone", {
+  y <- rnorm(nrow(X_tr))
+  gen <- function() {
+    generate_ensemble_configs_native(X_tr, y, n_estimators = 3L,
+                                     head = "regressor", variant = "v2.5")
+  }
+  set.seed(11)
+  before <- .Random.seed
+  a <- gen()
+  expect_identical(.Random.seed, before)
+
+  # A fresh session has no `.Random.seed`; the generator must not leave
+  # one behind -- and its members are seeded, so they come out the same.
+  withr::with_preserve_seed({
+    rm(".Random.seed", envir = globalenv())
+    b <- gen()
+    expect_false(exists(".Random.seed", envir = globalenv(), inherits = FALSE))
+  })
+  expect_identical(a, b)
+})
+
+
 test_that("the forward helper only names arguments the network has", {
   # The predictors serve both TabPFN generations from one code path, and
   # v2.5's `forward` has no `kv_cache` or `save_peak_memory_factor`.

@@ -81,7 +81,8 @@ masses rather than as draws from the continuous part, e.g.
 
 \item{quantile_grid}{Number of quantile levels for \code{draw = "quantile"}.}
 
-\item{seed}{Optional integer seed.}
+\item{seed}{Optional integer seed. The run is seeded locally, so the
+caller's random number stream is left as it was.}
 
 \item{verbose}{Show a progress bar.}
 

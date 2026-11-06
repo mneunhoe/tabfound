@@ -488,7 +488,8 @@
 #'   masses rather than as draws from the continuous part, e.g.
 #'   `list(income = 0)`. `NA` is always treated this way.
 #' @param quantile_grid Number of quantile levels for `draw = "quantile"`.
-#' @param seed Optional integer seed.
+#' @param seed Optional integer seed. The run is seeded locally, so the
+#'   caller's random number stream is left as it was.
 #' @param verbose Show a progress bar.
 #' @param ... Passed to [tabfound_models()] when `models` is `NULL`.
 #' @return An object of class `tabfound_syn`:
@@ -522,7 +523,7 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
   cl        <- match.call()
   draw      <- match.arg(draw)
   draw_mode <- match.arg(draw_mode)
-  if (!is.null(seed)) set.seed(seed)
+  if (!is.null(seed)) .local_seed(seed)
 
   if (is.matrix(data)) data <- as.data.frame(data, stringsAsFactors = FALSE)
   if (!is.data.frame(data)) {
