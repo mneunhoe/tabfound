@@ -211,6 +211,22 @@ test_that("kv_cache moves bytes to persistent, and scales with members", {
   expect_gt(on$persistent_bytes, on1$persistent_bytes)
 })
 
+test_that("a TabPFN cache built per call is one member's, a kept one every member's", {
+  # The TabPFN predictors build a member's cache, run it over every chunk
+  # and drop it before the next, so `n_estimators` multiplies the cache
+  # only when `tabfound_cache()` has kept all of them on the model.
+  for (cfg in list(mem_config_tabpfn25(), mem_config_tabpfn3())) {
+    off   <- peak(cfg, kv_cache = FALSE, n_estimators = 8)
+    one   <- peak(cfg, kv_cache = TRUE,  n_estimators = 1)
+    eight <- peak(cfg, kv_cache = TRUE,  n_estimators = 8)
+    kept  <- peak(cfg, kv_cache = TRUE,  n_estimators = 8, kv_cache_kept = TRUE)
+    cache_one <- one$persistent_bytes - peak(cfg, n_estimators = 1)$persistent_bytes
+    expect_gt(cache_one, 0)
+    expect_equal(eight$persistent_bytes - off$persistent_bytes, cache_one)
+    expect_equal(kept$persistent_bytes - off$persistent_bytes, 8 * cache_one)
+  }
+})
+
 test_that("Mitra's cache costs gigabytes, and the estimate says so", {
   # Keys and values for every layer, each the full features x rows x dim.
   # This is why the cache is off by default, and why a preflight that

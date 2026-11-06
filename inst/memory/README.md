@@ -41,7 +41,10 @@ peak = max( floor,
   Between 0.6 GB and 2.7 GB depending on backend; 9.5 GB for TabFM.
 * **persistent** — the fitted context, plus one KV cache per ensemble
   member when `kv_cache = TRUE`. `kv_cache` does not save memory; it
-  moves it here out of the transient term.
+  moves it here out of the transient term. The TabPFN backends are the
+  exception to "per member": they build one member's cache, run it over
+  every chunk and drop it before the next, so the call holds one; only a
+  cache kept by `tabfound_cache()` holds every member's.
 * **transient** — the forward pass. The **maximum** over stages, never
   the sum: only one is live at a time. Each stage contributes four kinds
   of term: `act`, the activation a live block holds, multiplied by
@@ -620,7 +623,8 @@ Six things it is careful about, because getting them wrong would make
 the number useless. A backend's stages have very different peaks, so the
 transient term is the largest one, not their sum. `kv_cache` does not
 save memory, it *moves* it — out of the transient term, into one cache
-per member held for the whole `predict()` call. An ensemble raises the
+per member held for the whole `predict()` call (on TabPFN, one member's
+cache at a time). An ensemble raises the
 peak, but nothing like `n_estimators ×`: members run sequentially, so the
 live set is one member's, while the resident high-water mark climbs
 roughly with `log2(n_estimators)` as the allocator takes bigger arenas and

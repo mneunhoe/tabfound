@@ -2134,15 +2134,17 @@ tabpfn35_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   k_edges <- min(as.numeric(config$cell_ecdf_num_buckets %||% 8192), n_context)
   ecdf_ctx <- 3 * n_features * k_edges
 
-  if (isTRUE(opts$kv_cache)) {
+  n_live <- .tabpfn_live_caches(opts, n_est)
+  if (n_live > 0) {
     # The cached path keeps `icl_num_kv_heads_test` heads rather than all
     # of them (one, in the published checkpoints), plus the training rows'
-    # embeddings and the ECDF context -- all of it once per member.
+    # embeddings and the ECDF context -- once per live member cache, which
+    # is one unless the cache is kept on the model.
     d_icl <- e * n_cls
     kv_heads <- as.numeric(config$icl_num_kv_heads_test %||% icl_heads)
     head_dim <- d_icl / max(icl_heads, 1)
-    terms$persistent <- n_est * (l * 2 * n_context * kv_heads * head_dim +
-                                 n_context * d_icl + ecdf_ctx)
+    terms$persistent <- n_live * (l * 2 * n_context * kv_heads * head_dim +
+                                  n_context * d_icl + ecdf_ctx)
   } else {
     terms$persistent <- terms$persistent + ecdf_ctx
   }
