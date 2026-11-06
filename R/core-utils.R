@@ -443,6 +443,14 @@ chunk_apply <- function(X, chunk_size, fn) {
     e <- min(s + as.integer(chunk_size) - 1L, n)
     fn(X[s:e, , drop = FALSE])
   })
+  .stack_chunks(parts, n)
+}
+
+# Stack per-chunk results the way `chunk_apply()` does, for a caller that
+# ran the chunks itself. One part is returned as it is.
+# @keywords internal
+.stack_chunks <- function(parts, n) {
+  if (length(parts) == 1L) return(parts[[1L]])
   stacked <- all(vapply(parts, function(p) !is.null(dim(p)), logical(1)))
   out <- if (stacked) do.call(rbind, parts) else do.call(c, parts)
   got <- if (stacked) nrow(out) else length(out)
@@ -470,6 +478,14 @@ chunk_apply <- function(X, chunk_size, fn) {
     e <- min(s + as.integer(chunk_size) - 1L, n)
     fn(X[s:e, , drop = FALSE])
   })
+  .stack_member_chunks(parts)
+}
+
+# Per-chunk lists of per-member results, stacked member by member. One
+# chunk is returned as it is.
+# @keywords internal
+.stack_member_chunks <- function(parts) {
+  if (length(parts) == 1L) return(parts[[1L]])
   lapply(seq_along(parts[[1L]]), function(m) {
     pieces <- lapply(parts, `[[`, m)
     if (is.null(dim(pieces[[1L]]))) do.call(c, pieces) else do.call(rbind, pieces)

@@ -199,3 +199,151 @@ test_that("v2.5's chunking leaves the cache paths alone", {
   # chunks is ragged, so its batch size differs and the last bits move.
   expect_lt(max(abs(a - b)), 1e-5 * max(abs(a)))
 })
+
+
+# ---------------------------------------------------------------------------
+# Member-at-a-time ensembles
+# ---------------------------------------------------------------------------
+#
+# A cached ensemble runs members outer and chunks inner, so only one
+# member's cache is alive. The question is whether that is still the
+# answer the old order gave -- chunks outer, every member in turn inside
+# each -- and it has to be the same answer bit for bit, weighted sums
+# included: each row still adds its members in the same order.
+
+tiny_v25_predictor <- function(head = "classifier", ...) {
+  torch::torch_manual_seed(7L)
+  net <- per_feature_transformer(tiny_v25_config(head))
+  net$eval()
+  ctx <- list(net = net, device = "cpu", config = tiny_v25_config(head))
+  if (head == "classifier") tabpfn_classifier(ctx, ...) else
+    tabpfn_regressor(ctx, ...)
+}
+
+tiny_v25_data <- function(task, n_tr = 48L, n_te = 23L, p = 5L) {
+  set.seed(61)
+  X <- matrix(rnorm((n_tr + n_te) * p), ncol = p)
+  eta <- X[, 1] - X[, 2]
+  y <- if (task == "classification") {
+    factor(cut(eta, c(-Inf, -0.5, 0.5, Inf), labels = c("a", "b", "c")))
+  } else eta + rnorm(length(eta), sd = 0.2)
+  list(X_tr = X[seq_len(n_tr), ], y_tr = y[seq_len(n_tr)],
+       X_te = X[n_tr + seq_len(n_te), ])
+}
+
+spec_net <- function(spec) environment(spec$fit)$net
+
+# The old order, kept as the reference: chunks outer, and each chunk
+# running every member against caches that are all alive at once.
+chunks_outer_classifier <- function(spec, state, X_te, chunk, cfg, caches,
+                                    w = NULL, return_members = FALSE) {
+  net <- spec_net(spec)
+  col <- load_column_embeddings()
+  fn <- function(ch) {
+    apply_ensemble_predict_classifier(
+      net, col, state$X_train, ch, state$y_train_int, cfg,
+      n_classes = length(state$class_levels), softmax_temperature = 0.9,
+      categorical_features = state$categorical_features,
+      kv_caches = caches, member_weights = w,
+      return_members = return_members)
+  }
+  if (return_members) {
+    .members_over_chunks(X_te, chunk, function(ch) fn(ch)$members)
+  } else chunk_apply(X_te, chunk, fn)
+}
+
+test_that("a cached classifier ensemble is bit-identical member-outer", {
+  dat <- tiny_v25_data("classification")
+  cfg <- generate_ensemble_configs_native(dat$X_tr, dat$y_tr,
+                                          n_estimators = 4L, random_state = 2L)
+  for (w in list(NULL, c(3, 1, 2, 0.5))) {
+    spec <- tiny_v25_predictor(ensemble_configs = cfg, kv_cache = TRUE,
+                               predict_chunk_size = 10L, member_weights = w)
+    state <- spec$fit(dat$X_tr, dat$y_tr)
+    caches <- spec$build_cache(state)
+    ref <- chunks_outer_classifier(spec, state, dat$X_te, 10L, cfg, caches,
+                                   w = w)
+    got <- spec$predict(state, dat$X_te, type = "prob")
+    expect_identical(unname(got), unname(ref))
+
+    # Uncached, the reordering is the same arithmetic again.
+    plain <- tiny_v25_predictor(ensemble_configs = cfg,
+                                predict_chunk_size = 10L, member_weights = w)
+    expect_identical(
+      unname(plain$predict(state, dat$X_te, type = "prob")),
+      unname(chunks_outer_classifier(plain, state, dat$X_te, 10L, cfg, NULL,
+                                     w = w)))
+
+    # A kept cache (every member, by design) gives the same numbers as one
+    # built a member at a time for the call.
+    kept <- state; kept$kv_caches <- caches
+    expect_identical(spec$predict(kept, dat$X_te, type = "prob"), got)
+
+    # And so do the members, chunk by chunk.
+    m <- spec$predict_members(state, dat$X_te)$logits
+    ref_m <- chunks_outer_classifier(spec, state, dat$X_te, 10L, cfg, caches,
+                                     w = w, return_members = TRUE)
+    expect_identical(lapply(m, unname), lapply(ref_m, unname))
+  }
+})
+
+test_that("a cached regressor ensemble is bit-identical member-outer", {
+  dat <- tiny_v25_data("regression")
+  cfg <- generate_ensemble_configs_native(dat$X_tr, dat$y_tr, head = "regressor",
+                                          n_estimators = 4L, random_state = 4L)
+  q <- c(0.1, 0.5, 0.9)
+  for (w in list(NULL, c(1, 2, 0.5, 3))) {
+    spec <- tiny_v25_predictor("regressor", ensemble_configs = cfg,
+                               kv_cache = TRUE, predict_chunk_size = 10L,
+                               member_weights = w)
+    state <- spec$fit(dat$X_tr, dat$y_tr)
+    caches <- spec$build_cache(state)
+    net <- spec_net(spec)
+    rows <- split(seq_len(nrow(dat$X_te)), ceiling(seq_len(nrow(dat$X_te)) / 10))
+    ref <- lapply(rows, function(r) {
+      apply_ensemble_predict_regressor(
+        net, load_column_embeddings(), state$X_train,
+        dat$X_te[r, , drop = FALSE], state$y_train, cfg,
+        borders = .regression_borders_of(net), quantiles = q,
+        softmax_temperature = 0.9,
+        categorical_features = state$categorical_features,
+        kv_caches = caches, member_weights = w, return_members = TRUE)
+    })
+    expect_identical(spec$predict(state, dat$X_te),
+                     unlist(lapply(ref, `[[`, "mean"), use.names = FALSE))
+    expect_identical(
+      unname(spec$predict(state, dat$X_te, type = "quantiles", quantiles = q)),
+      unname(do.call(rbind, lapply(ref, `[[`, "quantiles"))))
+    m <- spec$predict_members(state, dat$X_te)$probs
+    for (i in seq_along(m)) {
+      expect_identical(
+        m[[i]], unname(do.call(rbind, lapply(ref, function(r) r$members[[i]]))))
+    }
+  }
+})
+
+test_that("each member's cache is built, used on every chunk, then dropped", {
+  log <- character()
+  steps <- list(
+    start  = function(X) list(seen = character()),
+    add    = function(st, i, cache) {
+      log <<- c(log, sprintf("add %d/%s", i, cache))
+      st$seen <- c(st$seen, cache)
+      st
+    },
+    finish = function(st) st$seen
+  )
+  out <- run_members_outer(matrix(0, 25L, 2L), 10L, 3L, steps,
+                           member_cache = function(i) {
+                             log <<- c(log, sprintf("build %d", i))
+                             paste0("c", i)
+                           })
+  # The next member's cache is only built once the last one has served
+  # every chunk.
+  expect_identical(log, c(
+    "build 1", "add 1/c1", "add 1/c1", "add 1/c1",
+    "build 2", "add 2/c2", "add 2/c2", "add 2/c2",
+    "build 3", "add 3/c3", "add 3/c3", "add 3/c3"))
+  # Three chunks, each having seen the members in order.
+  expect_identical(out, rep(list(c("c1", "c2", "c3")), 3L))
+})

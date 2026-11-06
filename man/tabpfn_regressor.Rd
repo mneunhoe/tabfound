@@ -52,7 +52,11 @@ declaration here must agree with it.}
 call and reuse that across every prediction chunk and ensemble
 member, instead of rebuilding the whole context per chunk. Cuts the
 cost of predicting many rows from \code{n_members * n_chunks} passes over
-the training set to \code{n_members}. Off by default. On \code{tabpfn} and
+the training set to \code{n_members}. An ensemble builds one member's
+cache at a time, runs it over every chunk and drops it before
+building the next, so the call holds one cache rather than one per
+member; \code{\link[=tabfound_cache]{tabfound_cache()}} is what keeps every member's, on the model.
+Off by default. On \code{tabpfn} and
 \code{tabpfn3} it is exactly equivalent to an uncached pass, because every
 statistic those architectures fit comes from the training rows alone.
 On \code{tabpfn26} it is not: that generation fits its constant-column and

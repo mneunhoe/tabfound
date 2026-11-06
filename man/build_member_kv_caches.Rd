@@ -44,6 +44,10 @@ forward pass per member over the training rows; after that a prediction
 costs only the test rows, however many batches they arrive in.
 }
 \details{
+All of them at once is what a persistent cache (\code{\link[=tabfound_cache]{tabfound_cache()}})
+keeps. A cache built for one \code{predict()} call is built a member at a
+time instead, by \code{\link[=build_member_kv_cache]{build_member_kv_cache()}}, so only one is ever alive.
+
 Only backends whose network advertises \code{supports_kv_cache} can do this.
 }
 \keyword{internal}

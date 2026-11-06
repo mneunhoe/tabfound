@@ -1797,13 +1797,15 @@ tabpfn3_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   # v3's cached path keeps `icl_num_kv_heads_test` heads rather than all
   # of them (one, in the published checkpoints), so the cache is a
   # fraction of the width the other backends store -- plus the training
-  # rows' embeddings, which it also holds on to.
-  if (isTRUE(opts$kv_cache)) {
+  # rows' embeddings, which it also holds on to. One member's at a time
+  # unless the cache is kept on the model.
+  n_live <- .tabpfn_live_caches(opts, n_est)
+  if (n_live > 0) {
     d_icl <- e * n_cls
     kv_heads <- as.numeric(config$icl_num_kv_heads_test %||% icl_heads)
     head_dim <- d_icl / max(icl_heads, 1)
-    terms$persistent <- n_est * (l * 2 * n_context * kv_heads * head_dim +
-                                 n_context * d_icl)
+    terms$persistent <- n_live * (l * 2 * n_context * kv_heads * head_dim +
+                                  n_context * d_icl)
   }
   terms
 }

@@ -53,6 +53,7 @@ with \code{return_members}, a list of that (\verb{$probs}) and the members'
 logits (\verb{$members}, a list of \verb{(n_test, n_classes)} matrices).
 }
 \description{
-Run a full ensemble prediction (classifier), averaging probs across members.
+One chunk of test rows, every member in turn; see
+\code{\link[=apply_ensemble_predict_regressor]{apply_ensemble_predict_regressor()}} for how the predictor runs it.
 }
 \keyword{internal}
