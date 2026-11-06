@@ -1,5 +1,103 @@
 # tabfound (development version)
 
+* `predict(type = "quantiles")` and `predict(type = "sample")` on TabPFN
+  regressors decode every quantile or draw in one batched pass instead of
+  one at a time. With 199 quantiles on 5,000 rows that is about 3.5x
+  faster at under half the peak memory, and the results are bit-identical.
+  Single-pass sampling now runs the same chunked, cache-aware forward as
+  the mean and quantiles, so its peak no longer grows with `newdata` and
+  `kv_cache = TRUE` now applies to it. Seeded draws match the old ones up
+  to the forward's batch-size rounding (#64).
+* A cached TabPFN ensemble (`kv_cache = TRUE`) now builds one member's KV
+  cache at a time, runs it over every prediction chunk and drops it before
+  the next, so a `predict()` or `predict_members()` call holds one cache
+  instead of one per member. Peak memory with eight members falls by
+  roughly the size of seven caches (6.4 GB to 3.8 GB at 2,000 x 30 on
+  v2.5), and predictions are bit-identical. A cache kept by
+  `tabfound_cache()` still holds every member, and `estimate_peak_memory()`
+  now counts the cache this way (#65).
+* TabPFN `predict()` calls that span two or more `predict_chunk_size`
+  chunks now condition on the training rows once for the call instead of
+  once per chunk, building a temporary cache one ensemble member at a
+  time: 1.2-3x faster, more with larger training sets and more chunks. It
+  is used only where it gives the uncached answer (bit-identical on v2.5,
+  and on v2.6 per chunk, with a chunk whose constant or informative masks
+  differ run uncached), and only when `estimate_peak_memory()` says it
+  fits. Nothing is kept; `kv_cache = FALSE` still means no persistent
+  cache, and the new `chunk_cache = FALSE` turns this off (#66).
+* TabPFN ensemble regressors no longer build an `n_test x 5000` R matrix of
+  averaged bucket probabilities for `type = "mean"` and `"quantiles"`,
+  which only sampling read. Sampling now decodes those probabilities one
+  chunk at a time. At 20,000 test rows this cuts peak memory by 1.3 GB for
+  the mean and from 20.5 to 6.7 GB for a 100-draw sample. All outputs,
+  seeded samples included, are bit-identical (#67).
+* Between-layer garbage collections now become full collections once the
+  carried state reaches 64 MB (`tabfound.collect_full_min_bytes`), and
+  Mitra also collects between its sublayers. A level-0 pass left promoted
+  tensors alive, so one Mitra forward at 2,000 x 50 peaked at 26.6 GB and
+  is now 3.8 GB. TabICL at 6,000 x 90 went from 15.3 to 5.2 GB, and TabPFN
+  v2.5 at 6,000 x 60 from 12.7 to 4.1 GB resident. Predictions are
+  unchanged. The size gate also no longer skips states of 2 GB and more,
+  which an integer overflow had read as too small to collect (#68).
+* TabPFN v3/v3.5 attention now expands the single test-row key/value head
+  as a view instead of copying it to every query head, so cached
+  predictions no longer pile up a 2·H·N·D copy per layer: up to 1.9x
+  faster at small batches and gigabytes less peak memory, with
+  bit-identical results (#69).
+* The TabPFN v3/v3.5 many-class decoder now attends a block of at most 128
+  test rows at a time, collecting between blocks, and narrows its one-hot
+  labels to the classes present. It no longer materialises (B, 6, M, N)
+  attention scores (about 3.7 GB at M = 1,024, N = 50,000), results are
+  bit-identical, and the memory guard now counts the decoder (#70).
+* TabPFN v3.5 classifier KV caches now hold the decoder's projected keys
+  instead of the training row embeddings, so cached predictions no longer
+  recompute `mlp_classification` and `k_projection` over every training
+  row on each call (75 ms to 7 ms at 10,000 rows). v3 and v3.5 regressor
+  caches no longer store embeddings nothing reads, making caches and
+  `tabfound_save()` bundles 14-25% smaller. Caches saved before this still
+  load. Results are bit-identical (#71).
+* TabICL and TabFM KV-cache builds now honour `row_chunk_size`, and TabFM's
+  summary pre-pass row-chunks its first row stage. A cache build used to
+  run the column and row stages over every training row at once, so
+  turning `kv_cache` on gave back most of the row-chunking saving: at
+  6,000 x 90 with `row_chunk_size = 1024`, TabICL's peak RSS goes from
+  22 GB to 10 GB, at about 1.4x the build time, the same trade the
+  uncached chunked path makes. Results are identical when a chunk doesn't
+  bite, and otherwise move by about 1e-6 of scale, as the existing
+  chunking does (#72).
+* TabICL and Mitra skip final-layer work on context rows nothing reads:
+  TabICL's last ICL block and decoder now run on the test rows only, its
+  ICL cache build reuses each block's cached keys and values and skips the
+  discarded last block, its summary pre-pass skips the last column block's
+  unused half, and Mitra's last layer no longer runs the support stream
+  past its keys and values. All but the ICL query slicing are
+  bit-identical; that moves results by float32 rounding (about 1e-6 of
+  scale). TabICL's network now returns the test rows only, as its cached
+  path does (#73).
+* TabICL's column stage no longer runs the reserved CLS slots through its
+  set transformer only for the row stage to overwrite them; the CLS tokens
+  are prepended in the row stage instead. That takes 4/(p + 4) off the
+  column stage (about 23% of column + row time at p = 3). It regroups
+  float32 reductions, moving results by about 2e-6 of scale, within
+  parity tolerance. Caches saved by earlier versions still load (#74).
+* The TabICL regressor no longer sorts its 999-level quantile grid in R:
+  `type = "mean"` skips the sort and the tail fit, and the other types
+  sort on the device. About 15x faster post-processing for the mean and
+  4-5x for the rest, bit-identical on real weights (the mean can differ by
+  at most ~1e-15 where the grid crosses) (#75).
+* Expanding a text column at fit is about 1.8x faster: the randomized
+  SVD's LU step goes through LAPACK (`Matrix::lu()`) instead of an R loop,
+  and the training column's n-grams and projection are computed once
+  instead of up to four times. The encoded features move by at most
+  ~1e-12 (#76).
+* RoPE's split-half rotation (TabPFN v3/v3.5 column aggregation, TabICL's
+  row stage) now takes the two channel halves as views instead of copies,
+  about 2x faster in isolation and bit-identical in output (#77).
+* The memory guard no longer overestimates TabICL by 2-3x on a single
+  member. Its terms counted `ceiling(p / 3)` column tokens where TabICL
+  carries all p columns plus four CLS slots, and its calibration was
+  measured while #68 inflated the peaks. A 6,000 x 90 single-member
+  estimate falls from 26.8 to 13.3 GB (measured 10.0 GB) (#78).
 * Fixed TabICL and TabFM classifiers fitted on a factor with a level no
   training row has -- common in cross-validation folds, subsets, and any
   `tabfound()` fit, since hardhat keeps the outcome's levels. The class
