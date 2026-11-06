@@ -21,7 +21,8 @@ ensemble_steps_regressor(
   col_chunk_size = NA_integer_,
   pipelines = NULL,
   member_weights = NULL,
-  return_members = FALSE
+  return_members = FALSE,
+  exact_cache_only = FALSE
 )
 }
 \arguments{
@@ -45,6 +46,10 @@ to it.}
 
 \item{return_members}{Also return each member's translated bucket
 probabilities, as \verb{$members} (a list of \verb{(n_test, n_bins)} matrices).}
+
+\item{exact_cache_only}{Use a cache passed to \code{add()} only on a chunk
+it gives the uncached answer; run the others uncached. See
+\code{\link[=tabpfn_classifier]{tabpfn_classifier()}}'s \code{chunk_cache}.}
 }
 \value{
 \code{list(start, add, finish)}; see \code{\link[=run_members_outer]{run_members_outer()}}.

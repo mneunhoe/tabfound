@@ -742,6 +742,31 @@
   if (isTRUE(opts$kv_cache)) 1 else 0
 }
 
+# Does a cache `predict()` would build on its own initiative (TabPFN's
+# `chunk_cache`) fit beside the rest of the call?
+#
+# The `persistent` term already models it -- one member's cache, built
+# per call -- so this asks the guard's question with the cache on, and
+# builds only on a plain "ok". "tight" means the call is near the edge
+# already, and the cache would only push it closer; skipping it costs
+# time, not the session. Where the estimate cannot judge -- a device with
+# no constants, a machine it cannot probe -- it builds, keeping the same
+# silence the guard does.
+# @keywords internal
+.chunk_cache_fits <- function(ctx, task, n_context, n_query, n_features,
+                              opts) {
+  est <- tryCatch(
+    do.call(estimate_peak_memory,
+            c(list(ctx$config, n_context = n_context, n_query = n_query,
+                   n_features = n_features, backend = ctx$backend$name,
+                   device = ctx$device, task = task, kv_cache = TRUE),
+              opts)),
+    error = function(e) NULL,
+    warning = function(w) NULL
+  )
+  is.null(est) || est$verdict %in% c("ok", "unknown")
+}
+
 #' Terms for the column -> row -> in-context stack
 #'
 #' TabICL, TabFM and TabPFN v3 are the same three-stage shape with

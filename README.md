@@ -214,7 +214,10 @@ suggest_chunk_sizes("tabpfn-v3-classifier",
 or `...` in `tabfound()`:
 
 - `kv_cache = TRUE` processes the training rows once per `predict()` call
-  instead of once per batch. It is often about twice as fast.
+  instead of once per batch. It is often about twice as fast. The TabPFN
+  models already do this on their own when a call spans several batches,
+  wherever it leaves the answer unchanged; `chunk_cache = FALSE` turns
+  that off.
 - `row_chunk_size`, `col_chunk_size` (TabPFN v3/v3.5, TabICL, TabFM,
   Kumo Tabular) and
   `save_peak_memory_factor` (most models) trade speed for lower peak

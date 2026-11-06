@@ -702,6 +702,18 @@ tabpfn_forward <- function(net, x_train, y_train, x_test, col_emb,
   do.call(net, args)
 }
 
+# Would `cache` give `x_test` the answer an uncached pass over `x_train`
+# and `x_test` would? Yes, up to the float32 rounding of a different
+# batch shape, on every network whose cache holds only what the training
+# rows determine. v2.6 is the one that fits two masks over train and test
+# together, so its cache can disagree, and it is the one that says
+# `cache_needs_check` and answers the question itself.
+# @keywords internal
+tabpfn_cache_matches <- function(net, cache, x_train, x_test) {
+  if (!isTRUE(net$cache_needs_check)) return(TRUE)
+  isTRUE(net$cache_matches(cache, x_train, x_test))
+}
+
 
 #' Fit each member's pipeline once, for one `predict()` call
 #'
@@ -865,6 +877,31 @@ run_members_outer <- function(X, chunk_size, n_members, steps,
 }
 
 
+# The cache a member's pass over one chunk uses, and the training tensor
+# it needs. `exact_cache_only` is set for a cache `predict()` built on its
+# own initiative (`chunk_cache`), which may only be used where it gives
+# the uncached answer: a chunk it would not runs uncached instead. A
+# cache the caller asked for is used as asked.
+# @keywords internal
+.pick_cache <- function(net, cache, mem, X_te_t, device, exact_cache_only,
+                        trace_dir) {
+  train_t <- function() {
+    torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
+                        device = device)$unsqueeze(1L)
+  }
+  X_tr_t <- NULL
+  if (!is.null(cache) && isTRUE(exact_cache_only) &&
+      isTRUE(net$cache_needs_check)) {
+    X_tr_t <- train_t()
+    if (!tabpfn_cache_matches(net, cache, X_tr_t, X_te_t)) cache <- NULL
+  }
+  if (is.null(X_tr_t) && (is.null(cache) || !is.null(trace_dir))) {
+    X_tr_t <- train_t()
+  }
+  list(cache = cache, X_tr_t = X_tr_t)
+}
+
+
 #' The per-member steps of a regressor ensemble
 #'
 #' [apply_ensemble_predict_regressor()] taken apart, so the member loop
@@ -874,6 +911,9 @@ run_members_outer <- function(X, chunk_size, n_members, steps,
 #' takes) and the caches (which `add()` takes, one member's at a time).
 #'
 #' @inheritParams apply_ensemble_predict_regressor
+#' @param exact_cache_only Use a cache passed to `add()` only on a chunk
+#'   it gives the uncached answer; run the others uncached. See
+#'   [tabpfn_classifier()]'s `chunk_cache`.
 #' @return `list(start, add, finish)`; see [run_members_outer()].
 #' @keywords internal
 ensemble_steps_regressor <- function(net, col_emb, X_train, y_train,
@@ -888,7 +928,8 @@ ensemble_steps_regressor <- function(net, col_emb, X_train, y_train,
                                      col_chunk_size = NA_integer_,
                                      pipelines = NULL,
                                      member_weights = NULL,
-                                     return_members = FALSE) {
+                                     return_members = FALSE,
+                                     exact_cache_only = FALSE) {
   X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
   pipelines <- pipelines %||%
     member_pipeline_store(X_tr, configs, categorical_features)
@@ -918,16 +959,15 @@ ensemble_steps_regressor <- function(net, col_emb, X_train, y_train,
     # With a cache the network never looks at the training rows, so
     # transforming and uploading them is work whose whole result is
     # discarded -- which is the cost `kv_cache = TRUE` exists to avoid.
-    # The trace hook is the one consumer that still wants them.
-    want_train <- is.null(cache) || !is.null(trace_dir)
-    X_tr_t <- if (want_train) {
-      torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
-                          device = device)$unsqueeze(1L)
-    }
+    # The trace hook is the one consumer that still wants them, and so is
+    # the check on a cache that has to give the uncached answer.
     X_te_t <- torch::torch_tensor(transform_member_pipeline(st$X_te, mem),
                                    dtype = torch::torch_float(),
                                    device = device)$unsqueeze(1L)
-    y_tr_t <- if (want_train) {
+    picked <- .pick_cache(net, cache, mem, X_te_t, device, exact_cache_only,
+                          trace_dir)
+    cache <- picked$cache; X_tr_t <- picked$X_tr_t
+    y_tr_t <- if (!is.null(X_tr_t)) {
       torch::torch_tensor(y_for_model, dtype = torch::torch_float(),
                           device = device)$unsqueeze(1L)
     }
@@ -1081,6 +1121,7 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
 #' [ensemble_steps_regressor()].
 #'
 #' @inheritParams apply_ensemble_predict_classifier
+#' @inheritParams ensemble_steps_regressor
 #' @return `list(start, add, finish)`; see [run_members_outer()].
 #' @keywords internal
 ensemble_steps_classifier <- function(net, col_emb, X_train, y_train,
@@ -1094,7 +1135,8 @@ ensemble_steps_classifier <- function(net, col_emb, X_train, y_train,
                                       col_chunk_size = NA_integer_,
                                       pipelines = NULL,
                                       member_weights = NULL,
-                                      return_members = FALSE) {
+                                      return_members = FALSE,
+                                      exact_cache_only = FALSE) {
   X_tr <- as.matrix(X_train); storage.mode(X_tr) <- "double"
   pipelines <- pipelines %||%
     member_pipeline_store(X_tr, configs, categorical_features)
@@ -1111,15 +1153,13 @@ ensemble_steps_classifier <- function(net, col_emb, X_train, y_train,
     mem <- pipelines(i)
     y_perm <- cfg$class_perm[y_int + 1L]
     # See the regressor: with a cache the training side is discarded.
-    want_train <- is.null(cache) || !is.null(trace_dir)
-    X_tr_t <- if (want_train) {
-      torch::torch_tensor(mem$X_train, dtype = torch::torch_float(),
-                          device = device)$unsqueeze(1L)
-    }
     X_te_t <- torch::torch_tensor(transform_member_pipeline(st$X_te, mem),
                                    dtype = torch::torch_float(),
                                    device = device)$unsqueeze(1L)
-    y_tr_t <- if (want_train) {
+    picked <- .pick_cache(net, cache, mem, X_te_t, device, exact_cache_only,
+                          trace_dir)
+    cache <- picked$cache; X_tr_t <- picked$X_tr_t
+    y_tr_t <- if (!is.null(X_tr_t)) {
       torch::torch_tensor(as.numeric(y_perm), dtype = torch::torch_float(),
                           device = device)$unsqueeze(1L)
     }

@@ -267,7 +267,7 @@ test_that("a cached classifier ensemble is bit-identical member-outer", {
     expect_identical(unname(got), unname(ref))
 
     # Uncached, the reordering is the same arithmetic again.
-    plain <- tiny_v25_predictor(ensemble_configs = cfg,
+    plain <- tiny_v25_predictor(ensemble_configs = cfg, chunk_cache = FALSE,
                                 predict_chunk_size = 10L, member_weights = w)
     expect_identical(
       unname(plain$predict(state, dat$X_te, type = "prob")),
@@ -346,4 +346,102 @@ test_that("each member's cache is built, used on every chunk, then dropped", {
     "build 3", "add 3/c3", "add 3/c3", "add 3/c3"))
   # Three chunks, each having seen the members in order.
   expect_identical(out, rep(list(c("c1", "c2", "c3")), 3L))
+})
+
+
+# ---------------------------------------------------------------------------
+# A cache built for one predict() call: chunk_cache
+# ---------------------------------------------------------------------------
+
+# Counts the member caches built, and builds them.
+count_builds <- function(env = parent.frame()) {
+  n <- 0L
+  orig <- build_member_kv_cache
+  local_mocked_bindings(build_member_kv_cache = function(...) {
+    n <<- n + 1L
+    orig(...)
+  }, .env = env)
+  function() n
+}
+
+test_that("chunk_cache builds a cache only for a call of two or more chunks", {
+  dat <- tiny_v25_data("classification")
+  cfg <- generate_ensemble_configs_native(dat$X_tr, dat$y_tr,
+                                          n_estimators = 3L, random_state = 2L)
+  builds <- count_builds()
+  pred <- function(X, ...) {
+    spec <- tiny_v25_predictor(ensemble_configs = cfg,
+                               predict_chunk_size = 10L, ...)
+    spec$predict(spec$fit(dat$X_tr, dat$y_tr), X, type = "prob")
+  }
+
+  plain <- pred(dat$X_te, chunk_cache = FALSE)
+  expect_identical(builds(), 0L)
+  auto <- pred(dat$X_te)
+  # One per member, each built once for all three chunks.
+  expect_identical(builds(), 3L)
+  # Within the float32 rounding of the narrower batch: this random tiny
+  # network is not bit-exact the way the released v2.5 weights are.
+  expect_equal(auto, plain, tolerance = 1e-5)
+
+  # A single chunk has nothing to share a cache across.
+  pred(dat$X_te[1:10, ])
+  expect_identical(builds(), 3L)
+})
+
+test_that("chunk_cache steps aside where the cache would not fit", {
+  dat <- tiny_v25_data("regression")
+  builds <- count_builds()
+  spec <- tiny_v25_predictor("regressor", predict_chunk_size = 10L)
+  state <- spec$fit(dat$X_tr, dat$y_tr)
+  local_mocked_bindings(.chunk_cache_fits = function(...) FALSE)
+  plain <- tiny_v25_predictor("regressor", predict_chunk_size = 10L,
+                              chunk_cache = FALSE)$predict(state, dat$X_te)
+  expect_identical(spec$predict(state, dat$X_te), plain)
+  # The single pass builds through the predictor rather than the member
+  # builder, so ask the source directly.
+  src <- .cache_source(state, 23L, function(i) stop("built"),
+                       list(ctx = list(net = list(supports_kv_cache = TRUE)),
+                            kv_cache = FALSE, chunk_cache = TRUE,
+                            opts = list(predict_chunk_size = 10L)))
+  expect_null(src$get(1L))
+})
+
+test_that("the gate asks the memory estimate with the cache on", {
+  ctx <- list(config = tiny_v25_config(), backend = get_backend("tabpfn"),
+              device = "cpu")
+  opts <- list(n_estimators = 8L, predict_chunk_size = 1024L)
+  local_mocked_bindings(.system_memory = function() {
+    list(total = 64e9, available = 32e9, source = "test")
+  })
+  expect_true(.chunk_cache_fits(ctx, "classification", 2000, 5000, 30, opts))
+  local_mocked_bindings(.system_memory = function() {
+    list(total = 64e9, available = 1e6, source = "test")
+  })
+  expect_false(.chunk_cache_fits(ctx, "classification", 2000, 5000, 30, opts))
+  # A question the estimate cannot answer is not a reason to refuse.
+  expect_true(.chunk_cache_fits(list(config = list()), "classification",
+                                2000, 5000, 30, opts))
+})
+
+test_that("a chunk cache that cannot be built leaves the member uncached", {
+  dat <- tiny_v25_data("classification")
+  cfg <- generate_ensemble_configs_native(dat$X_tr, dat$y_tr,
+                                          n_estimators = 2L, random_state = 2L)
+  spec <- tiny_v25_predictor(ensemble_configs = cfg, predict_chunk_size = 10L)
+  state <- spec$fit(dat$X_tr, dat$y_tr)
+  plain <- tiny_v25_predictor(ensemble_configs = cfg, predict_chunk_size = 10L,
+                              chunk_cache = FALSE)$predict(state, dat$X_te,
+                                                           type = "prob")
+  local_mocked_bindings(build_member_kv_cache = function(...) stop("no room"))
+  expect_identical(spec$predict(state, dat$X_te, type = "prob"), plain)
+  # Asked for explicitly, the same failure is the caller's to see.
+  asked <- tiny_v25_predictor(ensemble_configs = cfg, predict_chunk_size = 10L,
+                              kv_cache = TRUE)
+  expect_error(asked$predict(state, dat$X_te, type = "prob"), "no room")
+})
+
+test_that("chunk_cache is TRUE or FALSE", {
+  expect_error(tiny_v25_predictor(chunk_cache = NA), "TRUE.*FALSE")
+  expect_error(tiny_v25_predictor(chunk_cache = "auto"), "TRUE.*FALSE")
 })

@@ -403,7 +403,12 @@ statistics, the inducing summary of each distribution-embedder block, the
 one-head key/value projections of each of the 24 ICL blocks, and the
 training rows' final embeddings, which the classifier's retrieval decoder
 reads. Every one of those is a function of the training rows alone, so
-the cached and uncached paths are the same computation.
+the cached and uncached paths answer the same question. They are not
+literally the same computation — the test rows go through without the
+training rows beside them, so the matmuls see other batch shapes — and
+agreement is promised only up to float32 rounding: a few 1e-7 on the
+logits where it has shown up, and bit-identical on the released v3 and
+v3.5 weights at every shape measured on this machine.
 
 **The other three backends pay nothing either**, for the same structural
 reason, but each holds a different shape of thing.
@@ -438,7 +443,17 @@ changes shape. The cost is memory. Mitra has no multi-query path, so
 every head has to be kept: `2 * n_layers * F * S * dim` floats, where `F`
 counts the target column. `print()` on the cache reports the figure.
 
-Either way it is off by default.
+Either way it is off by default. Off means nothing is *kept*, though: on
+the TabPFN backends a `predict()` call that spans two or more chunks
+builds a cache for itself (`chunk_cache = TRUE`, the default) — one
+member's at a time, used across that call's chunks and dropped — because
+that is where re-encoding the context per chunk costs the most. It is
+used only where it gives the uncached answer: bit for bit on v2.5; on
+v2.6 only for chunks whose two masks over train and that chunk equal the
+train-only ones, with any other chunk run uncached; within the float32
+rounding described below on v3 and v3.5. And it is built only when the
+estimate with the cache on comes back `"ok"`: the `persistent` term
+above is the gate. `chunk_cache = FALSE` re-encodes per chunk, as before.
 
 What the cache spares is the *forward pass* over the training rows. It
 used to spare only that: the member's preprocessing was still fitted, and
