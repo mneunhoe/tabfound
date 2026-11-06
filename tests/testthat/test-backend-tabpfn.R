@@ -39,6 +39,26 @@ test_that("the v2.5 network advertises both the cache and chunked evaluation", {
 })
 
 
+test_that("more classes than the head has are refused at fit()", {
+  # v2.5 used to accept them and fail at predict on a dimnames mismatch;
+  # v2.6 only once its forward pass saw the labels. The fit itself needs
+  # no network, only the head's width from the config.
+  X <- matrix(as.numeric(seq_len(2 * 24)), ncol = 2L)
+  y <- factor(paste0("c", rep(0:11, 2)))
+  for (arch in c("per_feature_transformer", "tabpfn_v2_6")) {
+    ctx <- list(net = list(), device = "cpu",
+                config = list(arch = arch, head = "classifier",
+                              n_out_classes = 10L))
+    spec <- tabpfn_classifier(ctx)
+    expect_error(spec$fit(X, y), "10-class head", info = arch)
+    expect_error(spec$fit(X, y), "has 12 classes", info = arch)
+    # Ten still fit.
+    keep <- y %in% levels(y)[1:10]
+    expect_no_error(spec$fit(X[keep, ], droplevels(y[keep])))
+  }
+})
+
+
 test_that("the v2.5 KV cache reproduces the forward it was built from", {
   net <- per_feature_transformer(tiny_v25_config())
   net$eval()

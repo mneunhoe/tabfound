@@ -134,7 +134,10 @@ tabpfn_task_of <- function(config) {
 # caller used, with its weights. Members weighted zero are dropped here,
 # once, so neither their pipelines nor their caches are ever built.
 # `weights` stays NULL for an unweighted ensemble: that is what keeps the
-# combine on the uniform path, bit for bit.
+# combine on the uniform path, bit for bit. `index` is where the survivors
+# sat in the ensemble the caller passed, which is what `predict_members()`
+# reports: renumbering them would point a caller's weights at the wrong
+# members.
 # @keywords internal
 .resolve_ensemble <- function(ensemble_configs_dir, ensemble_configs,
                               member_weights) {
@@ -152,7 +155,10 @@ tabpfn_task_of <- function(config) {
                     member configs, as {.fn generate_ensemble_configs_native} \\
                     returns.")
   }
-  if (is.null(member_weights)) return(list(configs = configs, weights = NULL))
+  if (is.null(member_weights)) {
+    return(list(configs = configs, weights = NULL,
+                index = if (!is.null(configs)) seq_along(configs)))
+  }
   if (is.null(configs)) {
     cli::cli_abort("{.arg member_weights} needs an ensemble: pass \\
                     {.arg ensemble_configs} or {.arg ensemble_configs_dir}.")
@@ -167,7 +173,7 @@ tabpfn_task_of <- function(config) {
     ))
   }
   keep <- w > 0
-  list(configs = configs[keep], weights = w[keep])
+  list(configs = configs[keep], weights = w[keep], index = which(keep))
 }
 
 # The categorical columns a fit uses.
@@ -380,6 +386,9 @@ tabpfn_classifier <- function(ctx,
                            member_weights)
   ensemble_configs <- ens$configs
   member_weights   <- ens$weights
+  member_index     <- ens$index
+  # The decoder's width, read the way both generations' networks read it.
+  n_out_classes    <- as.integer(ctx$config$n_out_classes %||% 10L)
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) {
@@ -392,6 +401,15 @@ tabpfn_classifier <- function(ctx,
     } else {
       levels_ <- sort(unique(y))
       y_int   <- match(y, levels_) - 1L
+    }
+    # Refused here, as TabICL and Mitra do: past the head's width v2.5
+    # fails only at predict, on a dimnames mismatch, and v2.6 only once
+    # the forward pass sees the labels.
+    if (length(levels_) > n_out_classes) {
+      cli::cli_abort(c(
+        "Target out of range for a {n_out_classes}-class head.",
+        x = "{.arg y} has {length(levels_)} classes."
+      ))
     }
     # Plain data only: this is what gets copied on fit and written by
     # `tabfound_save()`. The categorical schema is decided here, on the
@@ -509,9 +527,13 @@ tabpfn_classifier <- function(ctx,
                       return_members = TRUE)$members
     })
     # Zero-weight members were dropped with their configs, so every
-    # remaining one runs and `member_weights` is already aligned.
-    .classifier_members(members, state$class_levels, seq_along(members),
-                        member_weights, softmax_temperature, "mean_of_softmax")
+    # remaining one runs and `member_weights` is already aligned with
+    # them; `member_index` says where they sat in the full ensemble.
+    out <- .classifier_members(members, state$class_levels, seq_along(members),
+                               member_weights, softmax_temperature,
+                               "mean_of_softmax")
+    out$member_index <- member_index
+    out
   }
 
   list(fit = fit_fn, predict = predict_fn,
@@ -554,6 +576,7 @@ tabpfn_regressor <- function(ctx,
                            member_weights)
   ensemble_configs <- ens$configs
   member_weights   <- ens$weights
+  member_index     <- ens$index
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) {
@@ -747,7 +770,7 @@ tabpfn_regressor <- function(ctx,
     })
     list(probs = members,
          borders = as.numeric(borders$cpu()) * state$y_std + state$y_mean,
-         member_index = seq_along(members),
+         member_index = member_index,
          member_weights = member_weights,
          softmax_temperature = softmax_temperature,
          combine = "bar_mixture")

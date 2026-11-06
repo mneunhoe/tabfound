@@ -20,7 +20,7 @@ test_that("an ensemble comes from a directory or a list, not both", {
                "not both")
   expect_error(.resolve_ensemble(NULL, list(), NULL), "non-empty list")
   expect_identical(.resolve_ensemble(NULL, NULL, NULL),
-                   list(configs = NULL, weights = NULL))
+                   list(configs = NULL, weights = NULL, index = NULL))
 })
 
 test_that("member weights are checked against the ensemble", {
@@ -37,6 +37,10 @@ test_that("a member weighted zero is dropped before anything is built", {
   r <- .resolve_ensemble(NULL, cfgs, c(2, 0, 1))
   expect_identical(r$configs, cfgs[c(1L, 3L)])
   expect_identical(r$weights, c(2, 1))
+  # The survivors keep their positions in the ensemble the caller passed:
+  # that is what `predict_members()$member_index` reports.
+  expect_identical(r$index, c(1L, 3L))
+  expect_identical(.resolve_ensemble(NULL, cfgs, NULL)$index, 1:3)
 })
 
 test_that("the checkpoint's member menu is exported, and a custom one is checked", {
@@ -339,6 +343,8 @@ test_that("classifier: predict_members() reproduces predict(), weighted or not",
                tolerance = 1e-5, ignore_attr = TRUE)
   wm <- predict_members(wclf, dat$X_te)
   expect_length(wm$logits, 3L)
+  expect_identical(m$member_index, 1:4)
+  expect_identical(wm$member_index, c(1L, 2L, 4L))
   expect_equal(wm$member_weights, c(3, 1, 2) / 6)
   expect_equal(wm$logits, m$logits[c(1L, 2L, 4L)], tolerance = 1e-6)
 })
@@ -419,6 +425,8 @@ test_that("regressor: unit weights change nothing, and predict_members() reprodu
   expect_equal(predict(wreg, dat$X_te),
                as.numeric(bar_logits_to_mean(as_logits(wavg), borders)),
                tolerance = 1e-4)
+  expect_identical(m$member_index, 1:4)
+  expect_identical(predict_members(wreg, dat$X_te)$member_index, c(1L, 2L, 4L))
 })
 
 
