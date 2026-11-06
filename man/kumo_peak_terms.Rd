@@ -48,6 +48,11 @@ persistent; one kept on the model by \code{\link[=tabfound_cache]{tabfound_cache
 \item Past 10 classes (\code{opts$n_classes}), every member runs its \code{T}
 error-correcting sub-tasks as one batch, so every term -- the cache
 included -- is \code{T} times as large.
+\item Uncached, \code{opts$member_batch_size} members share a forward pass on
+the same leading axis, so every term of a pass is that many times as
+large again (a row-chunked pass's own cache included). The predictors
+pick the largest group this keeps comfortable; a cached call runs one
+member at a time and is not multiplied.
 }
 
 Columns are capped at the recipe's 500; categorical count columns,

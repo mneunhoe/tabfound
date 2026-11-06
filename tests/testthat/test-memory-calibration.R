@@ -16,7 +16,8 @@ measurements_dir <- tabfound:::tabfound_file("memory", "measurements")
 skip_if(!nzchar(measurements_dir) || !dir.exists(measurements_dir),
         "no stored memory measurements")
 
-# `ensemble-*.json`, `spmf-*.json` and `chunks-*.json` are knob sweeps:
+# `ensemble-*.json`, `spmf-*.json`, `chunks-*.json` and `member-batch-*.json`
+# are knob sweeps:
 # one dimension held fixed while a setting varies, which is a different
 # measurement with a different schema; they are checked separately below.
 measurement_files <- list.files(measurements_dir, pattern = "\\.json$",
@@ -24,6 +25,9 @@ measurement_files <- list.files(measurements_dir, pattern = "\\.json$",
 measurement_files <- measurement_files[
   !startsWith(basename(measurement_files), "ensemble-") &
     !startsWith(basename(measurement_files), "spmf-") &
+    # `member-batch-*.json` sweeps Kumo's members per pass; it is replayed
+    # in test-kumo-member-batch.R.
+    !startsWith(basename(measurement_files), "member-batch-") &
     # `chunks-*.json` alone: those hold one point's dimensions at the
     # top level and vary a setting beneath, so there is nothing per-row
     # to replay. `<backend>-chunked.json` *is* a size grid -- measured

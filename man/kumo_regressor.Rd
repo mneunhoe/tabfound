@@ -15,7 +15,8 @@ kumo_regressor(
   row_chunk_size = NULL,
   col_chunk_size = NULL,
   categorical_features = NULL,
-  member_weights = NULL
+  member_weights = NULL,
+  member_batch_size = NULL
 )
 }
 \arguments{
@@ -77,6 +78,27 @@ member weighted zero is never run. For the regressor this replaces
 the trimmed mean with a weighted mean: trimming drops members by
 rank, which has no weighted counterpart in the reference. \code{NULL} (the
 default) is the reference's combine, unchanged.}
+
+\item{member_batch_size}{Members per forward pass when no cache is in
+use. Every member is the same \verb{[rows, columns]} shape, so several can
+share one forward on the network's leading axis, as the
+error-correcting sub-tasks already do; that is faster, most of all at
+small contexts, but a group's peak memory grows with its size. \code{NULL}
+(the default) stacks members only where one member's pass is small
+-- context rows plus one chunk of query rows, times the sub-tasks
+above 10 classes, at most 4,000 -- since a larger pass already keeps
+the CPU busy and gains nothing from company (1.2 to 1.6 times as fast
+at 500 to 2,000 context rows with 8 members on the small regressor,
+no faster at 4,000). There it takes the largest group whose estimated
+peak (see \code{\link[=estimate_peak_memory]{estimate_peak_memory()}}) leaves comfortable room in the
+memory available now, and one member at a time -- the behaviour
+before this argument existed -- when no larger group does, or when
+there is no estimate to go on (a device without calibrated
+constants, which today is every device but the CPU). A whole
+number forces that group size, capped at the members run; \code{1} is one
+member at a time. A member's answer moves only by float32 rounding.
+A call that uses a cache (\code{kv_cache}, \code{chunk_cache}, or one kept by
+\code{\link[=tabfound_cache]{tabfound_cache()}}) runs one member at a time whatever this says.}
 }
 \description{
 Reproduces \code{sdm.models.KumoTabular(task = "regression")}: each member
