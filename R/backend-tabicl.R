@@ -1043,12 +1043,23 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
       blk <- .tabicl_member_out(net, dev, members$get(i), state$n_train, caches,
                                 i, row_chunk_size, save_peak_memory_factor,
                                 col_chunk_size)
-      grid <- as.matrix(blk$cpu())
       if (return_members) {
-        raw[[length(raw) + 1L]] <- invert_target_scaler(grid, state$scaler)
+        raw[[length(raw) + 1L]] <- invert_target_scaler(as.matrix(blk$cpu()),
+                                                        state$scaler)
         next
       }
-      stat <- quantile_dist_stat(grid, levels_, type, quantiles)
+      stat <- if (identical(type, "mean")) {
+        # A mean does not care about order, so the 999-level grid is not
+        # sorted at all. Where the grid has crossings the summation order
+        # differs from the reference's mean of the sorted grid, which moves
+        # the result by an ulp or two (1.4e-15 at most, measured).
+        rowMeans(as.matrix(blk$cpu()))
+      } else {
+        # Sorting each row in R is a per-row `apply()`; the device sorts
+        # the whole block at once, and to the same order.
+        grid <- as.matrix(torch::torch_sort(blk, dim = -1L)[[1]]$cpu())
+        quantile_dist_stat(grid, levels_, type, quantiles, sorted = TRUE)
+      }
       stat <- invert_target_scaler(stat, state$scaler)
       if (!is.null(member_weights)) stat <- stat * member_weights[[i]]
       acc <- if (is.null(acc)) stat else acc + stat
