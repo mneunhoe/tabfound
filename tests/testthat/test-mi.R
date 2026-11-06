@@ -255,6 +255,27 @@ test_that("as_mids produces a mids mice can work with", {
 })
 
 
+test_that("as_mids carries over cells that where over-imputes", {
+  skip_if_not_installed("mice")
+  set.seed(17)
+  d <- data.frame(a = rnorm(30), b = rnorm(30), c = rnorm(30))
+  d$a[1:4] <- NA
+  w <- is.na(d)
+  w[5:8, "a"] <- TRUE   # extra cells in a column that has NAs
+  w[1:3, "b"] <- TRUE   # cells in a fully observed column
+  imp <- tabfound_impute(d, m = 2L, models = stub_models(), maxit = 1L,
+                         where = w, seed = 17L, verbose = FALSE)
+  mids <- as_mids(imp)
+
+  expect_identical(unname(mids$where), unname(w))
+  for (k in 1:2) {
+    expect_equal(mice::complete(mids, k), imp$imputations[[k]],
+                 ignore_attr = TRUE)
+  }
+  expect_false(any(mice::complete(mids, 1)$b[1:3] == d$b[1:3]))
+})
+
+
 test_that("pooling recovers a known coefficient under MCAR", {
   skip_if_not_installed("mice")
   # The stub regressor is a correctly specified linear model with normal
