@@ -347,3 +347,32 @@ test_that("sampling uses the ensemble rather than one unensembled pass", {
   expect_identical(predict(reg, X[te, ], type = "sample", n_samples = 5L, seed = 3L),
                    predict(reg, X[te, ], type = "sample", n_samples = 5L, seed = 3L))
 })
+
+
+test_that("an ensemble's predictions move with an offset in the target", {
+  d <- Sys.getenv("TABFOUND_TABPFN_REG_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN_REG_DIR not configured")
+
+  # Rescaling the float32 borders to raw y before summarising gave a
+  # target of sd 1 around 1e6 a grid spacing of 1/16, and moved the mean
+  # by about 2 sd. The summaries are affine-equivariant, so shifting y has
+  # to shift every prediction by exactly as much.
+  set.seed(7)
+  X <- matrix(rnorm(360), 120)
+  y <- X[, 1] + 0.5 * X[, 2]^2 + rnorm(120, sd = 0.3)
+  cfg <- generate_ensemble_configs_native(X, y, n_estimators = 4L,
+                                          head = "regressor", variant = "v2.5",
+                                          random_state = 0L)
+  m <- tabular_regressor(d, ensemble_configs = cfg)
+  f0 <- fit(m, X, y); f1 <- fit(m, X, y + 1e6)
+  te <- X[1:8, ]
+
+  expect_equal(predict(f1, te) - 1e6, predict(f0, te), tolerance = 1e-6)
+  expect_equal(predict(f1, te, type = "quantiles") - 1e6,
+               predict(f0, te, type = "quantiles"), tolerance = 1e-6)
+  s0 <- predict(f0, te, type = "sample", n_samples = 200L, seed = 1L)
+  s1 <- predict(f1, te, type = "sample", n_samples = 200L, seed = 1L)
+  expect_equal(s1 - 1e6, s0, tolerance = 1e-6)
+  # And the draws still describe the distribution the mean does.
+  expect_lt(max(abs(rowMeans(s1) - predict(f1, te))), 0.15)
+})

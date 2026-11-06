@@ -9,7 +9,12 @@ kumo_recipe_inverse(rec, q, m)
 \arguments{
 \item{q}{Float32 tensor \verb{[n, Q]}.}
 }
+\value{
+A float64 tensor \verb{[n, Q]}.
+}
 \description{
-FlipSign's inverse then Standardize's, in float32, then sorted.
+FlipSign's inverse then Standardize's, then sorted. In float64, for the
+reason \code{\link[=kumo_recipe_target]{kumo_recipe_target()}} standardizes in it: in float32, the
+grid's spread would be lost in the added mean.
 }
 \keyword{internal}
