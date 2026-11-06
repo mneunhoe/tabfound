@@ -192,6 +192,41 @@ test_that("chunking a cached TabICL prediction agrees with the uncached one", {
       net(xq, NULL, kv_cache = cache, row_chunk_size = 100L))), base)
 })
 
+test_that("a TabICL cache build chunks its rows too", {
+  # The build used to run the column and row stages over every labelled
+  # row at once whatever `row_chunk_size` said, so turning the cache on
+  # gave back most of what chunking an uncached pass saves.
+  net <- tiny_tabicl()
+  set.seed(60)
+  n_tr <- 30L; n_te <- 9L
+  x <- torch::torch_randn(c(1L, n_tr + n_te, 6L))
+  y <- torch::torch_randint(0L, 3L, c(1L, n_tr))$to(dtype = torch::torch_float())
+  xt <- x[, 1:n_tr, ]
+  xq <- x[, (n_tr + 1L):(n_tr + n_te), ]
+  flat <- function(z) {
+    if (inherits(z, "torch_tensor")) list(as.array(z)) else do.call(c, lapply(z, flat))
+  }
+  ref <- torch::with_no_grad(net$build_kv_cache(xt, y))
+
+  # A chunk that cannot bite is the unchunked build, bit for bit.
+  for (rc in c(n_tr, 1000L)) {
+    same <- torch::with_no_grad(net$build_kv_cache(xt, y, row_chunk_size = rc))
+    expect_identical(flat(same[c("col_hidden", "icl_kv")]),
+                     flat(ref[c("col_hidden", "icl_kv")]))
+  }
+
+  base <- as.array(torch::with_no_grad(net(xq, NULL, kv_cache = ref)))
+  scale <- max(abs(base))
+  for (rc in c(1L, 7L, 16L)) {
+    got <- torch::with_no_grad(net$build_kv_cache(xt, y, row_chunk_size = rc))
+    # The summaries come from the same all-rows pre-pass either way; only
+    # what passes through them afterwards is chunked.
+    expect_identical(flat(got$col_hidden), flat(ref$col_hidden))
+    out <- as.array(torch::with_no_grad(net(xq, NULL, kv_cache = got)))
+    expect_lt(max(abs(out - base)), 1e-4 * scale)
+  }
+})
+
 test_that("the regressor chunks the same way the classifier does", {
   net <- tiny_tabicl("regressor")
   set.seed(55)
@@ -286,6 +321,51 @@ test_that("column-chunking the summary pre-pass changes nothing", {
     expect_lt(max(abs(as.array(lean$hidden[[i]]) - as.array(ref$hidden[[i]]))),
               1e-4 * max(abs(as.array(ref$hidden[[i]]))))
   }
+})
+
+test_that("TabICL's last layers skip the rows nothing reads", {
+  net <- tiny_tabicl()
+  set.seed(61)
+  n_tr <- 30L; n_te <- 9L
+  x <- torch::torch_randn(c(1L, n_tr + n_te, 7L))
+  y <- torch::torch_randint(0L, 3L, c(1L, n_tr))$to(dtype = torch::torch_float())
+  xt <- x[, 1:n_tr, ]
+  same <- function(a, b) all(mapply(torch::torch_equal, a, b))
+  icl <- net$icl_predictor
+  torch::with_no_grad({
+    # The last summary is taken from the last block's input, so skipping
+    # that block's second half changes no summary.
+    for (cc in list(NULL, 3L)) {
+      full <- net$col_embedder$build_hidden(xt, y, cc)
+      lean <- net$col_embedder$build_hidden(xt, y, cc, want_out = FALSE)
+      expect_null(lean$out)
+      expect_true(same(lean$hidden, full$hidden))
+    }
+
+    # The ICL cache, against the loop it replaces: every block run in
+    # full, its keys re-sliced from its own input.
+    r <- icl$add_target(net$stages_0_to_1(xt, y), y)
+    z <- r
+    ref_kv <- list()
+    for (blk in as.list(icl$tf_icl$blocks)) {
+      ref_kv[[length(ref_kv) + 1L]] <- blk$cache_kv(z)
+      z <- blk(z, train_size = n_tr)
+    }
+    got_kv <- icl$tf_icl$build_kv(r)
+    expect_true(same(lapply(got_kv, `[[`, "key"), lapply(ref_kv, `[[`, "key")))
+    expect_true(same(lapply(got_kv, `[[`, "value"),
+                     lapply(ref_kv, `[[`, "value")))
+
+    # The uncached pass decodes the test rows alone. Their queries now go
+    # through the last block without the labelled rows beside them, which
+    # moves float32 rounding and nothing else.
+    reps <- net$stages_0_to_1(x, y)
+    src <- icl$tf_icl(icl$add_target(reps, y), train_size = n_tr)
+    ref <- as.array(icl$decoder(icl$ln(src))[, (n_tr + 1L):(n_tr + n_te), ])
+    got <- as.array(net(x, y))
+  })
+  expect_equal(dim(got), dim(ref))
+  expect_lt(max(abs(got - ref)), 1e-5 * max(abs(ref)))
 })
 
 test_that("both TabICL chunk axes compose", {

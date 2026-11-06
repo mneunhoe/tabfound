@@ -47,6 +47,9 @@ they disagree, it is a different prediction. The clearest case is a
 column that is constant across the training rows and varies across the
 test rows: uncached, it survives and is used; cached, it was dropped
 before the cache existed. That is the reference's own behaviour, and
-the reason the cache is opt-in rather than automatic.
+the reason \code{kv_cache = TRUE} is opt-in. The cache a \code{predict()} call
+builds for itself (\code{chunk_cache}) checks the two masks chunk by chunk
+instead, with the network's \code{cache_matches()}, and runs any chunk
+where they disagree uncached.
 }
 \keyword{internal}

@@ -70,4 +70,9 @@ re-quantises the tail mass rather than reproducing it. Skipping the
 round trip for identity members shifts the predicted mean by ~1e-4 of
 its own scale, which is 500x the error that remains once it is done.
 }
+\details{
+One chunk of test rows, every member in turn. The predictor itself
+drives \code{\link[=ensemble_steps_regressor]{ensemble_steps_regressor()}} through \code{\link[=run_members_outer]{run_members_outer()}}
+instead, which gives the same numbers a member at a time.
+}
 \keyword{internal}

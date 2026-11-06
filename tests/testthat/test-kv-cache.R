@@ -67,6 +67,28 @@ test_that("a Mitra cache reproduces the forward it was built from, bit for bit",
 })
 
 
+test_that("Mitra's last layer skips the support stream without changing a bit", {
+  # The support and query rows are separate tensors, and only the query
+  # rows are decoded, so the last layer's support stream is dead work.
+  # Reference: every layer in full, as the forward used to run.
+  net <- tiny_mitra()
+  d <- mitra_inputs()
+  full <- torch::with_no_grad({
+    qe <- mitra_quantile_embedding(d$x_support, d$x_query)
+    ye <- net$y_embedding(d$y_support, d$x_query$size(2))
+    s <- torch::torch_cat(list(ye$support, net$x_embedding(qe$support)), dim = 3L)
+    q <- torch::torch_cat(list(ye$query, net$x_embedding(qe$query)), dim = 3L)
+    for (i in seq_along(net$layers)) {
+      out <- net$layers[[i]](s, q)
+      s <- out$support; q <- out$query
+    }
+    net$decode(q)
+  })
+  plain <- torch::with_no_grad(net(d$x_support, d$y_support, d$x_query))
+  expect_identical(as.array(plain), as.array(full))
+})
+
+
 test_that("one Mitra cache serves any split of the query rows", {
   net <- tiny_mitra()
   d <- mitra_inputs(q = 9L)
@@ -151,7 +173,9 @@ test_that("a TabICL cache reproduces the forward it was built from", {
   plain <- torch::with_no_grad(
     net(torch::torch_cat(list(x_tr, x_te), dim = 2L), y)
   )
-  plain_te <- as.array(plain[1, (n_tr + 1L):(n_tr + n_te), ])
+  # The uncached pass returns the test rows alone, as the cached one does.
+  expect_identical(as.integer(plain$size(2)), n_te)
+  plain_te <- as.array(plain[1, , ])
 
   cache <- torch::with_no_grad(net$build_kv_cache(x_tr, y))
   expect_s3_class(cache, "tabicl_kv_cache")
@@ -238,7 +262,7 @@ test_that("the TabICL regressor caches too", {
   cache <- torch::with_no_grad(net$build_kv_cache(x_tr, y))
   cached <- torch::with_no_grad(net(x_te, NULL, kv_cache = cache))
   expect_equal(as.array(cached[1, , ]),
-               as.array(plain[1, 17:21, ]), tolerance = 1e-5)
+               as.array(plain[1, , ]), tolerance = 1e-5)
 })
 
 
@@ -516,6 +540,25 @@ test_that("the TabFM predictor gives the same answer with the cache on", {
   a <- plain$predict(plain$fit(X, y), X_new, type = "prob")
   b <- cached$predict(cached$fit(X, y), X_new, type = "prob")
   expect_equal(a, b, tolerance = 1e-5)
+})
+
+
+test_that("a row-chunked cache build gives the uncached answer", {
+  # `row_chunk_size` now reaches the cache build as well as the forward,
+  # with a chunk that splits the 30 training rows. A chunk that dropped
+  # the target embedding of the labelled rows it carries would still run.
+  X <- cache_test_matrix(); y <- factor(rep(c("a", "b", "c"), length.out = 30L))
+  X_new <- cache_test_matrix(n = 22L, seed = 47L)
+  for (make in list(
+    function(...) tabicl_classifier(fake_ctx(tiny_tabicl()), n_estimators = 2L, ...),
+    function(...) tabfm_classifier(fake_ctx(tiny_tabfm()), n_estimators = 2L, ...)
+  )) {
+    plain <- make()
+    cached <- make(kv_cache = TRUE, row_chunk_size = 8L)
+    a <- plain$predict(plain$fit(X, y), X_new, type = "prob")
+    b <- cached$predict(cached$fit(X, y), X_new, type = "prob")
+    expect_equal(a, b, tolerance = 1e-5)
+  }
 })
 
 

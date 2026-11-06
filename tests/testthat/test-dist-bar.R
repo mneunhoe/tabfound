@@ -68,6 +68,38 @@ test_that("sampling is reproducible under a seed and spans the support", {
 })
 
 
+test_that("the batched decode is the one-level-at-a-time decode, bit for bit", {
+  # Every level is decoded in one batched pass now; stacking the kept
+  # single-level form is what it replaced, and the two have to agree
+  # exactly for the regressor's quantiles and draws not to move.
+  set.seed(11)
+  borders <- torch::torch_tensor(sort(rnorm(201, sd = 3)),
+                                 dtype = torch::torch_float())
+  logits <- torch::torch_tensor(matrix(rnorm(37 * 200, sd = 4), nrow = 37),
+                                dtype = torch::torch_float())
+  for (qs in list(0.5, c(0.1, 0.5, 0.9), 1:199 / 200)) {
+    looped <- torch::torch_stack(lapply(qs, function(q) {
+      bar_logits_to_quantile_single(logits, borders, q)
+    }), dim = -1L)
+    expect_true(torch::torch_equal(bar_logits_to_quantiles(logits, borders, qs),
+                                   looped), label = length(qs))
+  }
+
+  torch::torch_manual_seed(9L)
+  u <- torch::torch_rand(c(37L, 25L))
+  looped <- torch::torch_stack(lapply(seq_len(25L), function(k) {
+    bar_logits_to_quantile_single(logits, borders, u$select(dim = -1L, index = k))
+  }), dim = -1L)
+  expect_true(torch::torch_equal(
+    bar_logits_to_samples(logits, borders, 25L, seed = 9L), looped))
+
+  # A single row, without the row axis.
+  expect_true(torch::torch_equal(
+    bar_logits_to_quantiles(logits[1, ], borders, c(0.2, 0.7)),
+    bar_logits_to_quantiles(logits, borders, c(0.2, 0.7))[1, ]))
+})
+
+
 test_that("drawing a chunk at a time draws what one call over every row does", {
   set.seed(12)
   borders <- torch::torch_tensor(seq(-4, 4, length.out = 31),

@@ -71,9 +71,12 @@ to do about it:
 \item \code{weights_bytes} -- the checkpoint, resident for the object's life.
 Fixed. Only a smaller model changes it.
 \item \code{persistent_bytes} -- the fitted context and, when \code{kv_cache = TRUE},
-one cache per ensemble member held for the whole \code{predict()} call.
-\code{kv_cache} does not save memory; it \emph{moves} it here from the
-transient term, and multiplies it by \code{n_estimators}.
+the KV caches. \code{kv_cache} does not save memory; it \emph{moves} it here
+from the transient term. Most backends hold one cache per ensemble
+member for the whole \code{predict()} call, so \code{n_estimators} multiplies
+it; the TabPFN backends build and drop one member's at a time, and
+hold every member's only when \code{\link[=tabfound_cache]{tabfound_cache()}} keeps them on the
+model.
 \item \code{transient_bytes} -- the forward pass. The largest single stage, not
 the sum of them, and counted once for the whole ensemble: members
 run sequentially, so \code{n_estimators} does not multiply this.

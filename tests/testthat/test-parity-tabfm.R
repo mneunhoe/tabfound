@@ -163,6 +163,52 @@ test_that("chunking a cached TabFM prediction agrees with the uncached one", {
   }
 })
 
+test_that("a TabFM cache build chunks its rows too", {
+  # Both the build and the pre-pass's first row stage used to run over
+  # every training row at once whatever `row_chunk_size` said.
+  net <- tiny_tabfm()
+  b <- tiny_tabfm_batch(30L, 11L, 6L, seed = 97L)
+  xt <- b$x[, 1:30, ]; yt <- b$y[, 1:30]
+  xq <- b$x[, 31:41, ]
+  flat <- function(z) {
+    if (inherits(z, "torch_tensor")) list(as.array(z)) else do.call(c, lapply(z, flat))
+  }
+  ref <- torch::with_no_grad(net$build_kv_cache(xt, yt, b$train_size))
+
+  for (rc in c(30L, 1000L)) {
+    same <- torch::with_no_grad(
+      net$build_kv_cache(xt, yt, b$train_size, row_chunk_size = rc))
+    expect_identical(flat(same[c("col_hidden", "icl_kv")]),
+                     flat(ref[c("col_hidden", "icl_kv")]))
+  }
+
+  base <- as.array(torch::with_no_grad(net(xq, NULL, NULL, kv_cache = ref)))
+  scale <- max(abs(base))
+  for (rc in c(1L, 7L, 16L)) {
+    got <- torch::with_no_grad(
+      net$build_kv_cache(xt, yt, b$train_size, row_chunk_size = rc))
+    # The first column stage runs before anything is chunked.
+    expect_identical(flat(got$col_hidden[[1]]), flat(ref$col_hidden[[1]]))
+    out <- as.array(torch::with_no_grad(net(xq, NULL, NULL, kv_cache = got)))
+    expect_lt(max(abs(out - base)), 1e-4 * scale)
+  }
+})
+
+test_that("TabFM's pre-pass row stage chunks without changing the answer", {
+  net <- tiny_tabfm()
+  b <- tiny_tabfm_batch(30L, 0L, 6L, seed = 98L)
+  emb <- torch::with_no_grad(net$col_embedder(
+    net$cell_embedder(net$fill_missing(b$x), b$y, b$train_size, NULL),
+    b$train_size))
+  ref <- as.array(torch::with_no_grad(net$row_stage_1(emb)))
+  expect_identical(as.array(torch::with_no_grad(net$row_stage_1(emb, 30L))), ref)
+  for (rc in c(1L, 7L, 29L)) {
+    got <- as.array(torch::with_no_grad(net$row_stage_1(emb, rc)))
+    expect_equal(dim(got), dim(ref))
+    expect_lt(max(abs(got - ref)), 1e-5 * max(abs(ref)))
+  }
+})
+
 test_that("the TabFM regressor chunks the same way the classifier does", {
   net <- tiny_tabfm(is_classifier = FALSE)
   b <- tiny_tabfm_batch(26L, 7L, 5L, seed = 94L)

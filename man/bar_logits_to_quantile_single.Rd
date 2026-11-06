@@ -18,6 +18,8 @@ broadcastable to \code{logits$size()[-last]}.}
 \code{torch_tensor} shaped like \code{logits} without the last dim.
 }
 \description{
-Compute one inverse-CDF evaluation (a single quantile)
+The one-level-at-a-time form of \code{.bar_icdf()}, kept as the reference
+the batched decode is checked against: stacking this over the levels
+gives the same tensor, bit for bit.
 }
 \keyword{internal}
