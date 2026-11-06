@@ -603,8 +603,18 @@ inverse_target_transform_borders <- function(znorm_borders, tt_state) {
 load_ensemble_configs_from_dump <- function(dump_dir) {
   require_suggested("jsonlite")
   require_suggested("safetensors")
-  cfg <- jsonlite::fromJSON(file.path(dump_dir, "ensemble_configs.json"),
-                            simplifyVector = FALSE)
+  # A missing directory otherwise surfaces as jsonlite taking the path for
+  # JSON text: "lexical error: invalid char in json text".
+  json <- file.path(dump_dir, "ensemble_configs.json")
+  if (!file.exists(json)) {
+    cli::cli_abort(c(
+      "No ensemble configs at {.path {dump_dir}}.",
+      x = "{.file ensemble_configs.json} is missing -- the directory \\
+           may have been a {.fn tempfile} from another session.",
+      i = "Regenerate it with {.fn generate_ensemble_configs_native}."
+    ))
+  }
+  cfg <- jsonlite::fromJSON(json, simplifyVector = FALSE)
   read_t1 <- function(path) {
     if (!file.exists(path)) return(NULL)
     safetensors::safe_load_file(path, framework = "torch")
@@ -904,23 +914,28 @@ apply_ensemble_predict_regressor <- function(net, col_emb,
   avg_probs <- if (is.null(member_weights)) acc_probs / length(configs) else
     acc_probs / sum(member_weights)
 
-  # Post-process on the RAW y scale. The reference does
+  # The reference does
   #   logits = (sum_members probs) / n ; logits = logits.log()
   #   criterion.mean(logits) / criterion.icdf(logits, q)
-  # on a bar distribution whose borders were rescaled to raw y. Taking
-  # the log and letting the head softmax it back is a round trip, but it
-  # is the reference's round trip -- and the head is not a plain
+  # Taking the log and letting the head softmax it back is a round trip,
+  # but it is the reference's round trip -- and the head is not a plain
   # weighted midpoint (see `bar_logits_to_mean()`'s half-normal tails),
   # so the averaged probabilities have to go through it.
-  raw_borders <- borders * y_std + y_mean
+  #
+  # The head summarises on the z-scale borders, and `* y_std + y_mean`
+  # happens afterwards in R doubles, as in tabpfn 9.x's
+  # `_logits_to_output()`. Both summaries are affine-equivariant in the
+  # borders, so this is the same distribution; rescaling the float32
+  # borders first instead leaves them no digits for the spread once
+  # `mean(y)` is large next to `sd(y)`.
   pseudo_logits <- torch::torch_log(avg_probs)
 
-  pred_mean <- bar_logits_to_mean(pseudo_logits, raw_borders)
-  q <- bar_logits_to_quantiles(pseudo_logits, raw_borders, quantiles)
+  pred_mean <- bar_logits_to_mean(pseudo_logits, borders)
+  q <- bar_logits_to_quantiles(pseudo_logits, borders, quantiles)
 
   list(
-    mean       = as.numeric(pred_mean$cpu()),
-    quantiles  = as.matrix(q$cpu()),
+    mean       = as.numeric(pred_mean$cpu()) * y_std + y_mean,
+    quantiles  = as.matrix(q$cpu()) * y_std + y_mean,
     avg_probs  = as.matrix(avg_probs$cpu()),
     members    = members
   )

@@ -81,7 +81,8 @@ completed data -- the place to squeeze a draw into a plausible range
 or enforce a constraint. mice's \code{post} is a string evaluated inside
 its sampler; a function is the same idea without the reach-in.}
 
-\item{seed}{Optional integer seed.}
+\item{seed}{Optional integer seed. The run is seeded locally, so the
+caller's random number stream is left as it was.}
 
 \item{verbose}{Show a progress bar.}
 

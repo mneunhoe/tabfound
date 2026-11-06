@@ -600,3 +600,72 @@ test_that("predict_members() goes through the model API for every backend", {
   expect_length(m$logits, 3L)
   expect_identical(m$combine, "softmax_of_mean_logits")
 })
+
+
+# ---------------------------------------------------------------------------
+# Unused class levels
+# ---------------------------------------------------------------------------
+
+# A factor `y` whose level set includes a class no training row has, at
+# each position: the unused level shifts the codes of every level after
+# it, so first, middle and last each break a different assumption.
+unused_level_data <- function(at) {
+  set.seed(52L)
+  obs <- c("a", "b", "c")
+  after <- c(first = 0L, middle = 1L, last = 3L)[[at]]
+  cls <- rep(obs, length.out = 30L)
+  X <- matrix(stats::rnorm(30L * 4L), ncol = 4L)
+  list(X = X, y = factor(cls, levels = append(obs, "unused", after = after)),
+       X_new = matrix(stats::rnorm(9L * 4L), ncol = 4L))
+}
+
+# `exact` compares against the same fit with the level dropped, which is
+# what the reference wrappers' label encoding amounts to: the unused class
+# gets probability 0 and logit -Inf, and the rest is unchanged.
+expect_unused_level_ignored <- function(spec, at, label, exact = TRUE) {
+  d <- unused_level_data(at)
+  st <- spec$fit(d$X, d$y)
+  p <- spec$predict(st, d$X_new, type = "prob")
+  expect_identical(colnames(p), levels(d$y), label = label)
+  expect_equal(unname(rowSums(p)), rep(1, nrow(p)), tolerance = 1e-6,
+               label = label)
+  if (!exact) return(invisible())
+
+  ref_spec_st <- spec$fit(d$X, droplevels(d$y))
+  ref <- spec$predict(ref_spec_st, d$X_new, type = "prob")
+  expect_identical(unname(p[, "unused"]), rep(0, nrow(p)), label = label)
+  expect_equal(p[, colnames(ref)], ref, label = label)
+  expect_identical(as.character(spec$predict(st, d$X_new)),
+                   as.character(spec$predict(ref_spec_st, d$X_new)),
+                   label = label)
+
+  m <- spec$predict_members(st, d$X_new)
+  expect_identical(colnames(m$logits[[1]]), levels(d$y), label = label)
+  expect_true(all(m$logits[[1]][, "unused"] == -Inf), label = label)
+}
+
+test_that("every classifier: an unused level gets no probability, wherever it sits", {
+  for (nm in c("tabicl_clf", "tabfm_clf", "kumo_clf")) {
+    for (at in c("first", "middle", "last")) {
+      expect_unused_level_ignored(backend_cases()[[nm]]$make(), at,
+                                  paste(nm, at))
+    }
+  }
+  # Mitra still sizes its output by the level set, so the unused class
+  # keeps a little mass; only the shape of the answer is checked here.
+  for (at in c("first", "middle", "last")) {
+    expect_unused_level_ignored(backend_cases()$mitra_clf$make(), at,
+                                paste("mitra_clf", at), exact = FALSE)
+  }
+})
+
+test_that("TabPFN: an unused level keeps its column, wherever it sits", {
+  d <- Sys.getenv("TABFOUND_TABPFN_CLF_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN_CLF_DIR not configured")
+  # Like Mitra, TabPFN leaves the unused class a trace of mass rather than
+  # none, so only the shape is checked.
+  spec <- tabular_classifier(d)$spec
+  for (at in c("first", "middle", "last")) {
+    expect_unused_level_ignored(spec, at, paste("tabpfn", at), exact = FALSE)
+  }
+})

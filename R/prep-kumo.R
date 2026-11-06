@@ -14,8 +14,9 @@
 #
 #   target    classification: classes observed in the context, sorted by
 #             value, then a per-member cyclic shift (offsets from
-#             `randperm(K)` pools); regression: float32 standardization
-#             and a random sign per member
+#             `randperm(K)` pools); regression: standardization (in
+#             float64, where the reference has float32) and a random
+#             sign per member
 #   features  numerical columns:   numerical_processor(), random signs
 #             categorical columns: codes by sorted value (-1 unseen or
 #                                  missing), log-count columns for the
@@ -476,9 +477,10 @@ kumo_recipe_fit <- function(X, y, classification, categorical = NULL,
     }
     list(classes = classes, shifts = shifts)
   } else {
-    y32 <- torch::torch_tensor(matrix(as.numeric(y), ncol = 1L),
-                               dtype = torch::torch_float32())
-    st <- .kumo_standardize_fit(y32, eps = 0)
+    # In float64, not the reference's float32: see `kumo_recipe_target()`.
+    y64 <- torch::torch_tensor(matrix(as.numeric(y), ncol = 1L),
+                               dtype = torch::torch_float64())
+    st <- .kumo_standardize_fit(y64, eps = 0)
     signs <- vapply(seq_len(E), function(m) {
       1 - 2 * as.numeric(.kumo_bernoulli(c(1L, 1L), torch::torch_float32(), g))
     }, numeric(1))
@@ -661,6 +663,13 @@ kumo_recipe_member <- function(rec, X, m) {
 
 #' One member's target as the network sees it
 #'
+#' The reference standardizes in the dtype the target arrives in, which
+#' from pandas is float32: a target such as a year or a price, whose mean
+#' is large next to its spread, then reaches the network already rounded
+#' to a few values. Standardizing in float64 and casting the standardized
+#' values is the same transform with the rounding moved to where it is
+#' harmless; at ordinary scales it moves a value by about a float32 ulp.
+#'
 #' @inheritParams kumo_recipe_member
 #' @param y Context targets: 0-based class codes, or numbers.
 #' @return A long tensor of shifted codes, or a float32 tensor of signed
@@ -674,23 +683,22 @@ kumo_recipe_target <- function(rec, y, m) {
     if (K > 1L) code <- (code - t$shifts[m]) %% K
     return(torch::torch_tensor(code, dtype = torch::torch_long()))
   }
-  y32 <- torch::torch_tensor(as.numeric(y), dtype = torch::torch_float32())
-  mu <- torch::torch_tensor(t$mean, dtype = torch::torch_float32())
-  sc <- torch::torch_tensor(t$scale, dtype = torch::torch_float32())
-  ((y32 - mu)$div(sc)) * t$signs[m]
+  z <- (as.numeric(y) - t$mean) / t$scale * t$signs[m]
+  torch::torch_tensor(z, dtype = torch::torch_float32())
 }
 
 #' Undo one member's target transform on its quantile grid
 #'
-#' FlipSign's inverse then Standardize's, in float32, then sorted.
+#' FlipSign's inverse then Standardize's, then sorted. In float64, for the
+#' reason [kumo_recipe_target()] standardizes in it: in float32, the
+#' grid's spread would be lost in the added mean.
 #'
 #' @param q Float32 tensor `[n, Q]`.
+#' @return A float64 tensor `[n, Q]`.
 #' @keywords internal
 kumo_recipe_inverse <- function(rec, q, m) {
   t <- rec$target
-  mu <- torch::torch_tensor(t$mean, dtype = torch::torch_float32())
-  sc <- torch::torch_tensor(t$scale, dtype = torch::torch_float32())
-  out <- (q * t$signs[m]) * sc + mu
+  out <- (q$to(dtype = torch::torch_float64()) * t$signs[m]) * t$scale + t$mean
   torch::torch_sort(out, dim = -1L)[[1]]
 }
 

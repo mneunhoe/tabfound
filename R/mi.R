@@ -197,8 +197,9 @@ print.tabfound_models <- function(x, ...) {
 # though they are numeric. A continuous draw for a dummy is not a valid
 # value of that variable, and it breaks any downstream binomial model;
 # Amelia treats such columns as continuous, which is the behaviour this
-# deliberately does not copy. They are mapped back to numeric 0/1 so the
-# analysis model sees the type it started with.
+# deliberately does not copy. They are mapped back to 0/1, integer or
+# double as they came in, so the analysis model sees the type it started
+# with.
 # @keywords internal
 .mi_column_plan <- function(col, name = "x") {
   if (is.factor(col)) {
@@ -209,7 +210,7 @@ print.tabfound_models <- function(x, ...) {
                                               ordered = ord)))
   }
   if (is.character(col)) {
-    lv <- sort(unique(col[!is.na(col)]))
+    lv <- .code_point_levels(col)
     return(list(kind = "categorical",
                 to_model = function(x) factor(x, levels = lv),
                 restore  = function(x) as.character(x)))
@@ -233,9 +234,12 @@ print.tabfound_models <- function(x, ...) {
   if (is.numeric(col)) {
     obs <- col[!is.na(col)]
     if (anyNA(col) && length(obs) && all(obs %in% c(0, 1))) {
+      # Back to the storage mode it arrived in: a double written into an
+      # integer column converts its observed cells along with the drawn ones.
+      as_orig <- if (is.integer(col)) as.integer else as.numeric
       return(list(kind = "categorical",
                   to_model = function(x) factor(x, levels = c("0", "1")),
-                  restore  = function(x) as.numeric(as.character(x))))
+                  restore  = function(x) as_orig(as.character(x))))
     }
     if (is.integer(col)) {
       return(list(kind = "continuous",
@@ -588,7 +592,8 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #'   completed data -- the place to squeeze a draw into a plausible range
 #'   or enforce a constraint. mice's `post` is a string evaluated inside
 #'   its sampler; a function is the same idea without the reach-in.
-#' @param seed Optional integer seed.
+#' @param seed Optional integer seed. The run is seeded locally, so the
+#'   caller's random number stream is left as it was.
 #' @param verbose Show a progress bar.
 #' @param ... Passed to [tabfound_models()] when `models` is `NULL`.
 #' @return An object of class `tabfound_mi`:
@@ -628,7 +633,7 @@ tabfound_impute <- function(data, m = 5L, models = NULL, maxit = 5L,
   draw   <- match.arg(draw)
   proper <- .mi_resolve_proper(proper)
   proper_frac <- .mi_resolve_proper_frac(proper_frac)
-  if (!is.null(seed)) set.seed(seed)
+  if (!is.null(seed)) .local_seed(seed)
 
   if (is.matrix(data)) data <- as.data.frame(data, stringsAsFactors = FALSE)
   if (!is.data.frame(data)) {

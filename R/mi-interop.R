@@ -49,12 +49,17 @@ as_mids.tabfound_mi <- function(x, ...) {
   require_suggested("mice")
   # maxit = 0 runs no sampler: it returns the fully-formed object with
   # empty `imp` slots of exactly the right shape, which is the part that
-  # is tedious and version-sensitive to build by hand.
+  # is tedious and version-sensitive to build by hand. The slots are shaped
+  # by `where`, not by the NAs: a `where` that over-imputes observed cells
+  # needs a row in `imp` for each, or there is nowhere to put the draws.
   skel <- mice::mice(x$data, m = x$m, maxit = 0L, printFlag = FALSE,
+                     where = x$where,
                      remove.collinear = FALSE, remove.constant = FALSE)
 
   for (v in names(x$data)) {
-    if (x$nmis[[v]] == 0L || is.null(skel$imp[[v]])) next
+    # On `where`, not `nmis`: a fully observed column can still have
+    # over-imputed cells, and skipping it would hand mice the originals.
+    if (!any(x$where[, v]) || is.null(skel$imp[[v]])) next
     rows <- which(x$where[, v])
     im <- skel$imp[[v]]
     for (j in seq_len(x$m)) im[[j]] <- x$imputations[[j]][[v]][rows]
@@ -74,9 +79,6 @@ as_mids.tabfound_mi <- function(x, ...) {
     dn <- list(rownames(x$chain_mean), NULL, paste("Chain", seq_len(x$m)))
     skel$chainMean <- array(x$chain_mean, dim(x$chain_mean), dimnames = dn)
     skel$chainVar  <- array(x$chain_var,  dim(x$chain_var),  dimnames = dn)
-  }
-  if (!is.null(x$where) && identical(dim(skel$where), dim(x$where))) {
-    skel$where[] <- x$where
   }
   skel$visitSequence <- x$visit_sequence
   skel$iteration <- x$maxit
@@ -185,7 +187,9 @@ as_amelia.tabfound_mi <- function(x, ...) {
 #'
 #' Continuous targets are drawn from the regressor's predictive
 #' distribution, categorical ones from the classifier's predicted
-#' probabilities. Note that mice hands over an already-dummy-coded
+#' probabilities. A numeric 0/1 target counts as categorical, as it does
+#' in [tabfound_impute()], and comes back as 0/1 in `y`'s own type. Note
+#' that mice hands over an already-dummy-coded
 #' numeric design matrix, so factor predictors reach the model one column
 #' per contrast rather than as ordinal codes -- unlike
 #' [tabfound_impute()], which keeps them whole.
@@ -239,6 +243,14 @@ mice.impute.tabfound <- function(y, ry, x, wy = NULL, models = NULL,
   X_mis <- x[wy, , drop = FALSE]
 
   if (is.numeric(y) && !is.factor(y)) {
+    # A numeric 0/1 dummy goes to the classifier, as it does in
+    # tabfound_impute() (see `.mi_column_plan()`): a continuous draw is
+    # not a valid value of it, and breaks a downstream binomial model.
+    if (length(y[ry]) && all(y[ry] %in% c(0, 1))) {
+      lab <- mi_draw_factor(models$get("classification"), X_obs,
+                            factor(y[ctx], levels = c(0, 1)), X_mis)
+      return(if (is.integer(y)) as.integer(lab) else as.numeric(lab))
+    }
     out <- mi_draw_numeric(models$get("regression"), X_obs, as.numeric(y[ctx]),
                            X_mis, draw = draw)
     return(if (is.integer(y)) as.integer(round(out)) else out)
@@ -249,5 +261,5 @@ mice.impute.tabfound <- function(y, ry, x, wy = NULL, models = NULL,
                         as.factor(y[ctx]), X_mis)
   if (is.logical(y)) return(lab == "TRUE")
   if (is.character(y)) return(lab)
-  factor(lab, levels = levels(y))
+  factor(lab, levels = levels(y), ordered = is.ordered(y))
 }

@@ -56,6 +56,19 @@ test_that("every column is synthesised, with its own type and shape", {
 })
 
 
+test_that("an integer column with one observed 0/1 value stays an integer", {
+  # One distinct value is not a dummy to `.syn_column_plan()`, so it falls
+  # back to the imputation plan, which has to keep the storage mode too.
+  d <- syn_test_df()
+  d$one <- NA_integer_
+  d$one[1:3] <- 1L
+  s <- tabfound_syn(d, m = 1L, models = stub_models(), seed = 1L,
+                    verbose = FALSE)
+  expect_type(s$syn[[1]]$one, "integer")
+  expect_true(all(s$syn[[1]]$one %in% c(1L, NA)))
+})
+
+
 test_that("a seed makes the whole synthesis reproducible", {
   d <- syn_test_df()
   a <- tabfound_syn(d, m = 2L, models = stub_models(), seed = 42L,
@@ -67,6 +80,16 @@ test_that("a seed makes the whole synthesis reproducible", {
 
   expect_equal(a$syn, b$syn)
   expect_false(isTRUE(all.equal(a$syn, c3$syn)))
+})
+
+
+test_that("a seeded synthesis leaves the caller's random stream alone", {
+  d <- syn_test_df()
+  set.seed(1)
+  before <- .Random.seed
+  invisible(tabfound_syn(d, m = 1L, models = stub_models(), seed = 42L,
+                verbose = FALSE))
+  expect_identical(.Random.seed, before)
 })
 
 
@@ -164,6 +187,29 @@ test_that("method controls the loop and '' carries the real column through", {
   expect_error(tabfound_syn(d, models = stub_models(),
                             method = c(num = "classification")),
                "continuous")
+})
+
+
+test_that("a single-string method applies to the visit sequence only", {
+  # Recycled over every column, it gave the unvisited columns a method,
+  # so they were neither synthesised nor carried and came back all NA.
+  set.seed(41)
+  d <- data.frame(x = rnorm(40), y = rnorm(40), z = rnorm(40),
+                  g = factor(sample(c("a", "b"), 40, TRUE)))
+  s <- tabfound_syn(d, visit_sequence = c("x", "y"), method = "sample",
+                    models = stub_models(), seed = 42L, verbose = FALSE)
+  got <- s$syn[[1]]
+  expect_identical(colSums(is.na(got)), c(x = 0, y = 0, z = 0, g = 0))
+  expect_identical(got[c("z", "g")], d[c("z", "g")])
+  expect_identical(s$visit_sequence, c("x", "y"))
+  expect_identical(unname(s$method), c("sample", "sample", "", ""))
+
+  # An unvisited categorical column no longer trips the check that a
+  # scalar "regression" only targets continuous columns.
+  r <- tabfound_syn(d, visit_sequence = c("x", "y"), method = "regression",
+                    models = stub_models(), seed = 43L, verbose = FALSE)
+  expect_identical(r$syn[[1]][c("z", "g")], d[c("z", "g")])
+  expect_identical(unname(r$method[c("z", "g")]), c("", ""))
 })
 
 

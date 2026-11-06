@@ -348,10 +348,14 @@
 }
 
 # @keywords internal
-.syn_resolve_method <- function(method, meth, kind) {
+.syn_resolve_method <- function(method, meth, kind, visit = names(meth)) {
   ok <- c("regression", "classification", "sample", "")
+  # A single string is recycled over the visit sequence only. Columns
+  # outside it keep the empty method that marks them as carried through;
+  # recycling over every column gave them a method, so they were neither
+  # synthesised nor carried and came back all NA.
   if (is.null(names(method)) && length(method) == 1L) {
-    method <- stats::setNames(rep(method, length(meth)), names(meth))
+    method <- stats::setNames(rep(method, length(visit)), visit)
   }
   if (is.null(names(method))) {
     cli::cli_abort("{.arg method} must be a single string or a named vector.")
@@ -490,8 +494,9 @@
 #'   `predictors[v, w] == 1` means `w` is used to synthesise `v`. Entries
 #'   pointing at variables not yet generated are dropped with a warning.
 #'   Defaults to everything already available.
-#' @param method Optional per-variable override. A single string, or a
-#'   named vector indexed by column name. One of `"regression"`,
+#' @param method Optional per-variable override. A single string, which
+#'   applies to every column in `visit_sequence`, or a named vector
+#'   indexed by column name. One of `"regression"`,
 #'   `"classification"`, `"sample"` (a bootstrap of the observed values,
 #'   no model) or `""` (not synthesised — the real column is carried
 #'   through, which needs `k == nrow(data)`).
@@ -520,7 +525,8 @@
 #'   masses rather than as draws from the continuous part, e.g.
 #'   `list(income = 0)`. `NA` is always treated this way.
 #' @param quantile_grid Number of quantile levels for `draw = "quantile"`.
-#' @param seed Optional integer seed.
+#' @param seed Optional integer seed. The run is seeded locally, so the
+#'   caller's random number stream is left as it was.
 #' @param verbose Show a progress bar.
 #' @param ... Passed to [tabfound_models()] when `models` is `NULL`.
 #' @return An object of class `tabfound_syn`:
@@ -559,7 +565,7 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
   draw_mode <- match.arg(draw_mode)
   proper    <- .syn_resolve_proper(proper)
   proper_frac <- .mi_resolve_proper_frac(proper_frac)
-  if (!is.null(seed)) set.seed(seed)
+  if (!is.null(seed)) .local_seed(seed)
 
   if (is.matrix(data)) data <- as.data.frame(data, stringsAsFactors = FALSE)
   if (!is.data.frame(data)) {
@@ -583,7 +589,7 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
   meth  <- stats::setNames(rep("", length(vars)), vars)
   meth[visit] <- ifelse(kind[visit] == "categorical", "classification",
                         "regression")
-  if (!is.null(method)) meth <- .syn_resolve_method(method, meth, kind)
+  if (!is.null(method)) meth <- .syn_resolve_method(method, meth, kind, visit)
   visit <- visit[nzchar(meth[visit])]
 
   carried <- vars[!nzchar(meth)]

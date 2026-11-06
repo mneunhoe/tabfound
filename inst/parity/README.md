@@ -465,14 +465,15 @@ two rows).
 ### TabPFN v2.6 vs `tabpfn` 8.2.0 (network) / 9.2.0 (ensemble)
 
 ```
-114/133 checks within tolerance (19 known fingerprint-sensitive)
+115/133 checks within tolerance (18 known fingerprint-sensitive)
 ```
 
 - Every `_nofp` ensemble fixture passes every stage. Regression means
   agree to 4.4e-5 and quantiles to 3.8e-5, through the border translation
   `tabpfn` 9.1 introduced.
-- The 19 known rows are the fingerprinted ensemble fixtures, whose
-  `_nofp` twins pass the same stages.
+- The 18 known rows are the fingerprinted ensemble fixtures, whose
+  `_nofp` twins pass the same stages. Every differing cell is the
+  fingerprint of a row in one of the two SVD members.
 
 ### TabPFN v3 vs `tabpfn` 8.2.0 / torch 2.13.0
 

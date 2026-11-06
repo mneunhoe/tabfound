@@ -51,8 +51,9 @@ the columns of \code{data}, in mice's \code{predictorMatrix} layout:
 pointing at variables not yet generated are dropped with a warning.
 Defaults to everything already available.}
 
-\item{method}{Optional per-variable override. A single string, or a
-named vector indexed by column name. One of \code{"regression"},
+\item{method}{Optional per-variable override. A single string, which
+applies to every column in \code{visit_sequence}, or a named vector
+indexed by column name. One of \code{"regression"},
 \code{"classification"}, \code{"sample"} (a bootstrap of the observed values,
 no model) or \code{""} (not synthesised — the real column is carried
 through, which needs \code{k == nrow(data)}).}
@@ -91,7 +92,8 @@ masses rather than as draws from the continuous part, e.g.
 
 \item{quantile_grid}{Number of quantile levels for \code{draw = "quantile"}.}
 
-\item{seed}{Optional integer seed.}
+\item{seed}{Optional integer seed. The run is seeded locally, so the
+caller's random number stream is left as it was.}
 
 \item{verbose}{Show a progress bar.}
 
