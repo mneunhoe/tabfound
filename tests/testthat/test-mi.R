@@ -476,6 +476,43 @@ test_that("mice can drive the loop through mice.impute.tabfound", {
 })
 
 
+test_that("an integer dummy stays an integer through tabfound_impute", {
+  d <- mi_test_df()
+  d$ibin <- sample(0:1, nrow(d), replace = TRUE)
+  d$ibin[1:6] <- NA
+  got <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                         seed = 2L, verbose = FALSE)$imputations[[1]]
+  expect_type(got$ibin, "integer")
+  expect_true(all(got$ibin %in% 0:1))
+})
+
+
+test_that("mice.impute.tabfound keeps a target's type and support", {
+  withr::local_options(tabfound.models = stub_models())
+  set.seed(16)
+  x <- cbind(1, rnorm(40))
+  miss <- 1:8
+
+  # A numeric dummy goes to the classifier, not the regressor, and comes
+  # back as 0/1 in the storage mode it went in with.
+  b <- as.numeric(x[, 2] + rnorm(40) > 0); b[miss] <- NA
+  got <- mice.impute.tabfound(b, !is.na(b), x)
+  expect_type(got, "double")
+  expect_true(all(got %in% c(0, 1)))
+  ib <- as.integer(b)
+  got <- mice.impute.tabfound(ib, !is.na(ib), x)
+  expect_type(got, "integer")
+  expect_true(all(got %in% 0:1))
+
+  o <- factor(sample(c("lo", "mid", "hi"), 40, TRUE),
+              levels = c("lo", "mid", "hi"), ordered = TRUE)
+  o[miss] <- NA
+  got <- mice.impute.tabfound(o, !is.na(o), x)
+  expect_true(is.ordered(got))
+  expect_identical(levels(got), levels(o))
+})
+
+
 test_that("mice.impute.tabfound says what to do when no models are set", {
   withr::local_options(tabfound.models = NULL)
   y <- c(1, 2, 3, NA)
