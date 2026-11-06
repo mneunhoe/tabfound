@@ -199,3 +199,28 @@ test_that("v2.5's chunking leaves the cache paths alone", {
   # chunks is ragged, so its batch size differs and the last bits move.
   expect_lt(max(abs(a - b)), 1e-5 * max(abs(a)))
 })
+
+
+test_that("a single-pass sample is chunked and cached like the mean", {
+  d <- Sys.getenv("TABFOUND_TABPFN_REG_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN_REG_DIR not configured")
+
+  # The sample branch used to run one uncached forward over all of
+  # `newdata`. It now goes a `predict_chunk_size` at a time, through the
+  # cache when there is one, with the uniforms drawn once for every row:
+  # a seed gives the same draws whatever the chunking, up to the last
+  # bits the forward's batch size moves.
+  set.seed(13)
+  X <- matrix(rnorm(150 * 4), ncol = 4)
+  y <- as.numeric(X %*% c(1, -1, 0.5, 0)) + rnorm(150, sd = 0.3)
+  tr <- 1:110; te <- 111:150
+  draw <- function(...) {
+    m <- fit(tabular_regressor(d, ...), X[tr, ], y[tr])
+    predict(m, X[te, ], type = "sample", n_samples = 30L, seed = 4L)
+  }
+  whole <- draw(predict_chunk_size = 1024L)
+  expect_identical(dim(whole), c(40L, 30L))
+  expect_equal(draw(predict_chunk_size = 9L), whole, tolerance = 1e-5)
+  expect_equal(draw(predict_chunk_size = 9L, kv_cache = TRUE), whole,
+               tolerance = 1e-5)
+})
