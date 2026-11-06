@@ -4,7 +4,13 @@
 \alias{quantile_dist_stat}
 \title{Summary statistics from a predicted quantile grid}
 \usage{
-quantile_dist_stat(grid, alpha, type = "mean", quantiles = c(0.1, 0.5, 0.9))
+quantile_dist_stat(
+  grid,
+  alpha,
+  type = "mean",
+  quantiles = c(0.1, 0.5, 0.9),
+  sorted = FALSE
+)
 }
 \arguments{
 \item{grid}{Numeric matrix \verb{(n_rows, n_levels)}.}
@@ -15,6 +21,8 @@ quantile_dist_stat(grid, alpha, type = "mean", quantiles = c(0.1, 0.5, 0.9))
 \code{"raw_quantiles"}.}
 
 \item{quantiles}{Probabilities for \code{type = "quantiles"}.}
+
+\item{sorted}{Passed to \code{\link[=quantile_dist]{quantile_dist()}}.}
 }
 \description{
 The single entry point the TabICL regressor uses. \code{"mean"} is the mean
