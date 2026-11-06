@@ -846,7 +846,7 @@ tabfm_subfolder_for <- function(task) {
        quantile_subsample = quantile_subsample)
 }
 
-# Impute, then build the ensemble.
+# Encode and impute, then build the ensemble.
 #
 # The reference's `TransformToNumerical` mean-imputes numeric columns
 # when it is handed a data frame, and is the identity on a bare array --
@@ -855,21 +855,24 @@ tabfm_subfolder_for <- function(task) {
 # `tabfound()` builds one from), so imputing is the faithful reading, and
 # it is also the only one that works: `CustomStandardScaler` takes a
 # plain column mean, so one missing value would turn a whole column NaN.
+#
+# On the frame path the categorical columns go through the reference's
+# `CategoricalOrdinalEncoder` rather than the imputer: codes in order of
+# first appearance, -1 for a missing, unseen or once-seen category, and
+# the columns moved to the front. See [fit_to_numerical()].
 # @keywords internal
 .tabfm_prepare <- function(X, y, task, cat_features, opts) {
   X <- as.matrix(X); storage.mode(X) <- "double"
-  imputer <- fit_simple_imputer(X)
+  # `min_frequency = 2` is `TransformToNumerical(min_cat_frequency = 2)`,
+  # the default the estimators build it with.
+  imputer <- fit_to_numerical(X, cat_features, order = "appearance",
+                              min_frequency = 2L)
   if (!any(imputer$keep)) cli::cli_abort("Every predictor is entirely missing.")
-  X <- transform_simple_imputer(X, imputer)
-  # The imputer can drop an all-missing column, which renumbers
-  # everything to its right -- so the declared indices have to be carried
-  # through it on a mask rather than reused as they were given.
-  cat_kept <- NULL
-  if (!is.null(cat_features) && length(cat_features)) {
-    mask <- rep(FALSE, length(imputer$keep))
-    mask[cat_features] <- TRUE
-    cat_kept <- which(mask[imputer$keep])
-  }
+  X <- transform_to_numerical(X, imputer)
+  # The encoder puts the categorical columns first, which is also how
+  # the reference tells its ensemble which they are: `range(n_cat)`.
+  n_cat <- length(imputer$cat_features)
+  cat_kept <- if (n_cat) seq_len(n_cat) else NULL
   gen <- tabfm_ensemble_fit(
     X, y, task = task, n_estimators = opts$n_estimators,
     norm_methods = opts$norm_methods,
@@ -901,6 +904,10 @@ tabfm_subfolder_for <- function(task) {
 #'   to treat as categorical. These reach the network as a `cat_mask`,
 #'   which routes their cells through a separate Fourier basis — so
 #'   declaring them changes the prediction, not just the bookkeeping.
+#'   They are also encoded as the reference encodes a data frame's
+#'   categorical columns: codes in order of first appearance at fit, -1
+#'   for a missing, unseen or once-seen category, and the columns moved
+#'   in front of the numeric ones.
 #' @param outlier_threshold Z-score threshold for the outlier clipper.
 #' @param max_num_features,max_num_rows Per-member subsampling caps, or
 #'   `NULL` for none.
@@ -969,7 +976,7 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
   }
 
   .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
-    X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
+    X_test <- transform_to_numerical(as.matrix(X_test_chunk), state$imputer)
     members <- tabfm_ensemble_iter(state$gen, X_test)
     .check_member_weights(member_weights, members$n)
     n_cls <- length(state$observed %||% state$class_levels)
@@ -1091,7 +1098,7 @@ tabfm_regressor <- function(ctx, n_estimators = 32L, norm_methods = NULL,
   }
 
   .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
-    X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
+    X_test <- transform_to_numerical(as.matrix(X_test_chunk), state$imputer)
     members <- tabfm_ensemble_iter(state$gen, X_test)
     .check_member_weights(member_weights, members$n)
     acc <- NULL

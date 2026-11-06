@@ -38,7 +38,11 @@ tabfm_regressor(
 \item{categorical_features}{Integer vector of 1-based column indices
 to treat as categorical. These reach the network as a \code{cat_mask},
 which routes their cells through a separate Fourier basis — so
-declaring them changes the prediction, not just the bookkeeping.}
+declaring them changes the prediction, not just the bookkeeping.
+They are also encoded as the reference encodes a data frame's
+categorical columns: codes in order of first appearance at fit, -1
+for a missing, unseen or once-seen category, and the columns moved
+in front of the numeric ones.}
 
 \item{outlier_threshold}{Z-score threshold for the outlier clipper.}
 

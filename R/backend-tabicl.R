@@ -754,22 +754,26 @@ tabicl_task_of <- function(config) {
   if (is.null(flag)) TRUE else isTRUE(flag)
 }
 
-# Shared fit for both TabICL predictors: impute, then build the ensemble.
+# Shared fit for both TabICL predictors: encode and impute, then build
+# the ensemble.
 #
 # The imputation is not optional dressing. TabICL's network has no
 # missing-value channel at all -- a `NaN` in propagates to `NaN` logits
 # out -- and the reference's own wrapper is what keeps that from
 # happening, by running a mean `SimpleImputer` over the numeric columns
-# before the ensemble generator ever sees the data.
+# before the ensemble generator ever sees the data. Declared categorical
+# columns go through its `OrdinalEncoder` instead, which codes a missing
+# or unseen category as -1; see [fit_to_numerical()].
 # @keywords internal
-.tabicl_prepare <- function(X, y, classification, opts) {
+.tabicl_prepare <- function(X, y, classification, opts, cat_features = NULL) {
   X <- as.matrix(X); storage.mode(X) <- "double"
   # `keep_empty = TRUE` follows tabicl 2.2.0's
   # `SimpleImputer(keep_empty_features = True)`: an entirely missing
   # column becomes zeros rather than disappearing, so even an all-missing
   # table reaches the ensemble, whose filter keeps one column of it.
-  imputer <- fit_simple_imputer(X, keep_empty = TRUE)
-  X <- transform_simple_imputer(X, imputer)
+  imputer <- fit_to_numerical(X, cat_features, order = "sorted",
+                              keep_empty = TRUE)
+  X <- transform_to_numerical(X, imputer)
   gen <- tabicl_ensemble_fit(
     X, y, classification = classification,
     n_estimators = opts$n_estimators, norm_methods = opts$norm_methods,
@@ -828,6 +832,13 @@ tabicl_task_of <- function(config) {
 #'   reference's members exactly.
 #' @param quantile_subsample Row cap for the quantile normalisers; see
 #'   [fit_sk_quantile_transformer()].
+#' @param categorical_features Integer vector of 1-based column indices
+#'   to treat as categorical, as the reference treats a data frame's
+#'   categorical columns: coded over the categories seen at fit, with a
+#'   missing or unseen value as -1 rather than mean-imputed, and moved in
+#'   front of the numeric columns. [tabfound()] declares a frame's
+#'   factors. `NULL` treats every column as numeric, which is the
+#'   reference's array path.
 #' @param predict_chunk_size Max test rows per forward pass. Test rows
 #'   only ever attend to training rows, so chunking cannot change the
 #'   answer.
@@ -854,6 +865,7 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                               average_logits = TRUE,
                               random_state = 42L,
                               quantile_subsample = NULL,
+                              categorical_features = NULL,
                               predict_chunk_size = 1024L,
                               kv_cache = FALSE,
                               row_chunk_size = NULL,
@@ -877,13 +889,13 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
          got {length(enc$observed)}."
       )
     }
-    prep <- .tabicl_prepare(X, enc$y_int, TRUE, opts)
+    prep <- .tabicl_prepare(X, enc$y_int, TRUE, opts, categorical_features)
     c(prep, list(class_levels = enc$levels, observed = enc$observed,
                  n_train = nrow(X)))
   }
 
   .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
-    X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
+    X_test <- transform_to_numerical(as.matrix(X_test_chunk), state$imputer)
     members <- tabicl_ensemble_iter(state$gen, X_test)
     .check_member_weights(member_weights, members$n)
     n_cls <- length(state$observed %||% state$class_levels)
@@ -993,6 +1005,7 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                              outlier_threshold = 4.0,
                              random_state = 42L,
                              quantile_subsample = NULL,
+                             categorical_features = NULL,
                              predict_chunk_size = 1024L,
                              kv_cache = FALSE,
                              row_chunk_size = NULL,
@@ -1013,13 +1026,14 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     # The network works in standardized target space; `TabICLRegressor`
     # fits a StandardScaler on y and inverse-transforms its output.
     scaler <- fit_target_scaler(y)
-    prep <- .tabicl_prepare(X, apply_target_scaler(y, scaler), FALSE, opts)
+    prep <- .tabicl_prepare(X, apply_target_scaler(y, scaler), FALSE, opts,
+                            categorical_features)
     c(prep, list(scaler = scaler, n_train = nrow(X)))
   }
 
   .chunk <- function(state, X_test_chunk, type, quantiles, caches,
                      return_members = FALSE) {
-    X_test <- transform_simple_imputer(as.matrix(X_test_chunk), state$imputer)
+    X_test <- transform_to_numerical(as.matrix(X_test_chunk), state$imputer)
     members <- tabicl_ensemble_iter(state$gen, X_test)
     .check_member_weights(member_weights, members$n)
     acc <- NULL
