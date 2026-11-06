@@ -750,7 +750,8 @@ mitra_preprocessor_fit <- function(X, y, task = "classification",
     cli::cli_abort("Every predictor is constant; there is nothing to learn from.")
   }
 
-  if (!is.null(seed)) set.seed(seed)
+  # Seeded locally: the caller's stream is put back on exit.
+  if (!is.null(seed)) .local_seed(seed)
   n_keep <- sum(keep)
   mirror <- if (random_mirror_x) sample(c(1, -1), n_keep, replace = TRUE)
             else rep(1, n_keep)

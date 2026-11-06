@@ -95,6 +95,16 @@ test_that("text detection follows the reference's rule", {
   expect_identical(.text_columns(detect, 30L), character(0))
 })
 
+test_that("a string column that is not text is coded in code-point order", {
+  # sklearn's order, not the session's collation; under the C collation
+  # testthat sets the two would agree by luck.
+  local_natural_collate()
+  d <- data.frame(s = c("b", "B", "a", "A", "_x", "Z"), stringsAsFactors = FALSE)
+  fitted <- fit_frame_expansion(d, transform_text = TRUE, transform_dates = TRUE)
+  expect_identical(fitted$state$char_levels$s, c("A", "B", "Z", "_x", "a", "b"))
+  expect_identical(as.integer(fitted$data$s), c(6L, 2L, 5L, 1L, 4L, 3L))
+})
+
 test_that("pandas' numeric spellings are pandas', not R's", {
   expect_identical(.is_numeric_spelling(c("1", " 2 ", "3e2", "-inf", "Inf")),
                    rep(TRUE, 5))
@@ -198,6 +208,13 @@ test_that("the engine API expands at fit and replays at predict", {
   # A matrix cannot carry text or dates, so once they were expanded it is
   # refused rather than guessed into the expanded layout.
   expect_error(predict(m, as.matrix(X[1:4, c("lvl", "x")])), "data frame")
+  # The expanded layout is renamed to the fitted names by position, so a
+  # reordered or swapped column has to be refused before it is laid out,
+  # as it is on a fit with nothing to expand.
+  expect_error(predict(m, X[1:4, rev(names(X))]), "different order")
+  swapped <- X[1:4, ]; names(swapped)[names(swapped) == "x"] <- "z"
+  expect_error(predict(m, swapped), "Missing: x")
+  expect_error(predict(m, cbind(X[1:4, ], z = 1)), "Unexpected: z")
   # An explicit FALSE wins over the recipe.
   # Off, it is one -- and the warning it has always had comes back.
   expect_warning(
@@ -216,4 +233,32 @@ test_that("a saved fit replays its expansion after loading", {
   tabfound_save(fit, f)
   back <- tabfound_load(f)
   expect_identical(predict(back, df[1:6, ]), predict(fit, df[1:6, ]))
+})
+
+test_that("a refit starts from the declaration as written, not the last fit's", {
+  dir <- with_recipe(local_fake_backend(), on = TRUE)
+  # The fake regressor, recording which columns it was told are
+  # categorical -- the one thing a moved declaration changes.
+  bk <- get_backend("faketest")
+  bk$regressor <- function(ctx, categorical_features = NULL, ...) {
+    spec <- stub_regressor_spec()
+    fit0 <- spec$fit
+    spec$fit <- function(X, y) c(fit0(X, y), list(cat = categorical_features))
+    spec
+  }
+  assign("faketest", bk, envir = .tabfound_backends)
+
+  df <- wiring_frame()
+  m <- tabular_regressor(dir, backend = "faketest", categorical_features = 2L)
+  # With a date first, `lvl` (column 2) moves to 1: dates go to the end.
+  X1 <- df[c("when", "lvl", "x")]
+  expect_identical(fit(m, X1, df$y)$state$cat, 1L)
+  # Without one nothing moves -- and a refit of the first fit must not
+  # carry its move over to this layout.
+  X2 <- data.frame(a = rnorm(nrow(df)), lvl = df$lvl, x = df$x)
+  once  <- fit(m, X2, df$y)
+  twice <- fit(fit(m, X1, df$y), X2, df$y)
+  expect_identical(once$state$cat, 2L)
+  expect_identical(twice$state$cat, once$state$cat)
+  expect_identical(predict(twice, X2[1:5, ]), predict(once, X2[1:5, ]))
 })

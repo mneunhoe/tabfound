@@ -961,25 +961,25 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
 
   fit_fn <- function(X, y) {
     if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
-    if (is.factor(y)) {
-      levels_ <- levels(y); y_int <- as.integer(y) - 1L
-    } else {
-      levels_ <- sort(unique(y)); y_int <- match(y, levels_) - 1L
-    }
-    if (length(levels_) > net$max_classes) {
+    # The network sees only the classes that occur; see
+    # `.encode_observed_classes()`.
+    enc <- .encode_observed_classes(y)
+    if (length(enc$observed) > net$max_classes) {
       cli::cli_abort(
-        "TabFM supports at most {net$max_classes} classes; got {length(levels_)}."
+        "TabFM supports at most {net$max_classes} classes; got {length(enc$observed)}."
       )
     }
-    prep <- .tabfm_prepare(X, y_int, "classification", categorical_features, opts)
-    c(prep, list(class_levels = levels_, n_train = nrow(X)))
+    prep <- .tabfm_prepare(X, enc$y_int, "classification", categorical_features,
+                           opts)
+    c(prep, list(class_levels = enc$levels, observed = enc$observed,
+                 n_train = nrow(X)))
   }
 
   .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
     X_test <- transform_to_numerical(as.matrix(X_test_chunk), state$imputer)
     members <- tabfm_ensemble_iter(state$gen, X_test)
     .check_member_weights(member_weights, members$n)
-    n_cls <- length(state$class_levels)
+    n_cls <- length(state$observed %||% state$class_levels)
     acc <- NULL
     raw <- list()
     for (i in .members_to_run(members$n, member_weights)) {
@@ -1002,9 +1002,12 @@ tabfm_classifier <- function(ctx, n_estimators = 32L, norm_methods = NULL,
       if (!is.null(member_weights)) contrib <- contrib * member_weights[[i]]
       acc <- if (is.null(acc)) contrib else acc + contrib
     }
-    if (return_members) return(raw)
+    if (return_members) {
+      return(lapply(raw, .expand_observed_classes, state, -Inf))
+    }
     avg <- acc / (if (is.null(member_weights)) members$n else sum(member_weights))
-    if (average_logits) .softmax_rows(avg, softmax_temperature) else avg
+    if (average_logits) avg <- .softmax_rows(avg, softmax_temperature)
+    .expand_observed_classes(avg, state, 0)
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {

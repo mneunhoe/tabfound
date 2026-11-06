@@ -59,7 +59,9 @@ somehow. Either pass \code{models} through \code{mice()}'s \code{...}, or set
 
 Continuous targets are drawn from the regressor's predictive
 distribution, categorical ones from the classifier's predicted
-probabilities. Note that mice hands over an already-dummy-coded
+probabilities. A numeric 0/1 target counts as categorical, as it does
+in \code{\link[=tabfound_impute]{tabfound_impute()}}, and comes back as 0/1 in \code{y}'s own type. Note
+that mice hands over an already-dummy-coded
 numeric design matrix, so factor predictors reach the model one column
 per contrast rather than as ordinal codes -- unlike
 \code{\link[=tabfound_impute]{tabfound_impute()}}, which keeps them whole.

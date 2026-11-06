@@ -69,10 +69,10 @@ for (nm in names(meta$cases)) {
                    label = sprintf("%s member %d x", name, m))
 
         # Class codes exactly. A regression target is standardized in
-        # float32, and R's libtorch sums float32 in a different order from
-        # the reference's (167.122925 against 167.122910 over one fixture's
-        # 120 targets), so its statistics -- and the values -- can sit one
-        # float32 ulp apart.
+        # float64 here and in float32 by the reference, whose sums also
+        # run in a different order (167.122925 against 167.122910 over one
+        # fixture's 120 targets), so the values can sit a float32 ulp or
+        # two apart.
         yt <- as.numeric(kumo_recipe_target(f$rec, f$y, m))
         yw <- as.numeric(ref[[paste0(p, "y")]])
         if (f$clf) {
@@ -177,4 +177,21 @@ test_that("an ECOC codebook gives every class its own symbol somewhere", {
   b <- kumo_recipe_fit(X, rep(0:14, 2), TRUE, n_members = 2L)
   expect_length(b$target$codebooks, 2L)
   expect_false(identical(b$target$codebooks[[1]], b$target$codebooks[[2]]))
+})
+
+test_that("a regression target's offset survives the round trip", {
+  # A year or a price: the mean is large next to the spread. In float32,
+  # y + 1e7 is rounded to whole numbers before it is standardized, and the
+  # mean added back on the way out rounds the quantiles the same way.
+  set.seed(3)
+  X <- matrix(rnorm(80), 40); y <- rnorm(40)
+  a <- kumo_recipe_fit(X, y, FALSE, n_members = 2L, seed = 1L)
+  b <- kumo_recipe_fit(X, y + 1e7, FALSE, n_members = 2L, seed = 1L)
+  q <- torch::torch_tensor(matrix(sort(rnorm(6)), 2), dtype = torch::torch_float32())
+  for (m in 1:2) {
+    expect_equal(as.numeric(kumo_recipe_target(b, y + 1e7, m)),
+                 as.numeric(kumo_recipe_target(a, y, m)), tolerance = 1e-6)
+    expect_equal(as.matrix(kumo_recipe_inverse(b, q, m)) - 1e7,
+                 as.matrix(kumo_recipe_inverse(a, q, m)), tolerance = 1e-8)
+  }
 })

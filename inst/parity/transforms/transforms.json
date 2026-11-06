@@ -6,6 +6,30 @@
   "svd_n_components": 1,
   "fingerprint_salt": 160,
   "yeojohnson_lambda": 0.11947650934318108,
+  "quantile_ties_n_quantiles": 59,
+  "svd_nearconst_n_components": 2,
+  "cat_string_values": [
+    "b",
+    "B",
+    "a",
+    "A",
+    "_x",
+    "Z",
+    "\u00e9",
+    "e",
+    "a",
+    "Z"
+  ],
+  "cat_string_categories": [
+    "A",
+    "B",
+    "Z",
+    "_x",
+    "a",
+    "b",
+    "e",
+    "\u00e9"
+  ],
   "_versions": {
     "tabpfn": "8.2.0",
     "sklearn": "1.9.0",

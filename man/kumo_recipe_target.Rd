@@ -18,6 +18,11 @@ A long tensor of shifted codes, or a float32 tensor of signed
 standardized values, \verb{[length(y)]}.
 }
 \description{
-One member's target as the network sees it
+The reference standardizes in the dtype the target arrives in, which
+from pandas is float32: a target such as a year or a price, whose mean
+is large next to its spread, then reaches the network already rounded
+to a few values. Standardizing in float64 and casting the standardized
+values is the same transform with the rounding moved to where it is
+harmless; at ordinary scales it moves a value by about a float32 ulp.
 }
 \keyword{internal}
