@@ -98,6 +98,24 @@ test_that("the transformer block matches sdm, with and without GQA", {
   })
 })
 
+test_that("kumo_sdpa's repeated KV heads match the fused grouped-query kernel", {
+  skip_if(is.null(tabfound:::.torch_sdpa()), "no fused SDPA in this torch")
+  # Medium-shaped: 8 query heads on 2 KV heads, head size 64; a leading
+  # batch dimension that broadcasts from the keys' 1.
+  torch::torch_manual_seed(98L)
+  q <- torch::torch_randn(3L, 64L, 8L, 64L)
+  k <- torch::torch_randn(1L, 300L, 2L, 64L)
+  v <- torch::torch_randn(1L, 300L, 2L, 64L)
+  torch::with_no_grad({
+    got <- kumo_sdpa()(q, k, v)
+    bk <- function(t) t$expand(c(3L, 300L, 2L, 64L))$transpose(2L, 3L)
+    want <- sdpa(q$transpose(2L, 3L), bk(k), bk(v),
+                 enable_gqa = TRUE)$transpose(2L, 3L)
+  })
+  expect_identical(got$shape, c(3L, 64L, 8L, 64L))
+  expect_kumo_close(got, want, tol = 1e-5)
+})
+
 test_that("the induced block matches sdm", {
   R <- kumo_ref(); ref <- R$t; mt <- R$meta
   m <- load_kumo_ref(

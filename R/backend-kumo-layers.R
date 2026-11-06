@@ -173,15 +173,29 @@ kumo_sdpa <- torch::nn_module(
                                 dtype = query$dtype, device = query$device))
     }
     flat <- function(t, tail) t$expand(c(batch, tail))$reshape(c(-1L, tail))
-    out <- sdpa(
-      flat(query, q_tail)$transpose(2L, 3L),
-      flat(key, k_tail)$transpose(2L, 3L),
-      flat(value, v_tail)$transpose(2L, 3L),
-      enable_gqa = q_tail[2] != k_tail[2]
-    )$transpose(2L, 3L)
+    kh <- flat(key, k_tail)$transpose(2L, 3L)
+    vh <- flat(value, v_tail)$transpose(2L, 3L)
+    if (q_tail[2] != k_tail[2]) {
+      # Medium and large: the query rows read 2 of the KV heads. Repeat
+      # them to every query head (head h reads h %/% (Hq / Hkv), what
+      # `enable_gqa` does) rather than pass `enable_gqa`: on CPU libtorch
+      # that path is 3-4x slower per call than a plain SDPA call. The copy
+      # stays local to this call, so the between-layer collection frees it.
+      kh <- .kumo_repeat_heads(kh, q_tail[2])
+      vh <- .kumo_repeat_heads(vh, q_tail[2])
+    }
+    out <- sdpa(flat(query, q_tail)$transpose(2L, 3L), kh, vh)$transpose(2L, 3L)
     out$view(c(batch, out$shape[2:4]))
   }
 )
+
+# `[N, Hkv, L, d]` to `[N, n_heads, L, d]`, each KV head repeated
+# `n_heads / Hkv` times in place: `repeat_interleave` along the heads.
+.kumo_repeat_heads <- function(t, n_heads) {
+  s <- t$shape
+  t$unsqueeze(3L)$expand(c(s[1:2], n_heads %/% s[2], s[3:4]))$
+    reshape(c(s[1], n_heads, s[3:4]))
+}
 
 # Broadcast leading shapes the way torch.broadcast_shapes does.
 .kumo_broadcast <- function(...) {
