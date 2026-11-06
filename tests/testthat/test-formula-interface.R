@@ -275,6 +275,30 @@ test_that("regression goes through the same path and reports .pred", {
 })
 
 
+test_that("regression output columns are named by type, not position", {
+  frame <- tabfound:::.as_prediction_frame
+  inner <- list(spec = list(quantile_levels = c(0.25, 0.5, 0.75)))
+
+  expect_identical(names(frame(c(1, 2), "median", "regression", inner)),
+                   ".pred")
+
+  # The backends hand back a grid with unnamed columns; the levels are on
+  # the spec.
+  grid <- matrix(1:6, nrow = 2)
+  expect_identical(names(frame(grid, "grid", "regression", inner)),
+                   c(".pred_q0.25", ".pred_q0.5", ".pred_q0.75"))
+
+  # A repeated level is repaired rather than aborting in tibble.
+  q <- matrix(1:4, nrow = 2, dimnames = list(NULL, c("q0.5", "q0.5")))
+  expect_identical(names(frame(q, "quantiles", "regression", inner)),
+                   c(".pred_q0.5", ".pred_q0.5_1"))
+
+  # Draws have no level, so they stay positional.
+  expect_identical(names(frame(grid, "sample", "regression", inner)),
+                   c(".pred_1", ".pred_2", ".pred_3"))
+})
+
+
 test_that("missing predictors reach both backends without this layer imputing", {
   icl <- model_dir("TABFOUND_TABICL_CLF_DIR")
   pfn <- model_dir("TABFOUND_TABPFN_CLF_DIR")

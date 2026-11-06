@@ -14,15 +14,17 @@ fitted on. Factor levels and column types are validated against the
 training data and a clear error is raised if they do not match.}
 
 \item{type}{For classification, \code{"class"} (default) or \code{"prob"}. For
-regression, \code{"mean"} (default), \code{"quantiles"}, \code{"grid"} or
-\code{"sample"}, subject to what the backend supports.}
+regression, \code{"mean"} (default), \code{"median"}, \code{"quantiles"}, \code{"grid"}
+or \code{"sample"}, subject to what the backend supports.}
 
 \item{...}{Passed to the backend, e.g. \code{quantiles}.}
 }
 \value{
 A tibble when tibble is available, otherwise a data frame:
-\code{.pred_class} and \verb{.pred_<level>} for classification, \code{.pred} (plus
-\verb{.pred_q<level>}) for regression.
+\code{.pred_class} and \verb{.pred_<level>} for classification. For regression,
+\code{.pred} for \code{"mean"} and \code{"median"}, \verb{.pred_q<level>} for
+\code{"quantiles"} and \code{"grid"} (a repeated level gets a \verb{_1}, \verb{_2}, ...
+suffix), and \code{.pred_1}, \code{.pred_2}, ... for \code{"sample"}.
 }
 \description{
 Predict from a formula-fitted tabular foundation model

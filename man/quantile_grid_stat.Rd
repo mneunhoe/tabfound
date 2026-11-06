@@ -12,7 +12,8 @@ quantile_grid_stat(
 )
 }
 \arguments{
-\item{grid}{Numeric matrix \verb{(n_rows, n_levels)} of predicted quantiles.}
+\item{grid}{Numeric matrix \verb{(n_rows, n_levels)} of predicted quantiles.
+A plain vector of \code{length(levels)} is read as a single row.}
 
 \item{levels}{The grid's level probabilities, e.g. \verb{$quantile_levels}
 from \code{\link[=predict_members]{predict_members()}}.}

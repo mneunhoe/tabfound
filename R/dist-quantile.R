@@ -167,6 +167,7 @@ quantile_dist_stat <- function(grid, alpha, type = "mean",
 #' [predict_members()] returns, or on a combination of them.
 #'
 #' @param grid Numeric matrix `(n_rows, n_levels)` of predicted quantiles.
+#'   A plain vector of `length(levels)` is read as a single row.
 #' @param levels The grid's level probabilities, e.g. `$quantile_levels`
 #'   from [predict_members()].
 #' @param type `"mean"` (the mean of the sorted grid), `"median"` or
@@ -178,5 +179,32 @@ quantile_dist_stat <- function(grid, alpha, type = "mean",
 quantile_grid_stat <- function(grid, levels, type = c("mean", "median", "quantiles"),
                                quantiles = c(0.1, 0.5, 0.9)) {
   type <- match.arg(type)
-  quantile_dist_stat(as.matrix(grid), levels, type, quantiles)
+  # `g[1, ]` drops to a vector, and `as.matrix()` would stand that up as
+  # one column of `length(levels)` rows -- a grid of that many one-level
+  # rows, summarised without complaint.
+  if (is.null(dim(grid))) grid <- matrix(grid, nrow = 1L)
+  grid <- as.matrix(grid)
+  if (ncol(grid) != length(levels)) {
+    cli::cli_abort(c(
+      "{.arg grid} must have one column per level in {.arg levels}.",
+      x = "{.arg grid} has {ncol(grid)} column{?s}.",
+      i = "{.arg levels} has {length(levels)} entr{?y/ies}."
+    ))
+  }
+  quantile_dist_stat(grid, levels, type, quantiles)
+}
+
+# Column names for predicted quantiles, `q<level>`.
+#
+# Each level is formatted on its own: `format()` on the whole vector picks
+# one notation and one precision for all of them, so `c(1e-4, 0.5)` came
+# out as `q1e-04 q5e-01`, and levels that differ past the seventh digit
+# shared a name. Fifteen significant digits keep every distinct double a
+# user would type apart while still printing `(1:999) / 1000` as `0.001`
+# rather than its binary expansion.
+# @keywords internal
+.quantile_colnames <- function(quantiles) {
+  paste0("q", vapply(quantiles, format, "", digits = 15,
+                     scientific = FALSE, drop0trailing = TRUE,
+                     trim = TRUE))
 }

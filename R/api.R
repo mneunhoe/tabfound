@@ -538,7 +538,7 @@ predict.tabfound_regressor <- function(object, newdata,
     ))
   }
   .check_predict_dots(object, ...)
-  .check_quantiles(...)
+  .check_quantiles(object$spec$predict, ...)
   newdata <- .prepare_newdata(object, newdata)
   object$spec$predict(object$state, newdata, type, ...)
 }
@@ -655,11 +655,25 @@ predict.tabfound_regressor <- function(object, newdata,
 
 # Quantile levels outside (0, 1) are extrapolated off the end of the
 # predicted distribution and come back as plausible-looking numbers.
+#
+# The dots reach the backend's predict function after `state`, `newdata`
+# and `type`, so an unnamed one binds to its `quantiles` by position, and
+# `quant =` by partial matching. Matching them against that function's
+# formals checks the value the backend will actually use, not only a dot
+# that happens to be spelled `quantiles`.
 # @keywords internal
-.check_quantiles <- function(...) {
+.check_quantiles <- function(predict_fn, ...) {
   dots <- list(...)
-  if (!"quantiles" %in% names(dots)) return(invisible(TRUE))
-  quantiles <- dots[["quantiles"]]
+  if ("quantiles" %in% names(formals(predict_fn))) {
+    call <- match.call(predict_fn,
+                       as.call(c(quote(predict_fn), list(NULL, NULL, NULL),
+                                 dots)))
+    if (!"quantiles" %in% names(call)) return(invisible(TRUE))
+    quantiles <- call[["quantiles"]]
+  } else {
+    if (!"quantiles" %in% names(dots)) return(invisible(TRUE))
+    quantiles <- dots[["quantiles"]]
+  }
   if (!is.numeric(quantiles) || !length(quantiles)) {
     cli::cli_abort("{.arg quantiles} must be a numeric vector.")
   }

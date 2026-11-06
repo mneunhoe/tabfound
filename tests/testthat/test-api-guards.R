@@ -132,6 +132,11 @@ test_that("out-of-range quantiles are refused", {
                "strictly inside")
   expect_error(predict_quantiles(m, nd, quantiles = c(0, 0.5)), "strictly inside")
   expect_no_error(predict(m, nd, type = "quantiles", quantiles = c(0.1, 0.9)))
+
+  # An unnamed dot binds to the backend's `quantiles` by position, so it
+  # is the value the backend uses.
+  expect_error(predict(m, nd, "quantiles", c(-0.5, 1.5)), "strictly inside")
+  expect_no_error(predict(m, nd, "quantiles", c(0.1, 0.9)))
 })
 
 
