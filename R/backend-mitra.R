@@ -412,10 +412,14 @@ mitra_model <- torch::nn_module(
            self$x_embedding(qf$support)),
       dim = 3L
     )
-    kv <- vector("list", length(self$layers))
-    for (i in seq_along(self$layers)) {
+    n_layers <- length(self$layers)
+    kv <- vector("list", n_layers)
+    for (i in seq_len(n_layers)) {
       layer <- self$layers[[i]]
       kv[[i]] <- layer$row_kv(support)
+      # The last layer's support stream feeds nothing: its cache is taken
+      # from its input.
+      if (i == n_layers) break
       support <- layer$forward_rows(support, kv[[i]])
       collect_between_layers(support)
     }
@@ -447,11 +451,19 @@ mitra_model <- torch::nn_module(
     query   <- torch::torch_cat(list(ye$query,   xq), dim = 3L)
     dump_if_enabled("mitra_embedded", query)
 
-    for (i in seq_along(self$layers)) {
+    n_layers <- length(self$layers)
+    for (i in seq_len(n_layers - 1L)) {
       out <- self$layers[[i]](support, query, save_peak_memory_factor)
       support <- out$support; query <- out$query
       collect_between_layers(support)
     }
+    # Only the query rows are decoded, and the two streams are separate
+    # tensors, so the last layer runs the support rows no further than the
+    # keys and values the queries attend to. Bit for bit what the full
+    # layer gives the queries.
+    last <- self$layers[[n_layers]]
+    query <- last$forward_rows(query, last$row_kv(support),
+                               save_peak_memory_factor)
     dump_if_enabled("mitra_encoded", query)
 
     self$decode(query)

@@ -323,6 +323,51 @@ test_that("column-chunking the summary pre-pass changes nothing", {
   }
 })
 
+test_that("TabICL's last layers skip the rows nothing reads", {
+  net <- tiny_tabicl()
+  set.seed(61)
+  n_tr <- 30L; n_te <- 9L
+  x <- torch::torch_randn(c(1L, n_tr + n_te, 7L))
+  y <- torch::torch_randint(0L, 3L, c(1L, n_tr))$to(dtype = torch::torch_float())
+  xt <- x[, 1:n_tr, ]
+  same <- function(a, b) all(mapply(torch::torch_equal, a, b))
+  icl <- net$icl_predictor
+  torch::with_no_grad({
+    # The last summary is taken from the last block's input, so skipping
+    # that block's second half changes no summary.
+    for (cc in list(NULL, 3L)) {
+      full <- net$col_embedder$build_hidden(xt, y, cc)
+      lean <- net$col_embedder$build_hidden(xt, y, cc, want_out = FALSE)
+      expect_null(lean$out)
+      expect_true(same(lean$hidden, full$hidden))
+    }
+
+    # The ICL cache, against the loop it replaces: every block run in
+    # full, its keys re-sliced from its own input.
+    r <- icl$add_target(net$stages_0_to_1(xt, y), y)
+    z <- r
+    ref_kv <- list()
+    for (blk in as.list(icl$tf_icl$blocks)) {
+      ref_kv[[length(ref_kv) + 1L]] <- blk$cache_kv(z)
+      z <- blk(z, train_size = n_tr)
+    }
+    got_kv <- icl$tf_icl$build_kv(r)
+    expect_true(same(lapply(got_kv, `[[`, "key"), lapply(ref_kv, `[[`, "key")))
+    expect_true(same(lapply(got_kv, `[[`, "value"),
+                     lapply(ref_kv, `[[`, "value")))
+
+    # The uncached pass decodes the test rows alone. Their queries now go
+    # through the last block without the labelled rows beside them, which
+    # moves float32 rounding and nothing else.
+    reps <- net$stages_0_to_1(x, y)
+    src <- icl$tf_icl(icl$add_target(reps, y), train_size = n_tr)
+    ref <- as.array(icl$decoder(icl$ln(src))[, (n_tr + 1L):(n_tr + n_te), ])
+    got <- as.array(net(x, y))
+  })
+  expect_equal(dim(got), dim(ref))
+  expect_lt(max(abs(got - ref)), 1e-5 * max(abs(ref)))
+})
+
 test_that("both TabICL chunk axes compose", {
   net <- tiny_tabicl()
   set.seed(59)

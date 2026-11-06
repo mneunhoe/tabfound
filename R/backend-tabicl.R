@@ -207,7 +207,7 @@ tabicl_col_embedding <- torch::nn_module(
     cc <- suppressWarnings(as.integer(col_chunk_size %||% NA_integer_))
     if (is.na(cc) || cc < 1L || cc >= hc) {
       src <- self$add_target(self$in_linear(features), features, y_train)
-      built <- self$tf_col$build_hidden(src)
+      built <- self$tf_col$build_hidden(src, want_out = want_out)
       return(list(
         out = if (isTRUE(want_out))
           built$src$permute(c(1L, 3L, 2L, 4L))$contiguous() else NULL,
@@ -220,7 +220,7 @@ tabicl_col_embedding <- torch::nn_module(
       len <- min(s + cc - 1L, hc) - s + 1L
       f <- features$narrow(2L, s, len)
       built <- self$tf_col$build_hidden(
-        self$add_target(self$in_linear(f), f, y_train)
+        self$add_target(self$in_linear(f), f, y_train), want_out = want_out
       )
       if (isTRUE(want_out)) outs[[length(outs) + 1L]] <- built$src
       # Concatenated on the column axis, in slice order, so the whole
@@ -234,7 +234,10 @@ tabicl_col_embedding <- torch::nn_module(
           hids[[i]][[length(hids[[i]]) + 1L]] <- built$hidden[[i]]
         }
       }
-      collect_between_layers(built$src)
+      # Without the output there is no carried tensor to size the
+      # collection by, but the slice's intermediates are as large as ever.
+      if (isTRUE(want_out)) collect_between_layers(built$src)
+      else collect_between_chunks()
     }
     out <- if (!isTRUE(want_out)) NULL else {
       src <- if (length(outs) == 1L) outs[[1L]] else
@@ -427,10 +430,14 @@ tabicl_ic_learning <- torch::nn_module(
   },
 
   # @param reps `(B, T, d_model)`; @param y_train `(B, train_size)`.
+  # @return `(B, T - train_size, out_dim)`: the test rows only. The
+  #   labelled rows' outputs are never read, and the decoder is the widest
+  #   matmul in the stage (999 quantiles on the regressor).
   forward = function(reps, y_train, save_peak_memory_factor = NULL) {
     r <- self$add_target(reps, y_train)
     src <- self$tf_icl(r, train_size = y_train$size(2),
-                       save_peak_memory_factor = save_peak_memory_factor)
+                       save_peak_memory_factor = save_peak_memory_factor,
+                       test_only = TRUE)
     self$decoder(self$ln(src))
   }
 )
@@ -573,7 +580,8 @@ tabicl_model <- torch::nn_module(
   #   `y_train` is ignored and every row of `x` is a row to predict.
   # @param row_chunk_size Rows per pass through the column and row
   #   stages; see `stages_0_to_1()`.
-  # @return `(B, T, out_dim)` — logits over classes, or quantile levels.
+  # @return `(B, T - train_size, out_dim)` — logits over classes, or
+  #   quantile levels, for the test rows; with a cache, for every row.
   forward = function(x, y_train, kv_cache = NULL, row_chunk_size = NULL,
                      save_peak_memory_factor = NULL, col_chunk_size = NULL) {
     if (!is.null(kv_cache)) {
@@ -729,8 +737,8 @@ tabicl_task_of <- function(config) {
 # output block. `cache_store` is NULL when caching is off.
 #
 # The two branches differ only in what the network is handed: with a cache
-# the training rows are left out of the batch entirely, so the forward
-# pass is over the test chunk alone and its whole output is wanted.
+# the training rows are left out of the batch entirely. Either way the
+# network returns the test rows alone.
 # @keywords internal
 .tabicl_member_out <- function(net, dev, mem, n_train, cache_store, i,
                                row_chunk_size = NULL,
@@ -745,7 +753,7 @@ tabicl_task_of <- function(config) {
           save_peak_memory_factor = save_peak_memory_factor,
           col_chunk_size = col_chunk_size)
     })
-    return(out[1, (b$n_train + 1L):out$size(2), ])
+    return(out[1, , ])
   }
   cache <- member_cache(cache_store, i, function() {
     b <- .tabicl_batch(X_train, mem$y, X_train[0L, , drop = FALSE], dev)
