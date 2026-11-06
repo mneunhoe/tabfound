@@ -195,6 +195,12 @@
 #'   see [tabular_classifier()]. `"auto"` follows the checkpoint's own
 #'   recipe, which turns both on for TabPFN v3.5 and leaves them off
 #'   elsewhere.
+#' @param categorical_features Predictors to declare categorical, as names
+#'   or as positions. Positions count the predictors in the order the
+#'   formula lists them (for `y ~ .`, the order of `data`'s columns), or
+#'   the columns of `x`. By default every factor, character and logical
+#'   predictor is declared; a declaration replaces that, so list those
+#'   columns too if they should stay declared.
 #' @param ... Passed to [tabular_classifier()] / [tabular_regressor()].
 #' @return An object of class `tabfound_fit`.
 #' @examples
@@ -213,7 +219,8 @@ tabfound.formula <- function(x, data, model, mode = "auto", backend = NULL,
                              device = "cpu", na_action = "auto",
                              transform_text = "auto", transform_dates = "auto",
                              min_cardinality_for_text = 30L,
-                             text_n_components = 30L, ...) {
+                             text_n_components = 30L,
+                             categorical_features = NULL, ...) {
   require_suggested("hardhat")
   opts <- .preprocess_options(transform_text, transform_dates,
                               min_cardinality_for_text, text_n_components)
@@ -226,8 +233,14 @@ tabfound.formula <- function(x, data, model, mode = "auto", backend = NULL,
   bp <- hardhat::default_formula_blueprint(indicators = "none",
                                            intercept = FALSE)
   processed <- hardhat::mold(x, data, blueprint = bp)
+  .check_inline_factors(processed)
+  # The molded frame puts numerics first and factors last, so its order is
+  # not the formula's; a position a caller gives means the formula's.
+  terms_order <- attr(stats::terms(x, data = data), "term.labels")
   .tabfound_bridge(processed, model, mode, backend, device, na_action,
-                   opts = opts, raw = raw, keep_character = keep, ...)
+                   opts = opts, raw = raw, keep_character = keep,
+                   categorical_features = categorical_features,
+                   predictor_order = terms_order, ...)
 }
 
 #' @rdname tabfound
@@ -236,14 +249,16 @@ tabfound.data.frame <- function(x, y, model, mode = "auto", backend = NULL,
                                 device = "cpu", na_action = "auto",
                                 transform_text = "auto", transform_dates = "auto",
                                 min_cardinality_for_text = 30L,
-                                text_n_components = 30L, ...) {
+                                text_n_components = 30L,
+                                categorical_features = NULL, ...) {
   require_suggested("hardhat")
   opts <- .preprocess_options(transform_text, transform_dates,
                               min_cardinality_for_text, text_n_components)
   keep <- .text_columns(x, opts$min_cardinality_for_text)
   processed <- hardhat::mold(.coerce_for_mold(x, keep_character = keep), y)
   .tabfound_bridge(processed, model, mode, backend, device, na_action,
-                   opts = opts, raw = x, keep_character = keep, ...)
+                   opts = opts, raw = x, keep_character = keep,
+                   categorical_features = categorical_features, ...)
 }
 
 #' @rdname tabfound
@@ -265,6 +280,83 @@ tabfound.default <- function(x, ...) {
 }
 
 
+# `indicators = "none"` keeps only factor *columns* whole. A term that makes
+# a factor inside the formula -- `factor(k)`, `cut(x, 3)`, `I(x > 0)` -- is
+# one dummy column per level to `model.matrix()`, which is the one-hot
+# layout these models do not take, and at predict `forge()` builds dummies
+# from the levels the new rows happen to have, so it fails on any batch
+# without every one. Hardhat's predictor terms keep such a term and record
+# what it evaluated to; factor columns of the data have been taken out of
+# them, so whatever is left that is not numeric is the problem.
+# @keywords internal
+.check_inline_factors <- function(processed) {
+  classes <- attr(processed$blueprint$terms$predictors, "dataClasses")
+  bad <- names(classes)[classes %in% c("factor", "ordered", "logical", "character")]
+  bad <- setdiff(bad, names(processed$predictors))
+  if (!length(bad)) return(invisible(TRUE))
+  cli::cli_abort(c(
+    "Formula term{?s} {.code {bad}} make{?s/} a factor inside the formula, \\
+     which would be one-hot encoded.",
+    x = "These models take a factor as one column, and the dummies fail at \\
+         {.fn predict} on new data that lacks one of the levels.",
+    i = "Add the factor to {.arg data} as a column, and name the column in \\
+         the formula."
+  ))
+}
+
+# A `categorical_features` declaration as positions in the molded
+# predictors, which is what the matrix the backend sees is laid out by.
+# `order` is the caller's view of the predictors: the formula's terms, or
+# the columns of `x`.
+# @keywords internal
+.declared_positions <- function(declared, order, molded) {
+  # An explicit none stays none: it is what turns the backend's own
+  # inference off.
+  if (!length(declared)) return(integer())
+  if (is.character(declared)) {
+    # A non-syntactic name is backquoted in the terms, and in the molded
+    # names after them; the caller may write it either way.
+    hit <- match(declared, order)
+    bare <- match(declared, gsub("^`|`$", "", order))
+    hit[is.na(hit)] <- bare[is.na(hit)]
+    if (anyNA(hit)) {
+      unknown <- declared[is.na(hit)]
+      cli::cli_abort(c(
+        "{.arg categorical_features} names {?a column that is not a \\
+         predictor/columns that are not predictors}: {.field {unknown}}.",
+        i = "Predictors, in order: {.field {order}}."
+      ))
+    }
+  } else if (is.numeric(declared) && !anyNA(declared) &&
+             all(declared == round(declared))) {
+    hit <- as.integer(declared)
+    if (any(hit < 1L | hit > length(order))) {
+      bad <- as.character(hit[hit < 1L | hit > length(order)])
+      cli::cli_abort(c(
+        "{.arg categorical_features} has position{?s} {bad} outside the \\
+         predictors.",
+        i = "Predictors, in order: {.field {order}}."
+      ))
+    }
+  } else {
+    cli::cli_abort(
+      "{.arg categorical_features} must be predictor names or whole-number \\
+       positions, not {.obj_type_friendly {declared}}."
+    )
+  }
+  pos <- match(order[hit], molded)
+  if (anyNA(pos)) {
+    # A matrix-valued term such as `poly(x, 2)`: several columns, none of
+    # them the term.
+    wide <- order[hit][is.na(pos)]
+    cli::cli_abort(
+      "Term{?s} {.code {wide}} span{?s/} several columns, so cannot be \\
+       declared categorical."
+    )
+  }
+  unique(pos)
+}
+
 # R's type system already says what kind of task this is, so there is
 # nothing to configure by default: a factor, character or logical outcome
 # is classification, a numeric one is regression.
@@ -280,9 +372,15 @@ tabfound.default <- function(x, ...) {
 # Everything the three entry points share, once hardhat has produced a
 # `processed` list.
 # @keywords internal
+#
+# `predictor_order` is the order the caller sees the predictors in, which
+# positions in `categorical_features` count; only a formula's differs from
+# the molded one.
 .tabfound_bridge <- function(processed, model, mode, backend, device,
                              na_action, opts = .preprocess_options(),
-                             raw = NULL, keep_character = character(), ...) {
+                             raw = NULL, keep_character = character(),
+                             categorical_features = NULL,
+                             predictor_order = NULL, ...) {
   hardhat::validate_outcomes_are_univariate(processed$outcomes)
   outcome <- processed$outcomes[[1]]
 
@@ -290,6 +388,12 @@ tabfound.default <- function(x, ...) {
   if (identical(mode, "auto")) mode <- .infer_mode(outcome)
   na_action <- match.arg(na_action, c("auto", "pass", "impute", "fail"))
   dots <- list(...)
+  molded_names <- names(processed$predictors)
+  predictor_order <- predictor_order %||% molded_names
+  if (!is.null(categorical_features)) {
+    dots$categorical_features <- .declared_positions(
+      categorical_features, predictor_order, molded_names)
+  }
 
   # Text and date expansion, on the molded predictors with their typed
   # columns put back (see `.restore_typed_columns()`). Done here rather
@@ -374,6 +478,9 @@ tabfound.default <- function(x, ...) {
     na_action = na_action,
     imputer   = imputer,
     expansion = expansion,
+    # What the model reads, in the caller's order. The blueprint's ptype
+    # holds every column the formula referenced, `y ~ . - k`'s `k` included.
+    predictor_names = predictor_order,
     blueprint = processed$blueprint,
     class     = "tabfound_fit"
   )
@@ -471,7 +578,7 @@ predict.tabfound_fit <- function(object, new_data, type = NULL, ...) {
 #' @export
 print.tabfound_fit <- function(x, ...) {
   cli::cli_text("{.strong tabfound} fit <{x$inner$backend}>, mode {.val {x$mode}}")
-  preds <- names(x$blueprint$ptypes$predictors)
+  preds <- x$predictor_names %||% names(x$blueprint$ptypes$predictors)
   cli::cli_bullets(c(
     "*" = "{length(preds)} predictor{?s}: {.field {utils::head(preds, 6)}}\\
            {if (length(preds) > 6) ' ...' else ''}",

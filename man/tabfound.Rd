@@ -22,6 +22,7 @@ tabfound(x, ...)
   transform_dates = "auto",
   min_cardinality_for_text = 30L,
   text_n_components = 30L,
+  categorical_features = NULL,
   ...
 )
 
@@ -37,6 +38,7 @@ tabfound(x, ...)
   transform_dates = "auto",
   min_cardinality_for_text = 30L,
   text_n_components = 30L,
+  categorical_features = NULL,
   ...
 )
 
@@ -88,6 +90,13 @@ handles neither.}
 see \code{\link[=tabular_classifier]{tabular_classifier()}}. \code{"auto"} follows the checkpoint's own
 recipe, which turns both on for TabPFN v3.5 and leaves them off
 elsewhere.}
+
+\item{categorical_features}{Predictors to declare categorical, as names
+or as positions. Positions count the predictors in the order the
+formula lists them (for \code{y ~ .}, the order of \code{data}'s columns), or
+the columns of \code{x}. By default every factor, character and logical
+predictor is declared; a declaration replaces that, so list those
+columns too if they should stay declared.}
 
 \item{y}{When \code{x} is a data frame or matrix, the outcome vector.}
 }

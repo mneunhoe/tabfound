@@ -98,6 +98,73 @@ test_that("tabfound() declares factor columns, and nothing for a frame without",
 })
 
 
+test_that("a factor made inside the formula is refused, not one-hot encoded", {
+  dir <- local_fake_backend()
+  set.seed(4)
+  d <- data.frame(a = rnorm(30), b = rexp(30), k = sample(1:6, 30, TRUE))
+  d$y <- d$a + d$k
+  # `model.matrix()` would make one dummy per level, and `forge()` would
+  # later build dummies only for the levels a batch has, so predict failed
+  # on any rows without every one.
+  expect_error(tabfound(y ~ a + factor(k), data = d, model = dir),
+               "factor\\(k\\).*one-hot")
+  expect_error(tabfound(y ~ a + cut(b, 3) + I(b > 1), data = d, model = dir),
+               "Formula terms")
+  # Numeric terms are left alone, and the factor as a column works.
+  expect_no_error(tabfound(y ~ a + log(b) + poly(b, 2), data = d, model = dir))
+  d$k <- factor(d$k)
+  f <- tabfound(y ~ a + k, data = d, model = dir)
+  expect_no_error(predict(f, d[1:2, ]))
+})
+
+
+test_that("categorical_features counts the formula's predictors, or names them", {
+  dir <- local_fake_backend()
+  set.seed(3)
+  d <- data.frame(g = factor(sample(letters[1:6], 40, TRUE)), x1 = rnorm(40),
+                  x2 = rnorm(40), y = rnorm(40))
+  # hardhat molds numerics first and factors last, so `g` is column 3 of
+  # the matrix. Position 1 means the formula's first term, as written.
+  f <- tabfound(y ~ g + x1 + x2, data = d, model = dir, categorical_features = 1L)
+  expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+  f <- tabfound(y ~ g + x1 + x2, data = d, model = dir, categorical_features = "g")
+  expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+  f <- tabfound(y ~ x2 + g, data = d, model = dir,
+                categorical_features = c("x2", "g"))
+  expect_identical(f$inner$model_ref$args$categorical_features, c(1L, 2L))
+  # `y ~ .` counts the data's columns.
+  f <- tabfound(y ~ ., data = d, model = dir, categorical_features = 1L)
+  expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+  # An explicit none is still none.
+  f <- tabfound(y ~ ., data = d, model = dir, categorical_features = integer())
+  expect_identical(f$inner$model_ref$args$categorical_features, integer())
+
+  expect_error(tabfound(y ~ g + x1, data = d, model = dir, categorical_features = 3L),
+               "position 3 outside")
+  expect_error(tabfound(y ~ g + x1, data = d, model = dir, categorical_features = "x2"),
+               "not a predictor: x2")
+  expect_error(tabfound(y ~ g + poly(x1, 2), data = d, model = dir,
+                        categorical_features = 2L), "several columns")
+
+  # The data-frame method takes names as well, against its own columns.
+  f <- tabfound(d[c("g", "x1")], d$y, model = dir, categorical_features = "g")
+  expect_identical(f$inner$model_ref$args$categorical_features, 1L)
+})
+
+
+test_that("print() lists the predictors the model reads", {
+  dir <- local_fake_backend()
+  set.seed(4)
+  d <- data.frame(a = rnorm(30), b = rexp(30), k = sample(1:6, 30, TRUE))
+  d$y <- d$a
+  # The blueprint's ptype holds every column the formula referenced, `k`
+  # included, though the model never sees it.
+  f <- tabfound(y ~ . - k, data = d, model = dir)
+  out <- paste(cli::cli_fmt(print(f)), collapse = "\n")
+  expect_match(out, "2 predictors: a and b")
+})
+
+
 test_that("a backend without categorical handling says so", {
   # Silently ignoring a declaration would be the worst outcome: the user
   # believes the column is being encoded and it is not.
