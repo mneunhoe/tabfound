@@ -439,7 +439,10 @@
       device  = device %||% model$device,
       weights = .model_weight_bytes(model),
       weights_source = "loaded weights",
-      opts    = model$model_ref$args %||% list(),
+      # Whether a kept cache is on the model is part of the question: it
+      # holds every member, where one built per call holds one.
+      opts    = c(model$model_ref$args %||% list(),
+                  list(kv_cache_kept = has_cache(model))),
       task    = model$task
     ))
   }
@@ -722,6 +725,48 @@
   min(n_query, chunk)
 }
 
+# The backends that share `tabpfn_classifier()` / `tabpfn_regressor()`,
+# and so their member-at-a-time cache.
+.tabpfn_backends <- c("tabpfn", "tabpfn26", "tabpfn3", "tabpfn35")
+
+# How many TabPFN member caches are alive at once during `predict()`.
+#
+# A cache kept on the model (`tabfound_cache()`) holds every member, by
+# design. One built for a single call is built a member at a time, run
+# over every chunk and dropped before the next member's exists, so
+# `n_estimators` does not multiply it. The other backends still keep a
+# cache per member for the call and count their own.
+# @keywords internal
+.tabpfn_live_caches <- function(opts, n_estimators) {
+  if (isTRUE(opts$kv_cache_kept)) return(n_estimators)
+  if (isTRUE(opts$kv_cache)) 1 else 0
+}
+
+# Does a cache `predict()` would build on its own initiative (TabPFN's
+# `chunk_cache`) fit beside the rest of the call?
+#
+# The `persistent` term already models it -- one member's cache, built
+# per call -- so this asks the guard's question with the cache on, and
+# builds only on a plain "ok". "tight" means the call is near the edge
+# already, and the cache would only push it closer; skipping it costs
+# time, not the session. Where the estimate cannot judge -- a device with
+# no constants, a machine it cannot probe -- it builds, keeping the same
+# silence the guard does.
+# @keywords internal
+.chunk_cache_fits <- function(ctx, task, n_context, n_query, n_features,
+                              opts) {
+  est <- tryCatch(
+    do.call(estimate_peak_memory,
+            c(list(ctx$config, n_context = n_context, n_query = n_query,
+                   n_features = n_features, backend = ctx$backend$name,
+                   device = ctx$device, task = task, kv_cache = TRUE),
+              opts)),
+    error = function(e) NULL,
+    warning = function(w) NULL
+  )
+  is.null(est) || est$verdict %in% c("ok", "unknown")
+}
+
 #' Terms for the column -> row -> in-context stack
 #'
 #' TabICL, TabFM and TabPFN v3 are the same three-stage shape with
@@ -745,6 +790,9 @@
 #'   whole cells instead of feature groups (TabFM). Defaults to the
 #'   number of feature groups.
 #' @param kv_cache,n_estimators Whether caches are kept, and how many.
+#' @param decoder Optional `list(heads, head_dim, classes, block_rows)`
+#'   for a retrieval decoder that attends from test rows to training rows
+#'   after the in-context stack (the TabPFN v3/v3.5 classifiers).
 #' @keywords internal
 .icl_family_terms <- function(n_context, n_query, n_features, embed_dim,
                               group_size, n_cls, col_heads, row_heads,
@@ -752,7 +800,7 @@
                               cell_tokens = NULL, kv_cache = FALSE,
                               n_estimators = 1, masked_attention = FALSE,
                               row_chunk = Inf, group_channels = 0,
-                              col_chunk = Inf) {
+                              col_chunk = Inf, decoder = NULL) {
   fg  <- max(1, ceiling(n_features / max(1, group_size)))
   tok <- cell_tokens %||% fg
   hc  <- fg + n_cls
@@ -812,6 +860,23 @@
          # context by masking where TabICL and the TabPFN family slice.
          att = if (isTRUE(masked_attention)) icl_heads * n_context * n else 0)
   )
+
+  # The retrieval decoder runs once the in-context stack has let go, so it
+  # is a stage of its own. Unlike the others it is counted, not fitted: a
+  # block of test rows holds three `(H, rows, N)` score tensors at once
+  # -- the previous block's softmax, still referenced when the collection
+  # between blocks runs, and this block's scores and softmax -- beside the
+  # keys and the one-hot values, one copy each. Written before blocking, this
+  # term would have been three copies of `(H, M, N)`: 3.7 GB at 1,024 test
+  # rows against 50,000 training rows, and the guard did not see it.
+  if (!is.null(decoder)) {
+    rows <- min(n_query, decoder$block_rows %||% Inf)
+    stages <- c(stages, list(list(
+      name = "retrieval decoder", act = 0, res = 0, att = 0,
+      counted = decoder$heads * n_context *
+        (3 * rows + decoder$head_dim + decoder$classes)
+    )))
+  }
 
   # A cache is built once per ensemble member and every one of them stays
   # alive until `predict()` returns, so this term is the one place
@@ -925,10 +990,13 @@ DTYPE_BYTES <- 4
   # own, defaulting to the shared one where nothing has measured it.
   icl_copies <- co$icl_copies %||% co$act_copies
   icl_mult <- 1 + (icl_copies - 1) / spmf
+  # `counted` is a live set whose copies are already in the element count
+  # (the retrieval decoder's), so no fitted constant multiplies it.
   stage_bytes <- vapply(stages, function(s) {
     mult <- if (identical(s$copies %||% "", "icl")) icl_mult else act_mult
     DTYPE_BYTES * (mult * (s$act %||% 0) + att_mult * (s$att %||% 0) +
-                   res_mult * (s$res %||% 0) + pre_mult * (s$prepass %||% 0))
+                   res_mult * (s$res %||% 0) + pre_mult * (s$prepass %||% 0) +
+                   (s$counted %||% 0))
   }, numeric(1))
   names(stage_bytes) <- vapply(stages, function(s) s$name %||% "", character(1))
   n_est <- max(1, suppressWarnings(as.numeric(n_estimators)))
@@ -977,9 +1045,12 @@ DTYPE_BYTES <- 4
 #' * `weights_bytes` -- the checkpoint, resident for the object's life.
 #'   Fixed. Only a smaller model changes it.
 #' * `persistent_bytes` -- the fitted context and, when `kv_cache = TRUE`,
-#'   one cache per ensemble member held for the whole `predict()` call.
-#'   `kv_cache` does not save memory; it *moves* it here from the
-#'   transient term, and multiplies it by `n_estimators`.
+#'   the KV caches. `kv_cache` does not save memory; it *moves* it here
+#'   from the transient term. Most backends hold one cache per ensemble
+#'   member for the whole `predict()` call, so `n_estimators` multiplies
+#'   it; the TabPFN backends build and drop one member's at a time, and
+#'   hold every member's only when [tabfound_cache()] keeps them on the
+#'   model.
 #' * `transient_bytes` -- the forward pass. The largest single stage, not
 #'   the sum of them, and counted once for the whole ensemble: members
 #'   run sequentially, so `n_estimators` does not multiply this.
@@ -1200,8 +1271,12 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                 the context, and subsampling it is the one change that \\
                 always helps.")
     if (isTRUE(opts$kv_cache)) {
-      s <- c(s, "Set {.code kv_cache = FALSE}: it holds one cache per \\
-                  ensemble member for the whole {.fn predict} call.")
+      s <- c(s, if (backend %in% .tabpfn_backends)
+        "Set {.code kv_cache = FALSE}: it holds a member's cache for the \\
+         whole of that member's pass over the test rows."
+      else
+        "Set {.code kv_cache = FALSE}: it holds one cache per \\
+         ensemble member for the whole {.fn predict} call.")
     }
     chunk <- opts$predict_chunk_size
     if (!is.null(chunk) && is.finite(chunk) && chunk > 128) {
@@ -1254,8 +1329,12 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
   }
 
   if (persistent > transient && isTRUE(opts$kv_cache)) {
-    s <- c(s, "Set {.code kv_cache = FALSE}: at these dimensions the caches \\
-                are the largest term, and they scale with {.arg n_estimators}.")
+    s <- c(s, if (backend %in% .tabpfn_backends)
+      "Set {.code kv_cache = FALSE}: at these dimensions the cache is the \\
+       largest term."
+    else
+      "Set {.code kv_cache = FALSE}: at these dimensions the caches \\
+       are the largest term, and they scale with {.arg n_estimators}.")
   }
 
   if (weights >= max(transient, persistent)) {
@@ -1621,7 +1700,8 @@ reset_memory_guard <- function() {
   # something once. `"error"` is a live gate and re-checks every call,
   # because what it guards against is the memory available now.
   in_key <- paste(object$backend, object$device, stage,
-                  n_context, n_query, n_features, n_classes %||% "", sep = "/")
+                  n_context, n_query, n_features, n_classes %||% "",
+                  has_cache(object), sep = "/")
   if (identical(mode, "warn") && !is.null(.guard_seen[[in_key]])) {
     return(invisible(.guard_seen[[in_key]]))
   }

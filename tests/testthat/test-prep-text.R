@@ -120,3 +120,68 @@ test_that("the LU basis is P %*% L, for tall and wide matrices alike", {
     expect_lt(max(abs(PL %*% U - A)), 1e-10)
   }
 })
+
+test_that("the LAPACK LU pivots as the column-at-a-time elimination did", {
+  # The elimination `.lu_permute_l()` used to write out in R, kept as the
+  # reference: first-max partial pivoting, one column at a time. LAPACK's
+  # blocked `dgetrf` must pick the same pivots, so the bases agree to
+  # rounding -- a different pivot would move whole rows.
+  lu_loop <- function(A) {
+    m <- nrow(A); n <- ncol(A); p <- min(m, n)
+    perm <- seq_len(m)
+    for (k in seq_len(p)) {
+      piv <- k - 1L + which.max(abs(A[k:m, k]))
+      if (piv != k) {
+        A[c(k, piv), ] <- A[c(piv, k), ]
+        perm[c(k, piv)] <- perm[c(piv, k)]
+      }
+      if (k < m && A[k, k] != 0) {
+        rows <- (k + 1L):m
+        A[rows, k] <- A[rows, k] / A[k, k]
+        if (k < n) {
+          cols <- (k + 1L):n
+          A[rows, cols] <- A[rows, cols] -
+            A[rows, k, drop = FALSE] %*% A[k, cols, drop = FALSE]
+        }
+      }
+    }
+    L <- A[, seq_len(p), drop = FALSE]
+    L[upper.tri(L)] <- 0
+    diag(L) <- 1
+    PL <- matrix(0, m, p)
+    PL[perm, ] <- L
+    PL
+  }
+  set.seed(5)
+  for (dims in list(c(500, 40), c(40, 500), c(40, 40), c(7, 3))) {
+    A <- matrix(rnorm(prod(dims)), dims[1], dims[2])
+    expect_lt(max(abs(.lu_permute_l(A) - lu_loop(A))), 1e-12)
+  }
+  # A rank-deficient basis -- an exactly zero pivot -- passes without a
+  # warning, as it did.
+  A <- matrix(rnorm(60 * 6), 60, 6)
+  A[, 3] <- 0
+  expect_no_warning(PL <- .lu_permute_l(A))
+  expect_lt(max(abs(PL - lu_loop(A))), 1e-12)
+})
+
+test_that("the training encoding the fit hands back is what transform makes", {
+  # `fit_frame_expansion()` lays the training rows out from the encoding
+  # the fit already computed instead of encoding the column again, so the
+  # two must agree to the bit, in each of skrub's three branches.
+  for (fx in c("flat", "small")) {
+    docs <- docs_of(scl[[paste0("text_", fx, "_docs")]])
+    enc <- .fit_string_encoder_encoded(docs, "t", n_components = 30L, seed = 0L)
+    expect_identical(enc$encoded, transform_string_encoder(docs, enc$fit))
+    expect_identical(enc$fit, fit_string_encoder(docs, "t", seed = 0L))
+  }
+  docs <- c("alpha beta", "beta gamma", NA, "gamma delta alpha")
+  vocab <- length(fit_tfidf(.text_as_docs(docs))$vocabulary)
+  enc <- .fit_string_encoder_encoded(docs, "t", n_components = vocab)
+  expect_identical(enc$fit$mode, "passthrough")
+  expect_identical(enc$encoded, transform_string_encoder(docs, enc$fit))
+
+  df <- data.frame(t = docs_of(scl$text_flat_docs), x = seq_along(scl$text_flat_docs))
+  fitted <- fit_frame_expansion(df, TRUE, FALSE, min_cardinality_for_text = 2L)
+  expect_identical(fitted$data, transform_frame_expansion(df, fitted$state))
+})

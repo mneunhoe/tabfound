@@ -22,6 +22,8 @@ notation one for one.
 When there are fewer key/value heads than query heads the keys and
 values are repeated. Torch only has a fused grouped-query kernel for
 half precision, so the reference falls back to \code{repeat_interleave} in
-float32 -- which is what this reproduces, and is exact either way.
+float32 -- which is what this reproduces, and is exact either way. A
+single key/value head is expanded as a view instead of copied: the
+same numbers, bit for bit, without the allocation.
 }
 \keyword{internal}

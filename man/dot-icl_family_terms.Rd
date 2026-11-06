@@ -22,7 +22,8 @@
   masked_attention = FALSE,
   row_chunk = Inf,
   group_channels = 0,
-  col_chunk = Inf
+  col_chunk = Inf,
+  decoder = NULL
 )
 }
 \arguments{
@@ -48,6 +49,10 @@ whole cells instead of feature groups (TabFM). Defaults to the
 number of feature groups.}
 
 \item{kv_cache, n_estimators}{Whether caches are kept, and how many.}
+
+\item{decoder}{Optional \code{list(heads, head_dim, classes, block_rows)}
+for a retrieval decoder that attends from test rows to training rows
+after the in-context stack (the TabPFN v3/v3.5 classifiers).}
 }
 \description{
 TabICL, TabFM and TabPFN v3 are the same three-stage shape with

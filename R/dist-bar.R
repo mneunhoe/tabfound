@@ -82,7 +82,12 @@ bar_logits_to_mean <- function(logits, borders, full_support = TRUE) {
 
 
 #' Compute one inverse-CDF evaluation (a single quantile)
-#' @param logits      `torch_tensor` of shape `(..., n_bar_bins)`.
+#'
+#' The one-level-at-a-time form of `.bar_icdf()`, kept as the reference
+#' the batched decode is checked against: stacking this over the levels
+#' gives the same tensor, bit for bit.
+#'
+#' @param logits     `torch_tensor` of shape `(..., n_bar_bins)`.
 #' @param borders     `torch_tensor` of length `n_bar_bins + 1`.
 #' @param left_prob   Scalar numeric in `(0, 1)`, OR a `torch_tensor`
 #'   broadcastable to `logits$size()[-last]`.
@@ -152,10 +157,58 @@ bar_logits_to_quantile_single <- function(logits, borders, left_prob) {
 #' @return `torch_tensor` with the quantile axis appended last.
 #' @export
 bar_logits_to_quantiles <- function(logits, borders, quantiles) {
-  outs <- lapply(quantiles, function(q) {
-    bar_logits_to_quantile_single(logits, borders, q)
-  })
-  torch::torch_stack(outs, dim = -1L)
+  lead <- as.integer(logits$size())
+  lead <- lead[-length(lead)]
+  needle <- torch::torch_tensor(as.numeric(quantiles), dtype = logits$dtype,
+                                device = logits$device)
+  .bar_icdf(logits, borders, needle$expand(c(lead, length(quantiles))))
+}
+
+
+# The inverse CDF at K levels per row, in one pass: `needle` is
+# `(..., K)`, row i's levels, and the result has the same shape.
+#
+# The softmax, the cumulative sum and its zero-padded copy are each built
+# once, and one batched `searchsorted` and `gather` place every level.
+# Going a level at a time rebuilt all three `(n, n_bins)` tensors per
+# level -- K times over, with K = 199 quantiles or 100 draws -- and R's GC
+# cannot see their size, so generations of them piled up before anything
+# was freed. Each level gets the arithmetic
+# `bar_logits_to_quantile_single()` gives it, in the same order, so the
+# result is that function's, stacked, bit for bit.
+# @keywords internal
+.bar_icdf <- function(logits, borders, needle) {
+  n_bins <- as.integer(borders$size(1)) - 1L
+  probs <- torch::nnf_softmax(logits, dim = -1L)
+  cumprobs <- torch::torch_cumsum(probs, dim = -1L)   # (..., n_bins)
+  # `searchsorted` copies a non-contiguous needle, with a warning.
+  needle <- needle$to(dtype = probs$dtype, device = probs$device)$contiguous()
+
+  # R torch's torch_searchsorted returns 0-indexed positions.
+  idx0 <- torch::torch_searchsorted(cumprobs, needle)$
+    clamp(min = 0L, max = n_bins - 1L)                 # (..., K)
+
+  lead_shape <- as.integer(cumprobs$size())
+  lead_shape[length(lead_shape)] <- 1L
+  zero_pad <- torch::torch_zeros(
+    lead_shape, dtype = probs$dtype, device = probs$device
+  )
+  cumprobs_padded <- torch::torch_cat(list(zero_pad, cumprobs), dim = -1L)
+
+  # Gather is 1-indexed: padded position idx0 (0-indexed) is R's idx0 + 1,
+  # and so are borders[idx0] and borders[idx0 + 1].
+  idx_r <- idx0 + 1L
+  cp_at_idx <- torch::torch_gather(cumprobs_padded, dim = -1L, index = idx_r)
+  probs_at_idx <- torch::torch_gather(probs, dim = -1L, index = idx_r)
+  idx_flat <- idx_r$contiguous()$view(-1L)
+  left_border <- torch::torch_index_select(borders, dim = 1L, index = idx_flat)$
+    view(idx0$size())
+  right_border <- torch::torch_index_select(borders, dim = 1L,
+                                             index = idx_flat + 1L)$
+    view(idx0$size())
+
+  left_border + (right_border - left_border) * (needle - cp_at_idx) /
+    probs_at_idx
 }
 
 
@@ -177,14 +230,42 @@ bar_logits_to_samples <- function(logits, borders, n_samples, seed = NULL) {
   sample_shape <- c(dims[-length(dims)], as.integer(n_samples))
   u <- torch::torch_rand(sample_shape,
                           dtype = logits$dtype, device = logits$device)
-  # For each sample k, compute icdf(logits, u[..., k]) and stack.
-  outs <- lapply(seq_len(n_samples), function(k) {
-    bar_logits_to_quantile_single(
-      logits, borders,
-      u$select(dim = -1L, index = as.integer(k))
-    )
+  .bar_icdf(logits, borders, u)
+}
+
+
+# Draws for `n` rows whose logits arrive a chunk at a time: `logits_of(s, e)`
+# returns rows `s:e` as `(e - s + 1, n_bins)`. Returns the `(n, n_samples)`
+# R matrix of draws on the borders' scale.
+#
+# The uniforms are drawn once, for all `n` rows, right after seeding, and
+# each chunk decodes its own rows of them. That is the stream one
+# `bar_logits_to_samples()` call over every row draws, so a seeded result
+# does not depend on the chunk size. Drawing per chunk would not be: on
+# `mps` two consecutive `torch_rand()` calls are not one call split in two.
+# The uniforms are `n * n_samples` floats; the logits they replace holding
+# are `n * n_bins`.
+# @keywords internal
+.bar_samples_over_chunks <- function(n, chunk_size, logits_of, borders,
+                                     n_samples, seed = NULL) {
+  chunk_size <- as.integer(chunk_size)
+  starts <- seq(1L, n, by = chunk_size)
+  u <- NULL
+  draws <- lapply(seq_along(starts), function(k) {
+    if (k > 1L) collect_between_chunks()
+    s <- starts[[k]]
+    e <- min(s + chunk_size - 1L, n)
+    logits <- logits_of(s, e)
+    if (is.null(u)) {
+      # Drawn once the first chunk says which dtype and device. Seeding
+      # right before means no forward pass, here or later, moves the stream.
+      if (!is.null(seed)) torch::torch_manual_seed(as.integer(seed))
+      u <<- torch::torch_rand(c(n, as.integer(n_samples)),
+                              dtype = logits$dtype, device = logits$device)
+    }
+    as.matrix(.bar_icdf(logits, borders, u[s:e, , drop = FALSE])$cpu())
   })
-  torch::torch_stack(outs, dim = -1L)
+  do.call(rbind, draws)
 }
 
 # ---------------------------------------------------------------------------

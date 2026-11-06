@@ -74,14 +74,11 @@ estimate_exp_tail_params <- function(q, alpha, num_tail_quantiles = .QD_TAIL_QUA
 #'
 #' @param grid Numeric matrix `(n_rows, n_levels)` of predicted quantiles.
 #' @param alpha Numeric vector of level probabilities, ascending.
+#' @param sorted `TRUE` when every row of `grid` is already ascending, as
+#'   one sorted on the device is; the row-wise sort is then skipped.
 #' @keywords internal
-quantile_dist <- function(grid, alpha) {
-  grid <- as.matrix(grid)
-  # `fix_crossing = TRUE, crossing_method = "sort"`.
-  q <- t(apply(grid, 1L, sort))
-  if (!is.matrix(q) || ncol(q) != ncol(grid)) {
-    q <- matrix(q, nrow = nrow(grid), ncol = ncol(grid))
-  }
+quantile_dist <- function(grid, alpha, sorted = FALSE) {
+  q <- if (isTRUE(sorted)) as.matrix(grid) else .sort_grid_rows(grid)
   n <- ncol(q)
   tails <- estimate_exp_tail_params(q, alpha)
   q_l <- q[, 1L]; q_r <- q[, n]
@@ -144,18 +141,35 @@ quantile_dist_icdf <- function(dist, probs) {
 #' @param type One of `"mean"`, `"median"`, `"quantiles"`,
 #'   `"raw_quantiles"`.
 #' @param quantiles Probabilities for `type = "quantiles"`.
+#' @param sorted Passed to [quantile_dist()].
 #' @keywords internal
 quantile_dist_stat <- function(grid, alpha, type = "mean",
-                               quantiles = c(0.1, 0.5, 0.9)) {
-  dist <- quantile_dist(grid, alpha)
+                               quantiles = c(0.1, 0.5, 0.9), sorted = FALSE) {
+  # The mean and the sorted grid read nothing off the tails, so they skip
+  # the tail fit.
+  if (type %in% c("mean", "raw_quantiles")) {
+    q <- if (isTRUE(sorted)) as.matrix(grid) else .sort_grid_rows(grid)
+    return(if (type == "mean") rowMeans(q) else q)
+  }
+  dist <- quantile_dist(grid, alpha, sorted = sorted)
   switch(
     type,
-    "mean" = rowMeans(dist$quantiles),
     "median" = drop(quantile_dist_icdf(dist, 0.5)),
     "quantiles" = quantile_dist_icdf(dist, quantiles),
-    "raw_quantiles" = dist$quantiles,
     cli::cli_abort("Unknown output type: {.val {type}}.")
   )
+}
+
+# Sort each row of a grid ascending: the reference's `fix_crossing =
+# TRUE, crossing_method = "sort"`.
+# @keywords internal
+.sort_grid_rows <- function(grid) {
+  grid <- as.matrix(grid)
+  q <- t(apply(grid, 1L, sort))
+  if (!is.matrix(q) || ncol(q) != ncol(grid)) {
+    q <- matrix(q, nrow = nrow(grid), ncol = ncol(grid))
+  }
+  q
 }
 
 #' Summarise a predicted quantile grid

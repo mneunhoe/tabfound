@@ -60,25 +60,20 @@ rope <- torch::nn_module(
     self$.angle_cache <- new.env(parent = emptyenv())
   },
 
-  # The channel-pair index vectors depend on the head dimension alone,
-  # which cannot change between calls, so they are built on first use and
-  # kept.
+  # The interleaved channel-pair index vectors depend on the head
+  # dimension alone, which cannot change between calls, so they are built
+  # on first use and kept. The split-half convention needs none: its
+  # halves are `narrow()` views.
   .pair_indices = function(dh, dev) {
     key <- paste0("idx-", dh, "-", as.character(dev))
     hit <- self$.angle_cache[[key]]
     if (!is.null(hit)) return(hit)
-    idx <- if (self$interleaved) {
-      list(torch::torch_arange(1L, dh - 1L, 2L, dtype = torch::torch_long(),
-                               device = dev),
-           torch::torch_arange(2L, dh, 2L, dtype = torch::torch_long(),
-                               device = dev))
-    } else {
-      half <- as.integer(dh %/% 2L)
-      list(torch::torch_arange(1L, half, dtype = torch::torch_long(),
-                               device = dev),
-           torch::torch_arange(half + 1L, dh, dtype = torch::torch_long(),
-                               device = dev))
-    }
+    idx <- list(
+      torch::torch_arange(1L, dh - 1L, 2L, dtype = torch::torch_long(),
+                          device = dev),
+      torch::torch_arange(2L, dh, 2L, dtype = torch::torch_long(),
+                          device = dev)
+    )
     assign(key, idx, envir = self$.angle_cache)
     idx
   },
@@ -120,12 +115,19 @@ rope <- torch::nn_module(
     ang <- self$.angles(t, dev)
     cos <- ang$cos; sin <- ang$sin
 
-    idx <- self$.pair_indices(dh, dev)
-    x1 <- torch::torch_index_select(x, dim = -1L, index = idx[[1]])
-    x2 <- torch::torch_index_select(x, dim = -1L, index = idx[[2]])
     rot <- if (self$interleaved) {
+      idx <- self$.pair_indices(dh, dev)
+      x1 <- torch::torch_index_select(x, dim = -1L, index = idx[[1]])
+      x2 <- torch::torch_index_select(x, dim = -1L, index = idx[[2]])
       torch::torch_stack(list(-x2, x1), dim = -1L)$reshape(x$size())
     } else {
+      # The two halves are contiguous channel ranges, so `narrow()` views
+      # them without the copy `index_select()` makes -- and the callers
+      # hand in transposed `q`/`k`, where that copy is a strided gather.
+      # The values are the same either way; only `cat()` materialises.
+      half <- as.integer(dh %/% 2L)
+      x1 <- x$narrow(-1L, 1L, half)
+      x2 <- x$narrow(-1L, half + 1L, half)
       torch::torch_cat(list(-x2, x1), dim = -1L)
     }
 

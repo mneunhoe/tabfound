@@ -6,20 +6,20 @@
     "n_query": 500,
     "n_features": 50
   },
-  "measured_on": "2026-08-12",
+  "measured_on": "2026-11-06",
   "machine_total_bytes": 51539607552,
-  "spmf_floor": 1.44638651143512,
+  "spmf_floor": 1.10690326690786,
   "points": [
     {
       "n_context": 4000,
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 8413020160,
-      "loaded_bytes": 576569344,
-      "elapsed_sec": 12.5446,
+      "peak_bytes": 5398052864,
+      "loaded_bytes": 587694080,
+      "elapsed_sec": 13.7103,
       "method": "rss-sampling",
-      "samples": 756,
+      "samples": 799,
       "spmf": 1
     },
     {
@@ -27,11 +27,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 10131406848,
-      "loaded_bytes": 597508096,
-      "elapsed_sec": 12.9568,
+      "peak_bytes": 5597560832,
+      "loaded_bytes": 624820224,
+      "elapsed_sec": 15.1682,
       "method": "rss-sampling",
-      "samples": 779,
+      "samples": 866,
       "spmf": 2
     },
     {
@@ -39,11 +39,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 10280566784,
-      "loaded_bytes": 603045888,
-      "elapsed_sec": 14.3388,
+      "peak_bytes": 5698666496,
+      "loaded_bytes": 640204800,
+      "elapsed_sec": 15.9127,
       "method": "rss-sampling",
-      "samples": 872,
+      "samples": 932,
       "spmf": 4
     },
     {
@@ -51,11 +51,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 10110533632,
-      "loaded_bytes": 583958528,
-      "elapsed_sec": 16.0424,
+      "peak_bytes": 5624479744,
+      "loaded_bytes": 611893248,
+      "elapsed_sec": 19.1605,
       "method": "rss-sampling",
-      "samples": 955,
+      "samples": 1070,
       "spmf": 8
     },
     {
@@ -63,11 +63,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 9468362752,
-      "loaded_bytes": 592986112,
-      "elapsed_sec": 19.8258,
+      "peak_bytes": 5670830080,
+      "loaded_bytes": 598212608,
+      "elapsed_sec": 21.8429,
       "method": "rss-sampling",
-      "samples": 1180,
+      "samples": 1260,
       "spmf": 16
     },
     {
@@ -75,11 +75,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 8826978304,
-      "loaded_bytes": 596934656,
-      "elapsed_sec": 27.0967,
+      "peak_bytes": 5681954816,
+      "loaded_bytes": 581435392,
+      "elapsed_sec": 28.5284,
       "method": "rss-sampling",
-      "samples": 1602,
+      "samples": 1620,
       "spmf": 32
     }
   ]

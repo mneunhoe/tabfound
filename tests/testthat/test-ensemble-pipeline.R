@@ -388,6 +388,49 @@ test_that("sampling uses the ensemble rather than one unensembled pass", {
 })
 
 
+test_that("an ensemble samples a chunk at a time and keeps its seeded draw", {
+  d <- Sys.getenv("TABFOUND_TABPFN_REG_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN_REG_DIR not configured")
+
+  # Sampling used to gather every chunk's averaged bucket probabilities
+  # into one `n_test x n_bins` R matrix, and the mean and the quantiles
+  # built it too, to throw it away. Now only sampling asks for them, and
+  # it decodes each chunk as it comes, from uniforms drawn once for every
+  # row: the seed fixes the draw whatever the chunking, up to the bits the
+  # forward's batch size moves.
+  set.seed(14)
+  X <- matrix(rnorm(150 * 4), ncol = 4)
+  y <- as.numeric(X %*% c(1, -1, 0.5, 0)) + rnorm(150, sd = 0.3)
+  tr <- 1:110; te <- 111:150
+  cfg <- generate_ensemble_configs_native(X[tr, ], y[tr], n_estimators = 2L,
+                                          head = "regressor", variant = "v2.5",
+                                          random_state = 0L)
+  draw <- function(...) {
+    m <- fit(tabular_regressor(d, ensemble_configs = cfg, ...), X[tr, ], y[tr])
+    predict(m, X[te, ], type = "sample", n_samples = 30L, seed = 4L)
+  }
+  whole <- draw(predict_chunk_size = 1024L)
+  expect_identical(dim(whole), c(40L, 30L))
+  expect_equal(draw(predict_chunk_size = 9L), whole, tolerance = 1e-5)
+
+  # The pseudo-logits are returned only when asked for.
+  net <- load_backend_model(d, task = "regression")$net
+  borders <- .regression_borders_of(net)
+  run <- function(want) {
+    apply_ensemble_predict_regressor(
+      net, .column_embeddings_for(net, "cpu"), X[tr, ], X[te, ], y[tr],
+      configs = cfg, borders = borders, want_logits = want)
+  }
+  lean <- run(FALSE)
+  full <- run(TRUE)
+  expect_null(lean$pseudo_logits)
+  expect_identical(as.integer(full$pseudo_logits$size()),
+                   c(40L, as.integer(borders$size(1)) - 1L))
+  expect_identical(lean$mean, full$mean)
+  expect_identical(lean$quantiles, full$quantiles)
+})
+
+
 test_that("an ensemble's predictions move with an offset in the target", {
   d <- Sys.getenv("TABFOUND_TABPFN_REG_DIR", unset = "")
   skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN_REG_DIR not configured")
