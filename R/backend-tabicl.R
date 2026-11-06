@@ -1289,7 +1289,7 @@ tabicl_describe <- function(config, task) {
 #' TabICL's peak-memory shapes
 #'
 #' Three stages with three different peaks, so the estimate takes the
-#' maximum: the column embedder is wide (`rows x column-groups x
+#' maximum: the column embedder is wide (`rows x (columns + CLS slots) x
 #' embed_dim`) but kept linear in rows by its inducing points, the row
 #' interactor is the same width over a short sequence, and the in-context
 #' stage is quadratic in rows but only `embed_dim * row_num_cls` wide.
@@ -1299,13 +1299,24 @@ tabicl_describe <- function(config, task) {
 #' @keywords internal
 tabicl_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   n_est <- max(1, as.numeric(opts$n_estimators %||% 1))
+  n_cls <- as.numeric(config$row_num_cls %||% 4)
   .icl_family_terms(
     n_context    = n_context,
     n_query      = .resident_query(n_query, opts),
     n_features   = n_features,
     embed_dim    = as.numeric(config$embed_dim),
-    group_size   = as.numeric(config$col_feature_group_size %||% 3),
-    n_cls        = as.numeric(config$row_num_cls %||% 4),
+    # One token per *column*, not per group of them. `group_cells()`
+    # stacks `col_feature_group_size` cyclic shifts of the columns as
+    # channels, which keeps all p of them, and prepends `row_num_cls`
+    # sentinel columns that the column stage carries like any other and
+    # the row stage turns into CLS tokens. Sizing the column stage as
+    # `ceiling(p / 3)` tokens and the row stage as that plus the CLS
+    # slots put it at 4 + 4 tokens for p = 10 where the network runs 14
+    # through both, and let a fitted `act_copies` of 141 absorb the
+    # difference at the one shape it was fitted on.
+    group_size   = 1,
+    cell_tokens  = n_features + n_cls,
+    n_cls        = n_cls,
     col_heads    = as.numeric(config$col_nhead %||% 8),
     row_heads    = as.numeric(config$row_nhead %||% 8),
     icl_heads    = as.numeric(config$icl_nhead %||% 8),
