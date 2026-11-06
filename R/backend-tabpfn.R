@@ -713,7 +713,10 @@ tabpfn_regressor <- function(ctx,
            X_train, categorical_features, ensemble_configs))
   }
 
-  .single_pass_chunk <- function(state, X_test_chunk, quantiles, cache) {
+  # The tempered logits of one chunk of test rows, `(rows, n_bins)`. The
+  # temperature applies to all three output types alike: a draw has to come
+  # from the distribution the mean and the quantiles beside it describe.
+  .single_pass_logits <- function(state, X_test_chunk, cache) {
     x_te <- as_float_tensor(as.matrix(X_test_chunk), device = dev)$unsqueeze(1L)
     out <- if (is.null(cache)) {
       x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
@@ -732,6 +735,12 @@ tabpfn_regressor <- function(ctx,
     }
     logits <- out$logits[1, , ]
     if (softmax_temperature != 1) logits <- logits / softmax_temperature
+    logits
+  }
+
+  .single_pass_chunk <- function(state, X_test_chunk, quantiles, cache,
+                                 pipelines = NULL) {
+    logits <- .single_pass_logits(state, X_test_chunk, cache)
     list(
       mean      = as.numeric(bar_logits_to_mean(logits, borders)$cpu()) *
                     state$y_std + state$y_mean,
@@ -872,23 +881,24 @@ tabpfn_regressor <- function(ctx,
                                              seed = seed)$cpu()) *
                state$y_std + state$y_mean)
     }
-    x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
-    y_z  <- (state$y_train - state$y_mean) / state$y_std
-    y_tr <- as_float_tensor(matrix(y_z, ncol = 1L),
-                            device = dev)$squeeze(-1L)$unsqueeze(1L)
-    x_te <- as_float_tensor(as.matrix(newdata), device = dev)$unsqueeze(1L)
-    out <- torch::with_no_grad(tabpfn_forward(
-      net, x_tr, y_tr, x_te, col_emb,
-      save_peak_memory_factor = save_peak_memory_factor,
-      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
-    # Same tempering the mean and the quantiles get in `.single_pass_chunk`:
-    # a draw has to come from the distribution reported beside it, so the
-    # temperature cannot apply to only two of the three types.
-    logits <- out$logits[1, , ]
-    if (softmax_temperature != 1) logits <- logits / softmax_temperature
-    as.matrix(bar_logits_to_samples(logits, borders,
-                                    n_samples = as.integer(n_samples),
-                                    seed = seed)$cpu()) *
+    # The same chunked, cache-aware forward the mean and the quantiles
+    # run. This used to be one uncached pass over all of `newdata`, so
+    # its peak grew with the test set and `kv_cache = TRUE` did nothing
+    # for it.
+    # The cache comes from where the mean's does, so `kv_cache`,
+    # `chunk_cache` and the per-chunk exactness check apply alike.
+    X_te <- as.matrix(newdata)
+    src <- .member_cache(state, NULL, nrow(X_te))
+    cache <- src$get(1L)
+    .bar_samples_over_chunks(
+      nrow(X_te), predict_chunk_size,
+      function(s, e) {
+        X_chunk <- X_te[s:e, , drop = FALSE]
+        .single_pass_logits(state, X_chunk,
+                            .single_pass_cache(net, cache, state$X_train,
+                                               X_chunk, dev, src$exact))
+      },
+      borders, n_samples = n_samples, seed = seed) *
       state$y_std + state$y_mean
   }
 
