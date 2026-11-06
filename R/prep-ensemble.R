@@ -106,6 +106,104 @@ transform_simple_imputer <- function(X, fit) {
 
 
 # ---------------------------------------------------------------------------
+# TransformToNumerical
+# ---------------------------------------------------------------------------
+
+#' Fit the reference wrappers' `TransformToNumerical`
+#'
+#' TabICL and TabFM both start from a `ColumnTransformer` that sends the
+#' categorical columns through an ordinal encoder and the numeric ones
+#' through a mean [fit_simple_imputer()]. Three things follow from that,
+#' and each changes what the network sees:
+#'
+#' * A categorical column is coded over the categories *observed* at fit,
+#'   and a missing or unseen value becomes `-1`. Mean-imputing the codes
+#'   instead gives `1.6`, which is not any category, and gives an unseen
+#'   level its R code, which the fit never taught the model anything
+#'   about.
+#' * Only the numeric columns are mean-imputed.
+#' * The transformer's output puts the categorical columns first, in their
+#'   original order, then the numeric ones. Every feature shuffle is drawn
+#'   over that order, so keeping R's order would put members' permutations
+#'   on different columns than the reference's.
+#'
+#' The two wrappers' encoders differ. TabICL uses sklearn's
+#' `OrdinalEncoder`: categories sorted. TabFM uses its own
+#' `CategoricalOrdinalEncoder`: categories in order of first appearance,
+#' and one seen fewer than `min_frequency` times (2, by default) is coded
+#' as unknown too. Categories here are the column's values, which for a
+#' factor are its level codes, so "sorted" is level order -- the same
+#' reading the TabPFN encoder takes.
+#'
+#' With no categorical columns this is exactly [fit_simple_imputer()], in
+#' the original column order.
+#'
+#' @param X_train Numeric matrix.
+#' @param cat_features 1-based indices of categorical columns, or `NULL`.
+#' @param order `"sorted"` (TabICL) or `"appearance"` (TabFM).
+#' @param min_frequency Categories seen fewer times are coded as unknown.
+#' @param keep_empty Passed to [fit_simple_imputer()] for the numeric
+#'   columns. A categorical column is never dropped: entirely missing, it
+#'   is all `-1`, as in the reference.
+#' @return The imputer's fields, plus `cat_features`, `num_features`, the
+#'   `categories` of each categorical column, and `keep`, a mask over the
+#'   input columns of those that survive.
+#' @keywords internal
+fit_to_numerical <- function(X_train, cat_features = NULL,
+                             order = c("sorted", "appearance"),
+                             min_frequency = 1L, keep_empty = FALSE) {
+  order <- match.arg(order)
+  X <- as.matrix(X_train); storage.mode(X) <- "double"
+  cat_features <- sort(unique(as.integer(cat_features)))
+  num_features <- setdiff(seq_len(ncol(X)), cat_features)
+  # Checked over every column, as before: an infinity in a column
+  # declared categorical is no more meaningful as a category.
+  .reject_infinite(X)
+  imputer <- fit_simple_imputer(X[, num_features, drop = FALSE], keep_empty)
+  categories <- lapply(cat_features, function(j) {
+    v <- X[, j]; v <- v[!is.na(v)]
+    cats <- if (order == "sorted") sort(unique(v)) else unique(v)
+    if (min_frequency > 1L) {
+      counts <- tabulate(match(v, cats), length(cats))
+      cats <- cats[counts >= min_frequency]
+    }
+    cats
+  })
+  keep <- rep(TRUE, ncol(X))
+  keep[num_features] <- imputer$keep
+  list(cat_features = cat_features, num_features = num_features,
+       categories = categories, means = imputer$means,
+       num_keep = imputer$keep, keep = keep)
+}
+
+#' @rdname fit_to_numerical
+#' @param X Numeric matrix.
+#' @param fit Result of [fit_to_numerical()]. A [fit_simple_imputer()]
+#'   result is accepted too -- it is the no-categorical case -- which is
+#'   what a model fitted before this existed carries.
+#' @return The categorical columns' codes, then the imputed numeric
+#'   columns.
+#' @keywords internal
+transform_to_numerical <- function(X, fit) {
+  X <- as.matrix(X); storage.mode(X) <- "double"
+  cat_features <- fit$cat_features %||% integer()
+  num_features <- fit$num_features %||% seq_along(fit$means)
+  .reject_infinite(X)
+  codes <- matrix(-1, nrow(X), length(cat_features),
+                  dimnames = list(NULL, colnames(X)[cat_features]))
+  for (k in seq_along(cat_features)) {
+    code <- match(X[, cat_features[[k]]], fit$categories[[k]]) - 1
+    codes[!is.na(code), k] <- code[!is.na(code)]
+  }
+  num <- transform_simple_imputer(
+    X[, num_features, drop = FALSE],
+    list(means = fit$means, keep = fit$num_keep %||% fit$keep)
+  )
+  cbind(codes, num)
+}
+
+
+# ---------------------------------------------------------------------------
 # TabICL's Shuffler
 # ---------------------------------------------------------------------------
 

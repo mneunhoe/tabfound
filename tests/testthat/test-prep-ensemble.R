@@ -346,6 +346,84 @@ test_that("SimpleImputer matches sklearn with and without keep_empty_features", 
 })
 
 
+# Two factor columns after a numeric one, as `.encode_predictors()` codes
+# them: `f` has a missing value at fit and an unseen level ("a") at
+# predict; `g` has a level ("b") seen only once.
+to_numerical_frames <- function() {
+  lv <- c("a", "b", "c")
+  tr <- data.frame(x = 1:6, f = factor(c("c", "b", "c", NA, "b", "b"), lv),
+                   g = factor(c("b", "a", "a", "a", "c", "c"), lv))
+  te <- data.frame(x = c(1, NA, 3), f = factor(c("b", NA, "a"), lv),
+                   g = factor(c("b", "c", "a"), lv))
+  list(X = .encode_predictors(tr), X_test = .encode_predictors(te))
+}
+
+test_that("TransformToNumerical codes categoricals as each reference does", {
+  d <- to_numerical_frames()
+  # The expected matrices are the two wrappers' `TransformToNumerical`
+  # (tabicl 2.2.0, tabfm 1.0.1) on the same frame with pandas categorical
+  # columns. Missing and unseen categories are -1, never a mean, and the
+  # categorical columns come first.
+  icl <- fit_to_numerical(d$X, 2:3, order = "sorted", keep_empty = TRUE)
+  expect_identical(unname(transform_to_numerical(d$X, icl)),
+                   cbind(c(1, 0, 1, -1, 0, 0), c(1, 0, 0, 0, 2, 2), 1:6 + 0))
+  expect_identical(unname(transform_to_numerical(d$X_test, icl)),
+                   cbind(c(0, -1, -1), c(1, 2, 0), c(1, 3.5, 3)))
+  expect_identical(colnames(transform_to_numerical(d$X, icl)), c("f", "g", "x"))
+
+  # TabFM codes in order of appearance, and a category seen once is
+  # unknown too (`min_cat_frequency = 2`).
+  fm <- fit_to_numerical(d$X, 2:3, order = "appearance", min_frequency = 2L)
+  expect_identical(unname(transform_to_numerical(d$X, fm)),
+                   cbind(c(0, 1, 0, -1, 1, 1), c(-1, 0, 0, 0, 1, 1), 1:6 + 0))
+  expect_identical(unname(transform_to_numerical(d$X_test, fm)),
+                   cbind(c(1, -1, -1), c(-1, 1, 0), c(1, 3.5, 3)))
+})
+
+test_that("TransformToNumerical without categoricals is the SimpleImputer", {
+  d <- to_numerical_frames()
+  for (keep_empty in c(FALSE, TRUE)) {
+    X <- cbind(d$X, NA_real_)
+    fit <- fit_to_numerical(X, NULL, keep_empty = keep_empty)
+    expect_identical(transform_to_numerical(X, fit),
+                     transform_simple_imputer(X, fit_simple_imputer(X, keep_empty)))
+  }
+  # A model fitted before the encoder existed carries a bare imputer.
+  old <- fit_simple_imputer(d$X)
+  expect_identical(transform_to_numerical(d$X_test, old),
+                   transform_simple_imputer(d$X_test, old))
+})
+
+test_that("TabICL and TabFM read a missing category as an unseen one", {
+  # Both are -1 to the reference, so the network cannot tell them apart.
+  # Mean-imputing the codes instead put the missing row between levels.
+  set.seed(36L)
+  X <- cbind(sample(0:2, 40L, TRUE), matrix(stats::rnorm(80L), ncol = 2L))
+  y <- factor(sample(c("p", "q"), 40L, TRUE))
+  X_new <- X[c(1, 1), ]
+  X_new[1, 1] <- NA
+  X_new[2, 1] <- 7                                  # never seen at fit
+  specs <- list(
+    tabicl_clf = tabicl_classifier(fake_ctx(tiny_tabicl()), n_estimators = 2L,
+                                   categorical_features = 1L),
+    tabicl_reg = tabicl_regressor(
+      fake_ctx(tiny_tabicl("regressor"), config = list(num_quantiles = 9L)),
+      n_estimators = 2L, categorical_features = 1L),
+    tabfm_clf = tabfm_classifier(fake_ctx(tiny_tabfm()), n_estimators = 2L,
+                                 categorical_features = 1L)
+  )
+  for (nm in names(specs)) {
+    spec <- specs[[nm]]
+    yy <- if (grepl("reg", nm)) X[, 2] else y
+    st <- spec$fit(X, yy)
+    p <- if (grepl("reg", nm)) spec$predict(st, X_new) else
+      spec$predict(st, X_new, type = "prob")
+    expect_equal(unname(as.matrix(p))[1, ], unname(as.matrix(p))[2, ],
+                 tolerance = 1e-6, label = nm)
+  }
+})
+
+
 test_that("infinities are rejected rather than imputed", {
   # `Inf` is not a missing value and sklearn does not treat it as one:
   # the reference raises `ValueError: Input X contains infinity` before

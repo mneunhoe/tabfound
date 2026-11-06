@@ -12,6 +12,7 @@ tabicl_regressor(
   outlier_threshold = 4,
   random_state = 42L,
   quantile_subsample = NULL,
+  categorical_features = NULL,
   predict_chunk_size = 1024L,
   kv_cache = FALSE,
   row_chunk_size = NULL,
@@ -37,6 +38,14 @@ reference's members exactly.}
 
 \item{quantile_subsample}{Row cap for the quantile normalisers; see
 \code{\link[=fit_sk_quantile_transformer]{fit_sk_quantile_transformer()}}.}
+
+\item{categorical_features}{Integer vector of 1-based column indices
+to treat as categorical, as the reference treats a data frame's
+categorical columns: coded over the categories seen at fit, with a
+missing or unseen value as -1 rather than mean-imputed, and moved in
+front of the numeric columns. \code{\link[=tabfound]{tabfound()}} declares a frame's
+factors. \code{NULL} treats every column as numeric, which is the
+reference's array path.}
 
 \item{predict_chunk_size}{Max test rows per forward pass. Test rows
 only ever attend to training rows, so chunking cannot change the
