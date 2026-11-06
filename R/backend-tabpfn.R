@@ -130,6 +130,55 @@ tabpfn_task_of <- function(config) {
 }
 
 
+# @keywords internal
+.check_chunk_cache <- function(chunk_cache) {
+  if (isTRUE(chunk_cache) || isFALSE(chunk_cache)) return(invisible(TRUE))
+  cli::cli_abort("{.arg chunk_cache} must be {.code TRUE} or {.code FALSE}.")
+}
+
+# Where a `predict()` call's member caches come from: `get(i)` returns
+# member `i`'s, or NULL to run it uncached, and `exact` says whether a
+# cache may only be used where it gives the uncached answer.
+#
+# In order: a cache kept on the model is read, every member's at once, as
+# it was built; `kv_cache = TRUE` builds one per member for the call, used
+# as asked; and `chunk_cache` builds one for a call of two or more chunks
+# -- the case where re-encoding the context per chunk is the cost -- when
+# the memory estimate says it fits. That last one is `predict()`'s own
+# initiative, so it must never be why a call fails: a cache that cannot
+# be built leaves its member uncached, which raises any real error itself.
+# @keywords internal
+.cache_source <- function(state, n_rows, build, how) {
+  if (!is.null(state$kv_caches)) {
+    return(list(get = function(i) state$kv_caches[[i]], exact = FALSE))
+  }
+  if (isTRUE(how$kv_cache)) return(list(get = build, exact = FALSE))
+  chunk <- as.integer(how$opts$predict_chunk_size)
+  if (isTRUE(how$chunk_cache) && isTRUE(how$ctx$net$supports_kv_cache) &&
+      n_rows > chunk &&
+      .chunk_cache_fits(how$ctx, how$task, state$n_train %||% nrow(state$X_train),
+                        n_rows, ncol(state$X_train), how$opts)) {
+    return(list(get = function(i) tryCatch(build(i), error = function(e) NULL),
+                exact = TRUE))
+  }
+  list(get = function(i) NULL, exact = FALSE)
+}
+
+# The single pass's half of `.pick_cache()`: the cache, or NULL where it
+# has to give the uncached answer and would not.
+# @keywords internal
+.single_pass_cache <- function(net, cache, X_train, X_test, device,
+                               exact_cache_only) {
+  if (is.null(cache) || !isTRUE(exact_cache_only) ||
+      !isTRUE(net$cache_needs_check)) {
+    return(cache)
+  }
+  x_tr <- as_float_tensor(X_train, device = device)$unsqueeze(1L)
+  x_te <- as_float_tensor(as.matrix(X_test), device = device)$unsqueeze(1L)
+  if (tabpfn_cache_matches(net, cache, x_tr, x_te)) cache else NULL
+}
+
+
 # The ensemble a predictor runs, from whichever of the two sources the
 # caller used, with its weights. Members weighted zero are dropped here,
 # once, so neither their pipelines nor their caches are ever built.
@@ -332,13 +381,39 @@ tabpfn_task_of <- function(config) {
 #'   cache at a time, runs it over every chunk and drops it before
 #'   building the next, so the call holds one cache rather than one per
 #'   member; [tabfound_cache()] is what keeps every member's, on the model.
-#'   Off by default. On `tabpfn` and
-#'   `tabpfn3` it is exactly equivalent to an uncached pass, because every
-#'   statistic those architectures fit comes from the training rows alone.
-#'   On `tabpfn26` it is not: that generation fits its constant-column and
-#'   informative-feature masks over train and test together, so caching
-#'   them can change the prediction -- see [tabpfn26_kv_cache()].
-#'   Supported by the `tabpfn` (v2.5), `tabpfn26` and `tabpfn3` backends.
+#'   Off by default, which means no cache is *kept*; a call spanning
+#'   several chunks may still build one for itself, see `chunk_cache`.
+#'
+#'   How close a cached pass is to an uncached one depends on the
+#'   generation. On `tabpfn` (v2.5) it is bit-identical. On `tabpfn3` and
+#'   `tabpfn35` every statistic comes from the training rows alone, so it
+#'   answers the same question, but it is not the same computation: the
+#'   test rows reach the network without the training rows beside them, so
+#'   every matmul sees a different batch shape and agreement is promised
+#'   only up to float32 rounding (a few 1e-7 on the logits where it has
+#'   been seen; bit-identical on the released weights in every case
+#'   measured on CPU). On `tabpfn26` it can
+#'   be a different answer: that generation fits its constant-column and
+#'   informative-feature masks over train and test together, and a cache
+#'   fits them on train alone -- see [tabpfn26_kv_cache()]. With
+#'   `kv_cache = TRUE` the cache is used regardless, as the reference does.
+#'   Supported by the `tabpfn` (v2.5), `tabpfn26`, `tabpfn3` and
+#'   `tabpfn35` backends.
+#' @param chunk_cache When the cache is off (`kv_cache = FALSE`, and none
+#'   kept by [tabfound_cache()]) and a `predict()` call spans two or more
+#'   `predict_chunk_size` chunks, condition on the training rows once for
+#'   that call and reuse it across the chunks, instead of re-encoding the
+#'   whole context for every chunk -- typically 1.5 to 3 times faster,
+#'   more with more chunks and a larger training set. Nothing is kept: each member's cache is built, used and
+#'   dropped within the call. It is used only where it gives the uncached
+#'   answer -- bit for bit on `tabpfn`, within the float32 rounding
+#'   `kv_cache` describes on `tabpfn3` and `tabpfn35`, and on `tabpfn26`
+#'   only for chunks whose masks over train and that chunk equal the
+#'   train-only ones; any other chunk runs uncached. It is also skipped
+#'   when [estimate_peak_memory()] finds that the cache would not leave the
+#'   call comfortable room. `TRUE` by default; `FALSE` re-encodes the
+#'   context for every chunk, as before. `kv_cache = TRUE` overrides both
+#'   checks.
 #' @param save_peak_memory_factor Integer, or `NULL` (default) to disable.
 #'   Splits each sublayer's work into this many chunks, shrinking the
 #'   attention score matrix each one materialises. Bit-identical output,
@@ -375,6 +450,7 @@ tabpfn_classifier <- function(ctx,
                               trace_dir = NULL,
                               categorical_features = NULL,
                               kv_cache = FALSE,
+                              chunk_cache = TRUE,
                               save_peak_memory_factor = NULL,
                               row_chunk_size = NA_integer_,
                               col_chunk_size = NA_integer_,
@@ -382,6 +458,7 @@ tabpfn_classifier <- function(ctx,
                               member_weights = NULL) {
   .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
                             row_chunk_size, col_chunk_size)
+  .check_chunk_cache(chunk_cache)
   net     <- ctx$net
   dev     <- ctx$device
   col_emb <- .column_embeddings_for(net, dev)
@@ -449,11 +526,14 @@ tabpfn_classifier <- function(ctx,
 
   # What `run_members_outer()` runs: one member over one chunk, added into
   # that chunk's accumulator. A single forward pass is an ensemble of one.
-  .steps <- function(state, pipelines, return_members = FALSE) {
+  .steps <- function(state, pipelines, return_members = FALSE,
+                     exact_cache_only = FALSE) {
     if (is.null(ensemble_configs)) {
       return(list(
         start  = function(X) list(X = X, out = NULL),
         add    = function(st, i, cache) {
+          cache <- .single_pass_cache(net, cache, state$X_train, st$X, dev,
+                                      exact_cache_only)
           st$out <- .single_pass_chunk(state, st$X, cache)
           st
         },
@@ -470,7 +550,7 @@ tabpfn_classifier <- function(ctx,
       save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       pipelines = pipelines, member_weights = member_weights,
-      return_members = return_members
+      return_members = return_members, exact_cache_only = exact_cache_only
     )
   }
 
@@ -521,22 +601,30 @@ tabpfn_classifier <- function(ctx,
 
   # Where each member's cache comes from in one `predict()` call. A kept
   # cache holds every member by design, and is simply read. One built for
-  # this call alone (`kv_cache = TRUE`) is built a member at a time:
+  # this call alone -- because `kv_cache = TRUE` asked, or because
+  # `chunk_cache` judged it worth it -- is built a member at a time:
   # `run_members_outer()` uses it on every chunk and drops it before the
   # next member's exists, so one cache is alive rather than one per member.
-  .member_cache <- function(state, pipelines) {
-    if (!is.null(state$kv_caches)) return(function(i) state$kv_caches[[i]])
-    if (!isTRUE(kv_cache)) return(function(i) NULL)
-    function(i) .build_cache_for(state, pipelines, i)
+  .member_cache <- function(state, pipelines, n_rows) {
+    .cache_source(state, n_rows, function(i) .build_cache_for(state, pipelines, i),
+                  list(ctx = ctx, task = "classification", kv_cache = kv_cache,
+                       chunk_cache = chunk_cache,
+                       opts = list(n_estimators = max(1L, length(ensemble_configs)),
+                                   predict_chunk_size = predict_chunk_size,
+                                   save_peak_memory_factor = save_peak_memory_factor,
+                                   row_chunk_size = row_chunk_size,
+                                   col_chunk_size = col_chunk_size)))
   }
 
   # Per-chunk results, in row order.
   .run <- function(state, X_te, return_members = FALSE) {
     pipelines <- .build_pipelines(state)
+    src <- .member_cache(state, pipelines, nrow(X_te))
     run_members_outer(X_te, predict_chunk_size,
                       max(1L, length(ensemble_configs)),
-                      .steps(state, pipelines, return_members),
-                      .member_cache(state, pipelines))
+                      .steps(state, pipelines, return_members,
+                             exact_cache_only = src$exact),
+                      src$get)
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
@@ -588,6 +676,7 @@ tabpfn_regressor <- function(ctx,
                              trace_dir = NULL,
                              categorical_features = NULL,
                              kv_cache = FALSE,
+                             chunk_cache = TRUE,
                              save_peak_memory_factor = NULL,
                              row_chunk_size = NA_integer_,
                              col_chunk_size = NA_integer_,
@@ -595,6 +684,7 @@ tabpfn_regressor <- function(ctx,
                              member_weights = NULL) {
   .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
                             row_chunk_size, col_chunk_size)
+  .check_chunk_cache(chunk_cache)
   net     <- ctx$net
   dev     <- ctx$device
   col_emb <- .column_embeddings_for(net, dev)
@@ -651,11 +741,14 @@ tabpfn_regressor <- function(ctx,
   }
 
   # See the classifier's `.steps()`.
-  .steps <- function(state, pipelines, quantiles, return_members = FALSE) {
+  .steps <- function(state, pipelines, quantiles, return_members = FALSE,
+                     exact_cache_only = FALSE) {
     if (is.null(ensemble_configs)) {
       return(list(
         start  = function(X) list(X = X, out = NULL),
         add    = function(st, i, cache) {
+          cache <- .single_pass_cache(net, cache, state$X_train, st$X, dev,
+                                      exact_cache_only)
           st$out <- .single_pass_chunk(state, st$X, quantiles, cache)
           st
         },
@@ -671,7 +764,7 @@ tabpfn_regressor <- function(ctx,
       save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       pipelines = pipelines, member_weights = member_weights,
-      return_members = return_members
+      return_members = return_members, exact_cache_only = exact_cache_only
     )
   }
 
@@ -718,18 +811,25 @@ tabpfn_regressor <- function(ctx,
            function(i) .build_cache_for(state, pipelines, i))
   }
 
-  .member_cache <- function(state, pipelines) {
-    if (!is.null(state$kv_caches)) return(function(i) state$kv_caches[[i]])
-    if (!isTRUE(kv_cache)) return(function(i) NULL)
-    function(i) .build_cache_for(state, pipelines, i)
+  .member_cache <- function(state, pipelines, n_rows) {
+    .cache_source(state, n_rows, function(i) .build_cache_for(state, pipelines, i),
+                  list(ctx = ctx, task = "regression", kv_cache = kv_cache,
+                       chunk_cache = chunk_cache,
+                       opts = list(n_estimators = max(1L, length(ensemble_configs)),
+                                   predict_chunk_size = predict_chunk_size,
+                                   save_peak_memory_factor = save_peak_memory_factor,
+                                   row_chunk_size = row_chunk_size,
+                                   col_chunk_size = col_chunk_size)))
   }
 
   .run <- function(state, X_te, quantiles, return_members = FALSE) {
     pipelines <- .build_pipelines(state)
+    src <- .member_cache(state, pipelines, nrow(X_te))
     run_members_outer(X_te, predict_chunk_size,
                       max(1L, length(ensemble_configs)),
-                      .steps(state, pipelines, quantiles, return_members),
-                      .member_cache(state, pipelines))
+                      .steps(state, pipelines, quantiles, return_members,
+                             exact_cache_only = src$exact),
+                      src$get)
   }
 
   .common <- function(state, newdata, quantiles) {

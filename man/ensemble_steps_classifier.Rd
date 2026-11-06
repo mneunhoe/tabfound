@@ -20,7 +20,8 @@ ensemble_steps_classifier(
   col_chunk_size = NA_integer_,
   pipelines = NULL,
   member_weights = NULL,
-  return_members = FALSE
+  return_members = FALSE,
+  exact_cache_only = FALSE
 )
 }
 \arguments{
@@ -42,6 +43,10 @@ to it.}
 
 \item{return_members}{Return each member's raw logits as well: before
 the temperature, with the class permutation undone.}
+
+\item{exact_cache_only}{Use a cache passed to \code{add()} only on a chunk
+it gives the uncached answer; run the others uncached. See
+\code{\link[=tabpfn_classifier]{tabpfn_classifier()}}'s \code{chunk_cache}.}
 }
 \value{
 \code{list(start, add, finish)}; see \code{\link[=run_members_outer]{run_members_outer()}}.
