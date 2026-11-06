@@ -288,6 +288,59 @@ test_that("column-chunking the summary pre-pass changes nothing", {
   }
 })
 
+test_that("TabICL's CLS slots skip the column stage", {
+  # The reference runs `row_num_cls` sentinel-filled slots through the
+  # column stage and the row stage overwrites them. Reference: that path,
+  # rebuilt here. Leaving them out regroups the column-stage batch, so
+  # this is float32 rounding rather than bit-identical.
+  net <- tiny_tabicl()
+  set.seed(62)
+  n_tr <- 30L; n_te <- 9L; p <- 7L
+  x <- torch::torch_randn(c(1L, n_tr + n_te, p))
+  y <- torch::torch_randint(0L, 3L, c(1L, n_tr))$to(dtype = torch::torch_float())
+  ce <- net$col_embedder; ri <- net$row_interactor
+  n_cls <- ri$num_cls
+  torch::with_no_grad({
+    emb <- ce(x, y)
+    xg <- tabicl_group_features(x, ce$group_size)
+    pad <- torch::torch_full(c(1L, n_tr + n_te, n_cls, xg$size(4)), -100.0)
+    f <- torch::torch_cat(list(pad, xg), dim = 3L)$permute(c(1L, 3L, 2L, 4L))$
+      contiguous()
+    src <- ce$tf_col(ce$add_target(ce$in_linear(f), f, y), train_size = n_tr)
+    # The slots' outputs were overwritten by the row stage, so the
+    # feature columns are all of the old embedding anything read -- and
+    # the row stage now prepends the CLS tokens to exactly them.
+    ref_cols <- src$permute(c(1L, 3L, 2L, 4L))[, , (n_cls + 1L):(n_cls + p), ]$
+      contiguous()
+    ref_reps <- as.array(ri(ref_cols))
+    got_reps <- as.array(ri(emb))
+  })
+  expect_identical(as.integer(emb$size(3)), p)
+  ref_cols <- as.array(ref_cols)
+  expect_lt(max(abs(as.array(emb) - ref_cols)), 1e-5 * max(abs(ref_cols)))
+  expect_lt(max(abs(got_reps - ref_reps)), 1e-5 * max(abs(ref_reps)))
+})
+
+test_that("a TabICL cache carrying CLS-slot summaries still predicts", {
+  # A cache saved before the slots left the column stage has a leading
+  # summary per slot. They are dropped on use, and columns are
+  # independent, so the rest is the cache this version would build.
+  net <- tiny_tabicl()
+  set.seed(63)
+  x <- torch::torch_randn(c(1L, 30L, 6L))
+  y <- torch::torch_randint(0L, 3L, c(1L, 24L))$to(dtype = torch::torch_float())
+  torch::with_no_grad({
+    cache <- net$build_kv_cache(x[, 1:24, ], y)
+    old <- cache
+    old$col_hidden <- lapply(cache$col_hidden, function(h) {
+      torch::torch_cat(list(torch::torch_randn_like(h[, 1:2, , ]), h), dim = 2L)
+    })
+    xq <- x[, 25:30, ]
+    expect_true(torch::torch_equal(net(xq, NULL, kv_cache = old),
+                                   net(xq, NULL, kv_cache = cache)))
+  })
+})
+
 test_that("both TabICL chunk axes compose", {
   net <- tiny_tabicl()
   set.seed(59)

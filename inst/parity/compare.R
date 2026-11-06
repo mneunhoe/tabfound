@@ -502,6 +502,12 @@ parity_tabicl <- function(reference_dir, fixture_dir, fixture, label = fixture,
     r <- read_t(file.path(trace_dir, paste0(nm, ".safetensors")))
     p <- read_t(file.path(reference_dir, paste0(nm, ".safetensors")))
     if (is.null(r) || is.null(p)) next
+    # The reference's column stage also carries the reserved CLS slots,
+    # which the row stage overwrites; the R port never builds them.
+    if (identical(nm, "tabicl_col") && length(dim(p)) == 4L &&
+        dim(r)[3] < dim(p)[3]) {
+      p <- p[, , (dim(p)[3] - dim(r)[3] + 1L):dim(p)[3], , drop = FALSE]
+    }
     d <- tensor_diff(r, p)
     add(paste0("stage:", sub("^tabicl_", "", nm)), d,
         note = if (isTRUE(d$shape_ok)) "" else "SHAPE MISMATCH")
