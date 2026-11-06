@@ -29,7 +29,9 @@ synthetic-data variance estimators, and \code{replicated.uniques()},
 The skeleton comes from \code{synthpop::syn(data, m = 0)}, which builds the
 object without synthesising anything. What is filled in afterwards is
 the part that is ours: the syntheses, the visit sequence, the predictor
-matrix, \code{k}, and \code{proper}.
+matrix, \code{k}, and \code{proper}. Values declared with \code{cont_na} are passed to
+it as \code{cont.na}, so synthpop's comparisons treat them as the point
+masses they are.
 
 Methods are reported as \code{"tabfound"} (or \code{"sample"} for variables drawn
 from their marginal, and \code{""} for variables carried through
