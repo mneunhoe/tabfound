@@ -100,6 +100,33 @@
   carries all p columns plus four CLS slots, and its calibration was
   measured while #68 inflated the peaks. A 6,000 x 90 single-member
   estimate falls from 26.8 to 13.3 GB (measured 10.0 GB) (#78).
+* Kumo Tabular's `predict()` no longer re-encodes the training context for
+  every `predict_chunk_size` chunk. A call spanning two or more chunks
+  builds each member's KV cache for that call, one member at a time, and
+  drops it (`chunk_cache = TRUE`, a new argument on the Kumo predictors).
+  With 8 members over 4 chunks that is 1.6-2.9x faster at lower peak
+  memory (9.1 to 6.2 GB on small at 8,000 context rows), and it agrees
+  with the uncached pass to float32 rounding (about 2e-6).
+  `kv_cache = TRUE` now also builds one member's cache at a time;
+  `kv_cache = FALSE` still keeps nothing on the model, and
+  `chunk_cache = FALSE` restores the old behaviour (#96).
+* Kumo Tabular's predictors run several ensemble members in one forward
+  pass when no cache is in use (`member_batch_size`). By default the group
+  is the largest the memory estimate leaves comfortable room for, and
+  members are batched only where a single member's pass is small (up to
+  about 4,000 context rows). That is 1.2-1.6x faster with 8 members at
+  500-2,000 context rows on CPU, and unchanged at larger contexts; answers
+  move by float32 rounding only. The row-chunked KV cache build now keeps
+  per-member categorical flags (#97).
+* Kumo Tabular medium and large no longer pass `enable_gqa` to the
+  attention kernel for the query rows; the 2 KV heads are repeated to
+  every query head first. On CPU each such call is 3-4x faster, about
+  6-13% end to end, and predictions agree to float32 rounding (#98).
+* Kumo's layer loops now release each layer's intermediates, as every
+  other backend's already did. Peak memory falls 1.4-2.9x (4.1 to 1.4 GB
+  on the small regressor at 1,000 context rows) and predictions are
+  bit-identical. Kumo's memory-guard constants were re-measured to match,
+  so its estimates are lower and it chunks or warns less often (#99).
 * Fixed TabICL and TabFM classifiers fitted on a factor with a level no
   training row has -- common in cross-validation folds, subsets, and any
   `tabfound()` fit, since hardhat keeps the outcome's levels. The class
