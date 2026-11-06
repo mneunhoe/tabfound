@@ -794,8 +794,8 @@ tabpfn3_fit_scaler <- function(x, n_train) {
 #'   vectors per column;
 #' * the key/value projections of each ICL block, one head wide because a
 #'   test row attends to one head;
-#' * the post-norm training row embeddings, which the classifier's
-#'   retrieval decoder reads.
+#' * for the classifier, the post-norm training row embeddings its
+#'   retrieval decoder reads. A regressor reads none, so keeps none.
 #'
 #' Unlike v2.6's cache, this one changes nothing: v2.6 fits its
 #' constant-column and informative-feature masks over training *and* test
@@ -807,7 +807,8 @@ tabpfn3_fit_scaler <- function(x, n_train) {
 #' @param scaler Fitted `list(mean, std)`.
 #' @param inducing_hidden List of inducing summaries, one per
 #'   distribution-embedder block.
-#' @param train_embeddings `(B, n_train, D)` post-norm row embeddings.
+#' @param train_embeddings `(B, n_train, D)` post-norm row embeddings,
+#'   or `NULL` for a regressor.
 #' @param y_train `(B, n_train)` ordinal targets, for the classifier's
 #'   decoder.
 #' @param n_train Number of training rows it was built from.
@@ -828,13 +829,14 @@ print.tabpfn3_kv_cache <- function(x, ...) {
   n_kv <- sum(vapply(x$kv, function(e) sum(vapply(e, bytes, numeric(1))),
                      numeric(1)))
   n_ind <- sum(vapply(x$inducing_hidden, bytes, numeric(1)))
-  n_emb <- bytes(x$train_embeddings)
   cli::cli_text("{.strong TabPFN v3 KV cache}")
   cli::cli_bullets(c(
     "*" = "built from {.val {x$n_train}} training row{?s}",
     "*" = "{length(x$kv)} ICL block{?s}, {round(n_kv / 1e6, 1)} MB of key/value projections",
     "*" = "{length(x$inducing_hidden)} inducing summar{?y/ies}, {round(n_ind / 1e6, 1)} MB",
-    "*" = "{round(n_emb / 1e6, 1)} MB of training row embeddings"
+    if (!is.null(x$train_embeddings)) c(
+      "*" = "{round(bytes(x$train_embeddings) / 1e6, 1)} MB of training row embeddings"
+    )
   ))
   invisible(x)
 }
@@ -1065,7 +1067,11 @@ tabpfn_v3_transformer <- torch::nn_module(
     if (isTRUE(return_kv_cache)) {
       res$kv_cache <- tabpfn3_kv_cache(
         kv = icl$kv, scaler = s02$scaler, inducing_hidden = s02$hidden,
-        train_embeddings = train_emb$detach(), y_train = y_BN$detach(),
+        # Only the classifier's decoder reads them. A regressor's cache
+        # saved by an older version carries them anyway; they go unread.
+        train_embeddings = if (identical(self$task_type, "multiclass"))
+          train_emb$detach(),
+        y_train = y_BN$detach(),
         n_train = n_train
       )
     }
@@ -1103,7 +1109,8 @@ tabpfn_v3_transformer <- torch::nn_module(
                         save_peak_memory_factor = save_peak_memory_factor)
     test_emb <- self$output_norm(icl$state)
 
-    train_emb <- cache$train_embeddings$to(device = test_emb$device)
+    train_emb <- cache$train_embeddings
+    if (!is.null(train_emb)) train_emb <- train_emb$to(device = test_emb$device)
     list(
       logits = if (n_test > 0L)
         self$decode(train_emb, test_emb,
@@ -1785,14 +1792,15 @@ tabpfn3_peak_terms <- function(n_context, n_query, n_features, opts, config) {
 
   # v3's cached path keeps `icl_num_kv_heads_test` heads rather than all
   # of them (one, in the published checkpoints), so the cache is a
-  # fraction of the width the other backends store -- plus the training
-  # rows' embeddings, which it also holds on to.
+  # fraction of the width the other backends store -- plus, for the
+  # classifier, the training rows' embeddings its decoder reads.
   if (isTRUE(opts$kv_cache)) {
     d_icl <- e * n_cls
     kv_heads <- as.numeric(config$icl_num_kv_heads_test %||% icl_heads)
     head_dim <- d_icl / max(icl_heads, 1)
+    d_emb <- if (identical(config$head, "regressor")) 0 else d_icl
     terms$persistent <- n_est * (l * 2 * n_context * kv_heads * head_dim +
-                                 n_context * d_icl)
+                                 n_context * d_emb)
   }
   terms
 }

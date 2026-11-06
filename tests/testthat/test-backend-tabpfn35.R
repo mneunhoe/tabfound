@@ -358,6 +358,66 @@ test_that("the KV cache reproduces the forward it was built from", {
 })
 
 
+test_that("a classifier cache holds the decoder keys, not the embeddings", {
+  net <- tiny35_net("classification")
+  d <- tiny35_data()
+  empty <- torch::torch_zeros(c(1L, 0L, d$n_feat))
+  torch::with_no_grad({
+    built <- net(d$x_train, d$y_train, d$x_test, return_kv_cache = TRUE,
+                 row_chunk_size = NULL, col_chunk_size = NULL)
+    cache <- built$kv_cache
+    got <- net(NULL, NULL, d$x_test, kv_cache = cache,
+               row_chunk_size = NULL, col_chunk_size = NULL)$logits
+    # `mlp_classification` and `k_projection`, once, over the training rows.
+    want_keys <- net$heads$decoder_keys(built$train_hidden)
+  })
+  expect_null(cache$train_embeddings)
+  expect_equal(dim(cache$decoder_keys), c(1L, d$n_train, 2L * 4L))
+  expect_true(torch::torch_equal(cache$decoder_keys, want_keys))
+  expect_lt(as.numeric((got - built$logits)$abs()$max()$cpu()), 1e-4)
+
+  # A cache saved before it held decoder keys carries the embeddings
+  # instead. It still loads, and gives the same numbers bit for bit.
+  older <- cache
+  older$decoder_keys <- NULL
+  older$train_embeddings <- built$train_hidden$detach()
+  old_got <- torch::with_no_grad(
+    net(NULL, NULL, d$x_test, kv_cache = older,
+        row_chunk_size = NULL, col_chunk_size = NULL)$logits)
+  expect_true(torch::torch_equal(old_got, got))
+
+  # Both shapes survive the trip through a saved bundle.
+  for (cc in list(cache, older)) {
+    dir <- withr::local_tempdir()
+    w <- .kv_write(list(cc), dir)
+    back <- .kv_read(w$skeleton, file.path(dir, w$file))[[1L]]
+    expect_s3_class(back, "tabpfn35_kv_cache")
+    again <- torch::with_no_grad(
+      net(NULL, NULL, d$x_test, kv_cache = back,
+          row_chunk_size = NULL, col_chunk_size = NULL)$logits)
+    expect_true(torch::torch_equal(again, got))
+  }
+  expect_match(paste(cli::cli_fmt(print(cache)), collapse = " "), "decoder keys")
+  expect_match(paste(cli::cli_fmt(print(older)), collapse = " "), "older cache")
+})
+
+
+test_that("a regressor cache keeps nothing of the training rows' embeddings", {
+  net <- tiny35_net("regression")
+  d <- tiny35_data()
+  y <- torch::torch_randn(c(1L, d$n_train))
+  torch::with_no_grad({
+    built <- net(d$x_train, y, d$x_test, return_kv_cache = TRUE,
+                 row_chunk_size = NULL, col_chunk_size = NULL)
+    got <- net(NULL, NULL, d$x_test, kv_cache = built$kv_cache,
+               row_chunk_size = NULL, col_chunk_size = NULL)$logits
+  })
+  expect_null(built$kv_cache$decoder_keys)
+  expect_null(built$kv_cache$train_embeddings)
+  expect_lt(as.numeric((got - built$logits)$abs()$max()$cpu()), 1e-4)
+})
+
+
 test_that("test rows cannot see each other", {
   # The ICL stack restricts keys to the training rows by slicing, not by
   # masking, so this is the check that the slice is where it should be.

@@ -468,6 +468,38 @@ test_that("the KV cache reproduces the forward it was built from", {
 })
 
 
+test_that("a regressor cache keeps no training row embeddings", {
+  # Only the classifier's decoder reads them.
+  net <- tiny_net("regressor")
+  set.seed(7)
+  x_tr <- torch::torch_randn(c(1L, 30L, 5L))
+  x_te <- torch::torch_randn(c(1L, 9L, 5L))
+  y_tr <- torch::torch_randn(c(1L, 30L))
+  no_rows <- torch::torch_zeros(c(1L, 0L, 5L))
+  torch::with_no_grad({
+    plain <- net(x_tr, y_tr, x_te)
+    cache <- net(x_tr, y_tr, no_rows, return_kv_cache = TRUE)$kv_cache
+    cached <- net(NULL, NULL, x_te, kv_cache = cache)$logits
+  })
+  expect_null(cache$train_embeddings)
+  expect_equal(as.array(cached), as.array(plain$logits), tolerance = 1e-5)
+  expect_no_match(paste(cli::cli_fmt(print(cache)), collapse = " "), "embeddings")
+
+  # One saved by an older version still carries them; they go unread.
+  older <- cache
+  older$train_embeddings <- plain$train_hidden$detach()
+  expect_true(torch::torch_equal(
+    torch::with_no_grad(net(NULL, NULL, x_te, kv_cache = older))$logits, cached))
+
+  # The classifier's still does.
+  clf <- tiny_net("classifier")
+  y_cls <- torch::torch_randint(0L, 3L, c(1L, 30L))$to(dtype = torch::torch_float())
+  clf_cache <- torch::with_no_grad(
+    clf(x_tr, y_cls, no_rows, return_kv_cache = TRUE))$kv_cache
+  expect_equal(dim(clf_cache$train_embeddings), c(1L, 30L, 32L))
+})
+
+
 test_that("save_peak_memory_factor does not change the answer", {
   net <- tiny_net("regressor")
   set.seed(8)
