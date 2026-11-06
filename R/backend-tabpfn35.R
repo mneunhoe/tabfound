@@ -390,7 +390,8 @@ tabpfn35_cell_embedder <- torch::nn_module(
 #' inside, so the shapes in the callers line up with the reference's
 #' suffix notation one for one. Grouped-query attention falls back to
 #' `repeat_interleave`, which is what the reference does in float32 and is
-#' exact either way.
+#' exact either way; a single key/value head is expanded as a view, which
+#' is the same numbers without the copy.
 #'
 #' @param scaling Optional [tabpfn35_softmax_scaling_mlp()], applied to the
 #'   queries with the key count as its length argument.
@@ -401,7 +402,16 @@ tabpfn35_sdpa <- function(q, k, v, scaling = NULL) {
   kh <- k$permute(c(1L, 3L, 2L, 4L))
   vh <- v$permute(c(1L, 3L, 2L, 4L))
   n_q <- qh$size(2); n_kv <- kh$size(2)
-  if (n_q != n_kv) {
+  if (n_kv == 1L && n_q > 1L) {
+    # One key/value head is the test-row path of every ICL block, cached
+    # or not. An expanded view hands the kernel the same numbers through a
+    # zero stride, so it is the same computation without the copy:
+    # `repeat_interleave` here allocates `2 * H * N * D` floats per layer
+    # -- 205 MB at 50,000 training rows -- and on the cached path the state
+    # carried between layers is too small for anything to collect them.
+    kh <- kh$expand(replace(kh$size(), 2L, n_q))
+    vh <- vh$expand(replace(vh$size(), 2L, n_q))
+  } else if (n_q != n_kv) {
     reps <- as.integer(n_q / n_kv)
     kh <- torch::torch_repeat_interleave(kh, repeats = reps, dim = 2L)
     vh <- torch::torch_repeat_interleave(vh, repeats = reps, dim = 2L)
@@ -1063,6 +1073,7 @@ tabpfn35_many_class_decoder <- torch::nn_module(
     self$max_num_classes <- as.integer(max_num_classes)
     self$head_dim  <- as.integer(head_dim)
     self$num_heads <- as.integer(num_heads)
+    self$block_rows <- TABPFN3_DECODER_BLOCK_ROWS
     attention_size <- self$head_dim * self$num_heads
     self$q_projection <- torch::nn_linear(input_size, attention_size)
     self$k_projection <- torch::nn_linear(input_size, attention_size)
@@ -1092,32 +1103,22 @@ tabpfn35_many_class_decoder <- torch::nn_module(
     k <- keys$view(c(B, n_ctx, H, D))
     if (self$has_scaling) q <- self$softmax_scaling_layer(q, n_ctx)
 
-    # The reference splits the one-hot values into head-sized chunks so a
-    # flash-attention kernel can take them; that is a memory layout, not a
-    # different computation, so the scores are formed directly here.
-    qh <- q$permute(c(1L, 3L, 2L, 4L))                       # (B, H, M, D)
-    kh <- k$permute(c(1L, 3L, 2L, 4L))                       # (B, H, N, D)
-    scores <- torch::torch_matmul(qh, kh$transpose(3L, 4L)) / sqrt(D)
-    w <- torch::nnf_softmax(scores, dim = -1L)               # (B, H, M, N)
-
-    # The reference narrows the one-hot to the classes actually present and
-    # pads the rest back with zeros. That is the same number: an absent
-    # class holds an all-zero value column, and attention over zeros
-    # returns exactly the zero the padding would have written. The full
-    # width is used here because it needs no label scan.
+    # Narrowed to the classes present, as the reference does; see
+    # `.tabpfn3_class_attention()`, which the two generations share.
     is_finite <- torch::torch_isfinite(targets)
     safe <- torch::torch_where(is_finite, targets,
                                torch::torch_zeros_like(targets))
+    n_cls <- .tabpfn3_present_classes(safe, self$max_num_classes)
     classes <- torch::torch_arange(
-      0L, self$max_num_classes - 1L, dtype = safe$dtype, device = safe$device
-    )$view(c(1L, 1L, self$max_num_classes))
+      0L, n_cls - 1L, dtype = safe$dtype, device = safe$device
+    )$view(c(1L, 1L, n_cls))
     one_hot <- (safe$unsqueeze(-1L) == classes)$
-      logical_and(is_finite$unsqueeze(-1L))$to(dtype = w$dtype)  # (B, N, T)
+      logical_and(is_finite$unsqueeze(-1L))$to(dtype = q$dtype)  # (B, N, T)
 
-    probs <- torch::torch_matmul(
-      w, one_hot$unsqueeze(2L)$expand(c(B, H, n_ctx, self$max_num_classes))
-    )$mean(dim = 2L)                                         # (B, M, T)
-    torch::torch_log(torch::torch_clamp(probs, min = 1e-5) + 3e-5)
+    .tabpfn3_class_attention(
+      q$permute(c(1L, 3L, 2L, 4L)), k$permute(c(1L, 3L, 2L, 4L)),
+      one_hot, self$max_num_classes, self$block_rows
+    )
   }
 )
 
@@ -2174,7 +2175,12 @@ tabpfn35_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     col_chunk    = .stage_col_chunk(opts, config),
     # The grouped input the row loop slices from. Three channels per group
     # position in v3.5 -- value, indicator, ECDF rank -- where v3 had two.
-    group_channels = g * 3
+    group_channels = g * 3,
+    # One checkpoint serves both tasks and nothing here says which, so the
+    # classifier's decoder is always counted. At the fitted constants it
+    # is about a thirtieth of the in-context stage at any shape, and only
+    # the largest stage counts, so a regression estimate does not move.
+    decoder = .tabpfn3_decoder_terms(opts, config)
   )
 
   # Edges per column, capped by the bucket count: this is what stops the
@@ -2182,20 +2188,22 @@ tabpfn35_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   k_edges <- min(as.numeric(config$cell_ecdf_num_buckets %||% 8192), n_context)
   ecdf_ctx <- 3 * n_features * k_edges
 
-  if (isTRUE(opts$kv_cache)) {
+  n_live <- .tabpfn_live_caches(opts, n_est)
+  if (n_live > 0) {
     # The cached path keeps `icl_num_kv_heads_test` heads rather than all
     # of them (one, in the published checkpoints), plus the classifier's
-    # decoder keys and the ECDF context -- all of it once per member. The
-    # keys are counted for a regressor too, which keeps none: nothing here
-    # says which task the checkpoint will run, and they are 384 floats a
-    # row against the 3,072 of the key/value projections.
+    # decoder keys and the ECDF context -- once per live member cache,
+    # which is one unless the cache is kept on the model. The keys are
+    # counted for a regressor too, which keeps none: nothing here says
+    # which task the checkpoint will run, and they are 384 floats a row
+    # against the 3,072 of the key/value projections.
     d_icl <- e * n_cls
     kv_heads <- as.numeric(config$icl_num_kv_heads_test %||% icl_heads)
     head_dim <- d_icl / max(icl_heads, 1)
     d_dec <- as.numeric(config$decoder_num_heads %||% 6) *
       as.numeric(config$decoder_head_dim %||% 64)
-    terms$persistent <- n_est * (l * 2 * n_context * kv_heads * head_dim +
-                                 n_context * d_dec + ecdf_ctx)
+    terms$persistent <- n_live * (l * 2 * n_context * kv_heads * head_dim +
+                                  n_context * d_dec + ecdf_ctx)
   } else {
     terms$persistent <- terms$persistent + ecdf_ctx
   }

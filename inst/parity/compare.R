@@ -339,7 +339,8 @@ parity_tabpfn <- function(reference_dir, fixture_dir, fixture, label = fixture,
     net(as_float_tensor(x, device = ctx$device)$unsqueeze(1L),
         as_float_tensor(matrix(y, nrow = 1L), device = ctx$device))
   })
-  test <- out[1, (n_train + 1L):out$size(2), ]
+  # The network returns the test rows alone.
+  test <- out[1, , ]
   if (identical(meta$task, "classification")) {
     n_cls <- length(unique(as.integer(fx$y_train)))
     logits <- test[, 1:n_cls] / (meta$softmax_temperature %||% 0.9)
@@ -502,6 +503,12 @@ parity_tabicl <- function(reference_dir, fixture_dir, fixture, label = fixture,
     r <- read_t(file.path(trace_dir, paste0(nm, ".safetensors")))
     p <- read_t(file.path(reference_dir, paste0(nm, ".safetensors")))
     if (is.null(r) || is.null(p)) next
+    # The reference decodes every row; the R decoder only the test rows,
+    # which are all either side reads.
+    if (identical(nm, "tabicl_logits") && length(dim(p)) == 3L &&
+        dim(r)[2] < dim(p)[2]) {
+      p <- p[, (dim(p)[2] - dim(r)[2] + 1L):dim(p)[2], , drop = FALSE]
+    }
     d <- tensor_diff(r, p)
     add(paste0("stage:", sub("^tabicl_", "", nm)), d,
         note = if (isTRUE(d$shape_ok)) "" else "SHAPE MISMATCH")

@@ -1,0 +1,88 @@
+{
+  "backend": "tabicl",
+  "model_id": "tabicl-v2-classifier",
+  "point": {
+    "n_context": 4000,
+    "n_query": 500,
+    "n_features": 50
+  },
+  "measured_on": "2026-11-06",
+  "machine_total_bytes": 51539607552,
+  "weights_bytes": 110256776,
+  "ensemble_log2_factor": 0.0303192626880846,
+  "ensemble_cap": 1.26333377620706,
+  "points": [
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5365071872,
+      "loaded_bytes": 588070912,
+      "elapsed_sec": 1.7718,
+      "method": "rss-sampling",
+      "samples": 152,
+      "n_estimators": 1
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5472632832,
+      "loaded_bytes": 594313216,
+      "elapsed_sec": 3.6035,
+      "method": "rss-sampling",
+      "samples": 241,
+      "n_estimators": 2
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5489147904,
+      "loaded_bytes": 621969408,
+      "elapsed_sec": 6.8851,
+      "method": "rss-sampling",
+      "samples": 402,
+      "n_estimators": 4
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5468405760,
+      "loaded_bytes": 591298560,
+      "elapsed_sec": 13.4974,
+      "method": "rss-sampling",
+      "samples": 720,
+      "n_estimators": 8
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5552308224,
+      "loaded_bytes": 599785472,
+      "elapsed_sec": 26.9052,
+      "method": "rss-sampling",
+      "samples": 1368,
+      "n_estimators": 16
+    },
+    {
+      "n_context": 4000,
+      "n_query": 500,
+      "n_features": 50,
+      "status": "ok",
+      "peak_bytes": 5508284416,
+      "loaded_bytes": 632176640,
+      "elapsed_sec": 54.363,
+      "method": "rss-sampling",
+      "samples": 2698,
+      "n_estimators": 32
+    }
+  ]
+}

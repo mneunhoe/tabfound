@@ -25,5 +25,13 @@ This is where the accumulation actually bites. Every backend already
 collects between layers; the loop \emph{above} those -- eight members, each
 running the full stack, then the next chunk doing it again -- held all
 of it until something else triggered a collection.
+
+Whether it is a full collection is decided by the pass it closes: the
+largest state any \code{\link[=collect_between_layers]{collect_between_layers()}} call saw since the
+previous boundary, against the same \code{tabfound.collect_full_min_bytes}.
+The boundary has no tensor of its own to measure, and what a pass
+leaves behind -- its stage outputs and the hand-offs between stages,
+all promoted by the time the next one starts -- scales with the
+largest thing it carried.
 }
 \keyword{internal}

@@ -4,10 +4,12 @@
 \alias{fit_tfidf}
 \title{Fit a tf-idf vectorizer over character n-grams}
 \usage{
-fit_tfidf(docs)
+fit_tfidf(docs, ng = .char_wb_ngrams(docs))
 }
 \arguments{
 \item{docs}{Character vector, \code{NA} already replaced by \code{""}.}
+
+\item{ng}{\code{.char_wb_ngrams(docs)}, when the caller already has it.}
 }
 \value{
 A fit for \code{\link[=transform_tfidf]{transform_tfidf()}}.

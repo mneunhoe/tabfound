@@ -130,6 +130,55 @@ tabpfn_task_of <- function(config) {
 }
 
 
+# @keywords internal
+.check_chunk_cache <- function(chunk_cache) {
+  if (isTRUE(chunk_cache) || isFALSE(chunk_cache)) return(invisible(TRUE))
+  cli::cli_abort("{.arg chunk_cache} must be {.code TRUE} or {.code FALSE}.")
+}
+
+# Where a `predict()` call's member caches come from: `get(i)` returns
+# member `i`'s, or NULL to run it uncached, and `exact` says whether a
+# cache may only be used where it gives the uncached answer.
+#
+# In order: a cache kept on the model is read, every member's at once, as
+# it was built; `kv_cache = TRUE` builds one per member for the call, used
+# as asked; and `chunk_cache` builds one for a call of two or more chunks
+# -- the case where re-encoding the context per chunk is the cost -- when
+# the memory estimate says it fits. That last one is `predict()`'s own
+# initiative, so it must never be why a call fails: a cache that cannot
+# be built leaves its member uncached, which raises any real error itself.
+# @keywords internal
+.cache_source <- function(state, n_rows, build, how) {
+  if (!is.null(state$kv_caches)) {
+    return(list(get = function(i) state$kv_caches[[i]], exact = FALSE))
+  }
+  if (isTRUE(how$kv_cache)) return(list(get = build, exact = FALSE))
+  chunk <- as.integer(how$opts$predict_chunk_size)
+  if (isTRUE(how$chunk_cache) && isTRUE(how$ctx$net$supports_kv_cache) &&
+      n_rows > chunk &&
+      .chunk_cache_fits(how$ctx, how$task, state$n_train %||% nrow(state$X_train),
+                        n_rows, ncol(state$X_train), how$opts)) {
+    return(list(get = function(i) tryCatch(build(i), error = function(e) NULL),
+                exact = TRUE))
+  }
+  list(get = function(i) NULL, exact = FALSE)
+}
+
+# The single pass's half of `.pick_cache()`: the cache, or NULL where it
+# has to give the uncached answer and would not.
+# @keywords internal
+.single_pass_cache <- function(net, cache, X_train, X_test, device,
+                               exact_cache_only) {
+  if (is.null(cache) || !isTRUE(exact_cache_only) ||
+      !isTRUE(net$cache_needs_check)) {
+    return(cache)
+  }
+  x_tr <- as_float_tensor(X_train, device = device)$unsqueeze(1L)
+  x_te <- as_float_tensor(as.matrix(X_test), device = device)$unsqueeze(1L)
+  if (tabpfn_cache_matches(net, cache, x_tr, x_te)) cache else NULL
+}
+
+
 # The ensemble a predictor runs, from whichever of the two sources the
 # caller used, with its weights. Members weighted zero are dropped here,
 # once, so neither their pipelines nor their caches are ever built.
@@ -328,13 +377,43 @@ tabpfn_task_of <- function(config) {
 #'   call and reuse that across every prediction chunk and ensemble
 #'   member, instead of rebuilding the whole context per chunk. Cuts the
 #'   cost of predicting many rows from `n_members * n_chunks` passes over
-#'   the training set to `n_members`. Off by default. On `tabpfn` and
-#'   `tabpfn3` it is exactly equivalent to an uncached pass, because every
-#'   statistic those architectures fit comes from the training rows alone.
-#'   On `tabpfn26` it is not: that generation fits its constant-column and
-#'   informative-feature masks over train and test together, so caching
-#'   them can change the prediction -- see [tabpfn26_kv_cache()].
-#'   Supported by the `tabpfn` (v2.5), `tabpfn26` and `tabpfn3` backends.
+#'   the training set to `n_members`. An ensemble builds one member's
+#'   cache at a time, runs it over every chunk and drops it before
+#'   building the next, so the call holds one cache rather than one per
+#'   member; [tabfound_cache()] is what keeps every member's, on the model.
+#'   Off by default, which means no cache is *kept*; a call spanning
+#'   several chunks may still build one for itself, see `chunk_cache`.
+#'
+#'   How close a cached pass is to an uncached one depends on the
+#'   generation. On `tabpfn` (v2.5) it is bit-identical. On `tabpfn3` and
+#'   `tabpfn35` every statistic comes from the training rows alone, so it
+#'   answers the same question, but it is not the same computation: the
+#'   test rows reach the network without the training rows beside them, so
+#'   every matmul sees a different batch shape and agreement is promised
+#'   only up to float32 rounding (a few 1e-7 on the logits where it has
+#'   been seen; bit-identical on the released weights in every case
+#'   measured on CPU). On `tabpfn26` it can
+#'   be a different answer: that generation fits its constant-column and
+#'   informative-feature masks over train and test together, and a cache
+#'   fits them on train alone -- see [tabpfn26_kv_cache()]. With
+#'   `kv_cache = TRUE` the cache is used regardless, as the reference does.
+#'   Supported by the `tabpfn` (v2.5), `tabpfn26`, `tabpfn3` and
+#'   `tabpfn35` backends.
+#' @param chunk_cache When the cache is off (`kv_cache = FALSE`, and none
+#'   kept by [tabfound_cache()]) and a `predict()` call spans two or more
+#'   `predict_chunk_size` chunks, condition on the training rows once for
+#'   that call and reuse it across the chunks, instead of re-encoding the
+#'   whole context for every chunk -- typically 1.5 to 3 times faster,
+#'   more with more chunks and a larger training set. Nothing is kept: each member's cache is built, used and
+#'   dropped within the call. It is used only where it gives the uncached
+#'   answer -- bit for bit on `tabpfn`, within the float32 rounding
+#'   `kv_cache` describes on `tabpfn3` and `tabpfn35`, and on `tabpfn26`
+#'   only for chunks whose masks over train and that chunk equal the
+#'   train-only ones; any other chunk runs uncached. It is also skipped
+#'   when [estimate_peak_memory()] finds that the cache would not leave the
+#'   call comfortable room. `TRUE` by default; `FALSE` re-encodes the
+#'   context for every chunk, as before. `kv_cache = TRUE` overrides both
+#'   checks.
 #' @param save_peak_memory_factor Integer, or `NULL` (default) to disable.
 #'   Splits each sublayer's work into this many chunks, shrinking the
 #'   attention score matrix each one materialises. Bit-identical output,
@@ -371,6 +450,7 @@ tabpfn_classifier <- function(ctx,
                               trace_dir = NULL,
                               categorical_features = NULL,
                               kv_cache = FALSE,
+                              chunk_cache = TRUE,
                               save_peak_memory_factor = NULL,
                               row_chunk_size = NA_integer_,
                               col_chunk_size = NA_integer_,
@@ -378,6 +458,7 @@ tabpfn_classifier <- function(ctx,
                               member_weights = NULL) {
   .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
                             row_chunk_size, col_chunk_size)
+  .check_chunk_cache(chunk_cache)
   net     <- ctx$net
   dev     <- ctx$device
   col_emb <- .column_embeddings_for(net, dev)
@@ -421,7 +502,7 @@ tabpfn_classifier <- function(ctx,
            X_train, categorical_features, ensemble_configs))
   }
 
-  .single_pass_chunk <- function(state, X_test_chunk, cache, pipelines = NULL) {
+  .single_pass_chunk <- function(state, X_test_chunk, cache) {
     x_te <- as_float_tensor(as.matrix(X_test_chunk), device = dev)$unsqueeze(1L)
     out <- if (is.null(cache)) {
       x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
@@ -434,7 +515,7 @@ tabpfn_classifier <- function(ctx,
         row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     } else {
       torch::with_no_grad(tabpfn_forward(
-        net, NULL, NULL, x_te, col_emb, kv_cache = cache[[1L]],
+        net, NULL, NULL, x_te, col_emb, kv_cache = cache,
         save_peak_memory_factor = save_peak_memory_factor,
         row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     }
@@ -443,19 +524,33 @@ tabpfn_classifier <- function(ctx,
     as.matrix(torch::nnf_softmax(logits, dim = -1L)$cpu())
   }
 
-  .ensemble_chunk <- function(state, X_test_chunk, cache, pipelines,
-                              return_members = FALSE) {
-    apply_ensemble_predict_classifier(
+  # What `run_members_outer()` runs: one member over one chunk, added into
+  # that chunk's accumulator. A single forward pass is an ensemble of one.
+  .steps <- function(state, pipelines, return_members = FALSE,
+                     exact_cache_only = FALSE) {
+    if (is.null(ensemble_configs)) {
+      return(list(
+        start  = function(X) list(X = X, out = NULL),
+        add    = function(st, i, cache) {
+          cache <- .single_pass_cache(net, cache, state$X_train, st$X, dev,
+                                      exact_cache_only)
+          st$out <- .single_pass_chunk(state, st$X, cache)
+          st
+        },
+        finish = function(st) st$out
+      ))
+    }
+    ensemble_steps_classifier(
       net = net, col_emb = col_emb,
-      X_train = state$X_train, X_test = as.matrix(X_test_chunk),
-      y_train = state$y_train_int, configs = ensemble_configs,
+      X_train = state$X_train, y_train = state$y_train_int,
+      configs = ensemble_configs,
       n_classes = length(state$class_levels), device = dev,
       softmax_temperature = softmax_temperature, trace_dir = trace_dir,
       categorical_features = state$categorical_features %||% integer(),
-      kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor,
+      save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       pipelines = pipelines, member_weights = member_weights,
-      return_members = return_members
+      return_members = return_members, exact_cache_only = exact_cache_only
     )
   }
 
@@ -468,47 +563,73 @@ tabpfn_classifier <- function(ctx,
                           state$categorical_features %||% integer())
   }
 
-  # One cache per member (or one, for a single pass), built once per
-  # `predict()` call and shared by every chunk. Deliberately not stored on
-  # the model: it is derived from the fitted state, `tabfound_save()`
-  # writes plain data only, and a torch object outliving its session comes
-  # back as a dangling pointer.
-  .build_caches <- function(state, pipelines, force = FALSE) {
-    # A cache carried on the fitted state was built once and, via
-    # `tabfound_save()`, possibly in another session. It is what
-    # `kv_cache = TRUE` buys, kept.
-    if (!is.null(state$kv_caches)) return(state$kv_caches)
-    if (!isTRUE(force) && !isTRUE(kv_cache)) return(NULL)
+  # Member `i`'s cache, or the single pass's, from the training rows.
+  .build_cache_for <- function(state, pipelines, i) {
     if (is.null(ensemble_configs)) {
       x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
       y_tr <- as_float_tensor(
         matrix(as.numeric(state$y_train_int), ncol = 1L), device = dev
       )$squeeze(-1L)$unsqueeze(1L)
       no_rows <- torch::torch_zeros(c(1L, 0L, x_tr$size(3)), device = dev)
-      return(list(torch::with_no_grad(tabpfn_forward(
+      return(torch::with_no_grad(tabpfn_forward(
         net, x_tr, y_tr, no_rows, col_emb, return_kv_cache = TRUE,
         save_peak_memory_factor = save_peak_memory_factor,
         row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
-      ))$kv_cache))
+      ))$kv_cache)
     }
-    build_member_kv_caches(
-      net, col_emb, state$X_train, state$y_train_int, ensemble_configs,
+    build_member_kv_cache(
+      net, col_emb, i, state$y_train_int, ensemble_configs,
       member_y = function(cfg, y) cfg$class_perm[as.integer(y) + 1L],
-      device = dev,
-      categorical_features = state$categorical_features %||% integer(),
+      pipelines = pipelines, device = dev,
       save_peak_memory_factor = save_peak_memory_factor,
-      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
-      pipelines = pipelines
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
     )
+  }
+
+  # Every member's cache at once, for `tabfound_cache()` to keep.
+  # Deliberately not built by `fit()`: it is derived from the fitted
+  # state, `tabfound_save()` writes it separately, and a torch object
+  # outliving its session comes back as a dangling pointer.
+  .build_caches <- function(state, pipelines) {
+    # A cache carried on the fitted state was built once and, via
+    # `tabfound_save()`, possibly in another session. It is what
+    # `kv_cache = TRUE` buys, kept.
+    if (!is.null(state$kv_caches)) return(state$kv_caches)
+    lapply(seq_len(max(1L, length(ensemble_configs))),
+           function(i) .build_cache_for(state, pipelines, i))
+  }
+
+  # Where each member's cache comes from in one `predict()` call. A kept
+  # cache holds every member by design, and is simply read. One built for
+  # this call alone -- because `kv_cache = TRUE` asked, or because
+  # `chunk_cache` judged it worth it -- is built a member at a time:
+  # `run_members_outer()` uses it on every chunk and drops it before the
+  # next member's exists, so one cache is alive rather than one per member.
+  .member_cache <- function(state, pipelines, n_rows) {
+    .cache_source(state, n_rows, function(i) .build_cache_for(state, pipelines, i),
+                  list(ctx = ctx, task = "classification", kv_cache = kv_cache,
+                       chunk_cache = chunk_cache,
+                       opts = list(n_estimators = max(1L, length(ensemble_configs)),
+                                   predict_chunk_size = predict_chunk_size,
+                                   save_peak_memory_factor = save_peak_memory_factor,
+                                   row_chunk_size = row_chunk_size,
+                                   col_chunk_size = col_chunk_size)))
+  }
+
+  # Per-chunk results, in row order.
+  .run <- function(state, X_te, return_members = FALSE) {
+    pipelines <- .build_pipelines(state)
+    src <- .member_cache(state, pipelines, nrow(X_te))
+    run_members_outer(X_te, predict_chunk_size,
+                      max(1L, length(ensemble_configs)),
+                      .steps(state, pipelines, return_members,
+                             exact_cache_only = src$exact),
+                      src$get)
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
     X_te <- as.matrix(newdata)
-    pipelines <- .build_pipelines(state)
-    caches <- .build_caches(state, pipelines)
-    chunk_fn <- if (is.null(ensemble_configs)) .single_pass_chunk else .ensemble_chunk
-    probs <- chunk_apply(X_te, predict_chunk_size,
-                         function(chunk) chunk_fn(state, chunk, caches, pipelines))
+    probs <- .stack_chunks(.run(state, X_te), nrow(X_te))
     colnames(probs) <- as.character(state$class_levels)
     if (type == "prob") return(probs)
     state$class_levels[max.col(probs, ties.method = "first")]
@@ -519,13 +640,8 @@ tabpfn_classifier <- function(ctx,
   # [predict_members()].
   predict_members_fn <- function(state, newdata) {
     .require_ensemble_for_members(ensemble_configs)
-    X_te <- as.matrix(newdata)
-    pipelines <- .build_pipelines(state)
-    caches <- .build_caches(state, pipelines)
-    members <- .members_over_chunks(X_te, predict_chunk_size, function(chunk) {
-      .ensemble_chunk(state, chunk, caches, pipelines,
-                      return_members = TRUE)$members
-    })
+    parts <- .run(state, as.matrix(newdata), return_members = TRUE)
+    members <- .stack_member_chunks(lapply(parts, `[[`, "members"))
     # Zero-weight members were dropped with their configs, so every
     # remaining one runs and `member_weights` is already aligned with
     # them; `member_index` says where they sat in the full ensemble.
@@ -539,7 +655,7 @@ tabpfn_classifier <- function(ctx,
   list(fit = fit_fn, predict = predict_fn,
        predict_members = predict_members_fn,
        build_cache = function(state) {
-         .build_caches(state, .build_pipelines(state), force = TRUE)
+         .build_caches(state, .build_pipelines(state))
        },
        ensemble_configs = ensemble_configs)
 }
@@ -560,6 +676,7 @@ tabpfn_regressor <- function(ctx,
                              trace_dir = NULL,
                              categorical_features = NULL,
                              kv_cache = FALSE,
+                             chunk_cache = TRUE,
                              save_peak_memory_factor = NULL,
                              row_chunk_size = NA_integer_,
                              col_chunk_size = NA_integer_,
@@ -567,6 +684,7 @@ tabpfn_regressor <- function(ctx,
                              member_weights = NULL) {
   .require_kv_cache_support(ctx, kv_cache, save_peak_memory_factor,
                             row_chunk_size, col_chunk_size)
+  .check_chunk_cache(chunk_cache)
   net     <- ctx$net
   dev     <- ctx$device
   col_emb <- .column_embeddings_for(net, dev)
@@ -595,8 +713,10 @@ tabpfn_regressor <- function(ctx,
            X_train, categorical_features, ensemble_configs))
   }
 
-  .single_pass_chunk <- function(state, X_test_chunk, quantiles, cache,
-                                 pipelines = NULL) {
+  # The tempered logits of one chunk of test rows, `(rows, n_bins)`. The
+  # temperature applies to all three output types alike: a draw has to come
+  # from the distribution the mean and the quantiles beside it describe.
+  .single_pass_logits <- function(state, X_test_chunk, cache) {
     x_te <- as_float_tensor(as.matrix(X_test_chunk), device = dev)$unsqueeze(1L)
     out <- if (is.null(cache)) {
       x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
@@ -609,12 +729,18 @@ tabpfn_regressor <- function(ctx,
         row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     } else {
       torch::with_no_grad(tabpfn_forward(
-        net, NULL, NULL, x_te, col_emb, kv_cache = cache[[1L]],
+        net, NULL, NULL, x_te, col_emb, kv_cache = cache,
         save_peak_memory_factor = save_peak_memory_factor,
         row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
     }
     logits <- out$logits[1, , ]
     if (softmax_temperature != 1) logits <- logits / softmax_temperature
+    logits
+  }
+
+  .single_pass_chunk <- function(state, X_test_chunk, quantiles, cache,
+                                 pipelines = NULL) {
+    logits <- .single_pass_logits(state, X_test_chunk, cache)
     list(
       mean      = as.numeric(bar_logits_to_mean(logits, borders)$cpu()) *
                     state$y_std + state$y_mean,
@@ -623,18 +749,32 @@ tabpfn_regressor <- function(ctx,
     )
   }
 
-  .ensemble_chunk <- function(state, X_test_chunk, quantiles, cache,
-                              pipelines, return_members = FALSE) {
-    apply_ensemble_predict_regressor(
-      net, col_emb, state$X_train, X_test_chunk, state$y_train,
+  # See the classifier's `.steps()`.
+  .steps <- function(state, pipelines, quantiles, return_members = FALSE,
+                     exact_cache_only = FALSE, want_logits = FALSE) {
+    if (is.null(ensemble_configs)) {
+      return(list(
+        start  = function(X) list(X = X, out = NULL),
+        add    = function(st, i, cache) {
+          cache <- .single_pass_cache(net, cache, state$X_train, st$X, dev,
+                                      exact_cache_only)
+          st$out <- .single_pass_chunk(state, st$X, quantiles, cache)
+          st
+        },
+        finish = function(st) st$out
+      ))
+    }
+    ensemble_steps_regressor(
+      net, col_emb, state$X_train, state$y_train,
       configs = ensemble_configs, borders = borders,
       quantiles = quantiles, device = dev,
       softmax_temperature = softmax_temperature, trace_dir = trace_dir,
       categorical_features = state$categorical_features %||% integer(),
-      kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor,
+      save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       pipelines = pipelines, member_weights = member_weights,
-      return_members = return_members
+      return_members = return_members, exact_cache_only = exact_cache_only,
+      want_logits = want_logits
     )
   }
 
@@ -645,63 +785,70 @@ tabpfn_regressor <- function(ctx,
                           state$categorical_features %||% integer())
   }
 
-  # See the classifier's `.build_caches()` for why this lives in the call
-  # rather than on the model. The per-member target is the z-standardised
-  # one, put through that member's target transform where it has one.
-  .build_caches <- function(state, pipelines, force = FALSE) {
-    # A cache carried on the fitted state was built once and, via
-    # `tabfound_save()`, possibly in another session. It is what
-    # `kv_cache = TRUE` buys, kept.
-    if (!is.null(state$kv_caches)) return(state$kv_caches)
-    if (!isTRUE(force) && !isTRUE(kv_cache)) return(NULL)
+  # See the classifier's `.build_cache_for()`. The per-member target is
+  # the z-standardised one, put through that member's target transform
+  # where it has one.
+  .build_cache_for <- function(state, pipelines, i) {
     y_z <- (state$y_train - state$y_mean) / state$y_std
     if (is.null(ensemble_configs)) {
       x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
       y_tr <- as_float_tensor(matrix(y_z, ncol = 1L),
                               device = dev)$squeeze(-1L)$unsqueeze(1L)
       no_rows <- torch::torch_zeros(c(1L, 0L, x_tr$size(3)), device = dev)
-      return(list(torch::with_no_grad(tabpfn_forward(
+      return(torch::with_no_grad(tabpfn_forward(
         net, x_tr, y_tr, no_rows, col_emb, return_kv_cache = TRUE,
         save_peak_memory_factor = save_peak_memory_factor,
         row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
-      ))$kv_cache))
+      ))$kv_cache)
     }
-    build_member_kv_caches(
-      net, col_emb, state$X_train, y_z, ensemble_configs,
+    build_member_kv_cache(
+      net, col_emb, i, y_z, ensemble_configs,
       member_y = function(cfg, y) {
         if (is.null(cfg$target_transform_lambda)) return(y)
         apply_target_transform(
           y, fit_target_transform_state(y, cfg$target_transform_lambda[1]))
       },
-      device = dev,
-      categorical_features = state$categorical_features %||% integer(),
+      pipelines = pipelines, device = dev,
       save_peak_memory_factor = save_peak_memory_factor,
-      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
-      pipelines = pipelines
+      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size
     )
   }
 
-  .common <- function(state, newdata, quantiles) {
-    X_te <- as.matrix(newdata)
+  # See the classifier's `.build_caches()` and `.member_cache()`.
+  .build_caches <- function(state, pipelines) {
+    if (!is.null(state$kv_caches)) return(state$kv_caches)
+    lapply(seq_len(max(1L, length(ensemble_configs))),
+           function(i) .build_cache_for(state, pipelines, i))
+  }
+
+  .member_cache <- function(state, pipelines, n_rows) {
+    .cache_source(state, n_rows, function(i) .build_cache_for(state, pipelines, i),
+                  list(ctx = ctx, task = "regression", kv_cache = kv_cache,
+                       chunk_cache = chunk_cache,
+                       opts = list(n_estimators = max(1L, length(ensemble_configs)),
+                                   predict_chunk_size = predict_chunk_size,
+                                   save_peak_memory_factor = save_peak_memory_factor,
+                                   row_chunk_size = row_chunk_size,
+                                   col_chunk_size = col_chunk_size)))
+  }
+
+  .run <- function(state, X_te, quantiles, return_members = FALSE,
+                   want_logits = FALSE) {
     pipelines <- .build_pipelines(state)
-    caches <- .build_caches(state, pipelines)
-    chunk_fn <- if (is.null(ensemble_configs)) .single_pass_chunk else .ensemble_chunk
-    n <- nrow(X_te)
-    if (n <= predict_chunk_size) {
-      return(chunk_fn(state, X_te, quantiles, caches, pipelines))
-    }
-    starts <- seq(1L, n, by = as.integer(predict_chunk_size))
-    chunks <- lapply(seq_along(starts), function(k) {
-      # Between chunks: the previous one's tensors are dead, and the next
-      # one allocates before R would otherwise collect them.
-      if (k > 1L) collect_between_chunks()
-      s <- starts[[k]]
-      e <- min(s + as.integer(predict_chunk_size) - 1L, n)
-      chunk_fn(state, X_te[s:e, , drop = FALSE], quantiles, caches, pipelines)
-    })
-    list(mean      = unlist(lapply(chunks, `[[`, "mean")),
-         quantiles = do.call(rbind, lapply(chunks, `[[`, "quantiles")),
-         avg_probs = do.call(rbind, lapply(chunks, `[[`, "avg_probs")))
+    src <- .member_cache(state, pipelines, nrow(X_te))
+    run_members_outer(X_te, predict_chunk_size,
+                      max(1L, length(ensemble_configs)),
+                      .steps(state, pipelines, quantiles, return_members,
+                             exact_cache_only = src$exact,
+                             want_logits = want_logits),
+                      src$get)
+  }
+
+  .common <- function(state, newdata, quantiles) {
+    parts <- .run(state, as.matrix(newdata), quantiles)
+    if (length(parts) == 1L) return(parts[[1L]])
+    list(mean      = unlist(lapply(parts, `[[`, "mean")),
+         quantiles = do.call(rbind, lapply(parts, `[[`, "quantiles")))
   }
 
   predict_fn <- function(state, newdata, type = "mean",
@@ -727,32 +874,37 @@ tabpfn_regressor <- function(ctx,
     # used to warn and quietly use one unensembled forward pass.)
     if (!is.null(ensemble_configs)) {
       # Drawn on the z-scale borders and rescaled in double, like the mean
-      # and the quantiles: see `apply_ensemble_predict_regressor()`.
-      probs <- .common(state, newdata, quantiles = 0.5)$avg_probs
-      pseudo <- torch::torch_log(torch::torch_tensor(
-        probs, dtype = torch::torch_float(), device = dev))
-      return(as.matrix(bar_logits_to_samples(pseudo, borders,
-                                             n_samples = as.integer(n_samples),
-                                             seed = seed)$cpu()) *
-               state$y_std + state$y_mean)
+      # and the quantiles: see `apply_ensemble_predict_regressor()`. Each
+      # chunk's pseudo-logits stay a tensor and are decoded in turn, from
+      # uniforms drawn once for every row, so the seed fixes the draw
+      # whatever the chunking.
+      X_te <- as.matrix(newdata)
+      parts <- .run(state, X_te, quantiles = 0.5, want_logits = TRUE)
+      chunk <- as.integer(predict_chunk_size)
+      return(.bar_samples_over_chunks(
+        nrow(X_te), chunk,
+        function(s, e) parts[[(s - 1L) %/% chunk + 1L]]$pseudo_logits,
+        borders, n_samples = n_samples, seed = seed) *
+          state$y_std + state$y_mean)
     }
-    x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
-    y_z  <- (state$y_train - state$y_mean) / state$y_std
-    y_tr <- as_float_tensor(matrix(y_z, ncol = 1L),
-                            device = dev)$squeeze(-1L)$unsqueeze(1L)
-    x_te <- as_float_tensor(as.matrix(newdata), device = dev)$unsqueeze(1L)
-    out <- torch::with_no_grad(tabpfn_forward(
-      net, x_tr, y_tr, x_te, col_emb,
-      save_peak_memory_factor = save_peak_memory_factor,
-      row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size))
-    # Same tempering the mean and the quantiles get in `.single_pass_chunk`:
-    # a draw has to come from the distribution reported beside it, so the
-    # temperature cannot apply to only two of the three types.
-    logits <- out$logits[1, , ]
-    if (softmax_temperature != 1) logits <- logits / softmax_temperature
-    as.matrix(bar_logits_to_samples(logits, borders,
-                                    n_samples = as.integer(n_samples),
-                                    seed = seed)$cpu()) *
+    # The same chunked, cache-aware forward the mean and the quantiles
+    # run. This used to be one uncached pass over all of `newdata`, so
+    # its peak grew with the test set and `kv_cache = TRUE` did nothing
+    # for it.
+    # The cache comes from where the mean's does, so `kv_cache`,
+    # `chunk_cache` and the per-chunk exactness check apply alike.
+    X_te <- as.matrix(newdata)
+    src <- .member_cache(state, NULL, nrow(X_te))
+    cache <- src$get(1L)
+    .bar_samples_over_chunks(
+      nrow(X_te), predict_chunk_size,
+      function(s, e) {
+        X_chunk <- X_te[s:e, , drop = FALSE]
+        .single_pass_logits(state, X_chunk,
+                            .single_pass_cache(net, cache, state$X_train,
+                                               X_chunk, dev, src$exact))
+      },
+      borders, n_samples = n_samples, seed = seed) *
       state$y_std + state$y_mean
   }
 
@@ -761,13 +913,9 @@ tabpfn_regressor <- function(ctx,
   # grid's borders on the raw y scale. See [predict_members()].
   predict_members_fn <- function(state, newdata) {
     .require_ensemble_for_members(ensemble_configs)
-    X_te <- as.matrix(newdata)
-    pipelines <- .build_pipelines(state)
-    caches <- .build_caches(state, pipelines)
-    members <- .members_over_chunks(X_te, predict_chunk_size, function(chunk) {
-      .ensemble_chunk(state, chunk, quantiles = 0.5, caches, pipelines,
-                      return_members = TRUE)$members
-    })
+    parts <- .run(state, as.matrix(newdata), quantiles = 0.5,
+                  return_members = TRUE)
+    members <- .stack_member_chunks(lapply(parts, `[[`, "members"))
     list(probs = members,
          borders = as.numeric(borders$cpu()) * state$y_std + state$y_mean,
          member_index = member_index,
@@ -779,7 +927,7 @@ tabpfn_regressor <- function(ctx,
   list(fit = fit_fn, predict = predict_fn,
        predict_members = predict_members_fn,
        build_cache = function(state) {
-         .build_caches(state, .build_pipelines(state), force = TRUE)
+         .build_caches(state, .build_pipelines(state))
        },
        types = c("mean", "quantiles", "sample"),
        borders = as.numeric(borders$cpu()),
@@ -970,9 +1118,9 @@ tabpfn_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     ),
     # The cache keeps head 0's keys and values only -- the test-row branch
     # broadcasts one head across all of them -- which is why this is
-    # `head_dim` and not `embedding_dim` wide.
-    persistent = if (isTRUE(opts$kv_cache))
-                   n_est * l * 2 * fg * n_context * hd else 0,
+    # `head_dim` and not `embedding_dim` wide. One member's at a time
+    # unless the cache is kept on the model.
+    persistent = .tabpfn_live_caches(opts, n_est) * l * 2 * fg * n_context * hd,
     n_estimators = n_est
   )
 }

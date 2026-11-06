@@ -222,3 +222,68 @@ test_that("chunking and the cache compose", {
   })
   expect_equal(as.array(both), as.array(plain), tolerance = 1e-6)
 })
+
+
+# ---------------------------------------------------------------------------
+# When a cache gives the uncached answer
+# ---------------------------------------------------------------------------
+
+test_that("cache_matches() says whether the train-only masks are the masks", {
+  net <- tabpfn_v2_6_transformer(tiny_config())
+  net$eval()
+  expect_true(isTRUE(net$cache_needs_check))
+  col <- tiny_col_emb(net)
+  set.seed(24)
+  x_tr <- torch::torch_randn(c(1L, 30L, 5L))
+  y_tr <- torch::torch_randint(0L, 3L, c(1L, 30L))$to(dtype = torch::torch_float())
+  build <- function(x) {
+    torch::with_no_grad(net(x, y_tr, torch::torch_zeros(c(1L, 0L, 5L)),
+                            column_embeddings = col,
+                            return_kv_cache = TRUE))$kv_cache
+  }
+  x_te <- torch::torch_randn(c(1L, 9L, 5L))
+  expect_true(net$cache_matches(build(x_tr), x_tr, x_te))
+
+  # Column 5 constant on train: the cache dropped it. Constant at the same
+  # value on the test rows too, nothing changes; varying there, an
+  # uncached pass would keep it, and the cache is a different answer.
+  x_c <- x_tr$clone(); x_c[, , 5] <- 1
+  cache <- build(x_c)
+  same <- x_te$clone(); same[, , 5] <- 1
+  expect_true(net$cache_matches(cache, x_c, same))
+  expect_false(net$cache_matches(cache, x_c, x_te))
+})
+
+test_that("chunk_cache runs a chunk whose masks disagree uncached", {
+  # The released width, so the bundled column embeddings fit; one layer
+  # keeps it fast.
+  cfg <- utils::modifyList(tiny_config(), list(
+    n_layers = 1L, embedding_dim = 192L, n_heads = 3L, mlp_hidden_dim = 64L))
+  torch::torch_manual_seed(3L)
+  net <- tabpfn_v2_6_transformer(cfg)
+  net$eval()
+  ctx <- list(net = net, device = "cpu", config = cfg)
+
+  set.seed(25)
+  X_tr <- matrix(rnorm(40 * 4), ncol = 4L); X_tr[, 4] <- 1
+  y_tr <- factor(sample(c("a", "b"), 40L, replace = TRUE))
+  # Column 4 varies in every chunk, so every chunk has to fall back.
+  X_te <- matrix(rnorm(25 * 4), ncol = 4L)
+
+  pred <- function(...) {
+    spec <- tabpfn_classifier(ctx, predict_chunk_size = 10L, ...)
+    spec$predict(spec$fit(X_tr, y_tr), X_te, type = "prob")
+  }
+  plain <- pred(chunk_cache = FALSE)
+  asked <- 0L
+  local_mocked_bindings(tabpfn_cache_matches = function(net, cache, x_train,
+                                                        x_test) {
+    asked <<- asked + 1L
+    isTRUE(net$cache_matches(cache, x_train, x_test))
+  })
+  expect_identical(pred(), plain)
+  # A cache was built and offered for each of the three chunks.
+  expect_identical(asked, 3L)
+  # The case is real: the cache used regardless answers differently.
+  expect_gt(max(abs(pred(kv_cache = TRUE) - plain)), 1e-4)
+})

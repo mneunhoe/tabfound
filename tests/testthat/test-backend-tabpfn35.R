@@ -433,6 +433,29 @@ test_that("test rows cannot see each other", {
 })
 
 
+test_that("a single key/value head is expanded, bit for bit as if copied", {
+  # The test-row path of every ICL block attends to one key/value head.
+  # It is broadcast to the query heads as a view rather than copied; that
+  # is only an allocation saving if the kernel reads the view exactly as
+  # it would the copy, which is what this pins.
+  torch::torch_manual_seed(3)
+  q <- torch::torch_randn(c(1L, 7L, 4L, 8L))
+  k <- torch::torch_randn(c(1L, 30L, 1L, 8L))
+  v <- torch::torch_randn(c(1L, 30L, 1L, 8L))
+  copied <- function(q, k, v) {
+    p <- c(1L, 3L, 2L, 4L)
+    sdpa(q$permute(p),
+         torch::torch_repeat_interleave(k$permute(p), repeats = 4L, dim = 2L),
+         torch::torch_repeat_interleave(v$permute(p), repeats = 4L, dim = 2L),
+         dropout_p = 0)$permute(p)
+  }
+  expect_true(torch::torch_equal(tabpfn35_sdpa(q, k, v), copied(q, k, v)))
+  withr::with_options(list(tabfound.sdpa = "r"), {
+    expect_true(torch::torch_equal(tabpfn35_sdpa(q, k, v), copied(q, k, v)))
+  })
+})
+
+
 test_that("NaN, Inf and constant columns are absorbed", {
   net <- tiny35_net("classification")
   d <- tiny35_data(n_feat = 4L)
@@ -455,6 +478,58 @@ test_that("NaN, Inf and constant columns are absorbed", {
   expect_equal(as.numeric(ind[2, 1, 1]$cpu()), TABPFN35_NAN_INDICATOR)
   expect_equal(as.numeric(ind[3, 1, 2]$cpu()), TABPFN35_POS_INF_INDICATOR)
   expect_equal(as.numeric(ind[4, 1, 2]$cpu()), TABPFN35_NEG_INF_INDICATOR)
+})
+
+
+test_that("the blocked, narrowed decoder reproduces the one-shot one", {
+  # The decoder as it was: every test row's scores formed at once, and a
+  # value column for every class the head could carry. Kept as the
+  # reference the blocked decoder has to reproduce.
+  one_shot <- function(dec, train_emb, test_emb, targets) {
+    B <- test_emb$size(1); M <- test_emb$size(2); N <- train_emb$size(2)
+    D <- dec$head_dim; H <- dec$num_heads; Tm <- dec$max_num_classes
+    q <- dec$q_projection(test_emb)$view(c(B, M, H, D))
+    k <- dec$k_projection(train_emb)$view(c(B, N, H, D))
+    q <- dec$softmax_scaling_layer(q, N)
+    qh <- q$permute(c(1L, 3L, 2L, 4L)); kh <- k$permute(c(1L, 3L, 2L, 4L))
+    w <- torch::nnf_softmax(torch::torch_matmul(qh, kh$transpose(3L, 4L)) / sqrt(D),
+                            dim = -1L)
+    is_finite <- torch::torch_isfinite(targets)
+    safe <- torch::torch_where(is_finite, targets, torch::torch_zeros_like(targets))
+    classes <- torch::torch_arange(0L, Tm - 1L, dtype = safe$dtype)$view(c(1L, 1L, Tm))
+    one_hot <- (safe$unsqueeze(-1L) == classes)$
+      logical_and(is_finite$unsqueeze(-1L))$to(dtype = w$dtype)
+    probs <- torch::torch_matmul(
+      w, one_hot$unsqueeze(2L)$expand(c(B, H, N, Tm)))$mean(dim = 2L)
+    torch::torch_log(torch::torch_clamp(probs, min = 1e-5) + 3e-5)
+  }
+  dec <- tiny35_net("classification")$heads$many_class_decoder
+  expect_identical(dec$block_rows, 128L)
+  torch::torch_manual_seed(9)
+  train_emb <- torch::torch_randn(c(1L, 40L, 32L))
+  test_emb  <- torch::torch_randn(c(1L, 12L, 32L))
+
+  # Every class present, so nothing is narrowed: blocking alone. The
+  # missing label is masked, not counted.
+  y_all <- torch::torch_tensor(matrix(rep(0:5, length.out = 40L), 1L))$
+    to(dtype = torch::torch_float())
+  y_all[1L, 7L] <- NaN
+  want <- torch::with_no_grad(one_shot(dec, train_emb, test_emb, y_all))
+  for (rows in c(128L, 4L, 5L)) {
+    dec$block_rows <- rows
+    got <- torch::with_no_grad(dec(train_emb, test_emb, y_all))
+    expect_true(torch::torch_equal(got, want), info = paste("block", rows))
+  }
+
+  # Three classes of the head's six: the absent ones are the padding's
+  # exact floor, the present ones bit-identical at real widths but held to
+  # rounding at this one (see the v3 test).
+  y <- torch::torch_randint(0L, 3L, c(1L, 40L))$to(dtype = torch::torch_float())
+  y[1L, 5L] <- NaN
+  want <- torch::with_no_grad(one_shot(dec, train_emb, test_emb, y))
+  got <- torch::with_no_grad(dec(train_emb, test_emb, y))
+  expect_true(torch::torch_equal(got[, , 4:6], want[, , 4:6]))
+  expect_equal(as.array(got), as.array(want), tolerance = 1e-6)
 })
 
 

@@ -260,8 +260,15 @@ tabicl_set_transformer <- torch::nn_module(
   # target-aware checkpoints it never happens: the target embedding is
   # added to the labelled rows before the set transformer runs, so no
   # column arrives uniformly sentinel.
-  build_hidden = function(src) {
+  #
+  # @param want_out Run the last block's second half too. A caller after
+  #   the summaries alone leaves it `FALSE`: the last summary is taken
+  #   from that block's *input*, so its attend-back and feed-forward over
+  #   every labelled row would be computed only to be dropped. `src` is
+  #   then `NULL`.
+  build_hidden = function(src, want_out = TRUE) {
     out <- vector("list", length(self$blocks))
+    n_blocks <- length(self$blocks)
     for (i in seq_along(self$blocks)) {
       blk <- self$blocks[[i]]
       is_skip <- (src == blk$skip_value)$all(dim = -1L)$all(dim = -1L)
@@ -277,6 +284,10 @@ tabicl_set_transformer <- torch::nn_module(
       }
       h <- blk$induce(src)
       out[[i]] <- h$detach()
+      if (i == n_blocks && !isTRUE(want_out)) {
+        src <- NULL
+        break
+      }
       src <- blk(src, hidden = h)
     }
     list(src = src, hidden = out)
@@ -309,10 +320,26 @@ tabicl_encoder <- torch::nn_module(
 
   # @param cached_kv List of per-block `list(key, value)` from
   #   [build_kv()], or NULL.
+  # @param test_only With `train_size`, return only the rows after it.
+  #   The last block then queries from those rows alone, against keys and
+  #   values cached from the labelled rows -- the same split projection
+  #   the slice would have taken -- since nothing reads a labelled row's
+  #   output past this point.
   forward = function(x, attn_mask = NULL, train_size = NULL,
-                     cached_kv = NULL, save_peak_memory_factor = NULL) {
+                     cached_kv = NULL, save_peak_memory_factor = NULL,
+                     test_only = FALSE) {
     rp <- if (self$use_rope) self$rope else NULL
-    for (i in seq_along(self$blocks)) {
+    n_blocks <- length(self$blocks)
+    for (i in seq_len(n_blocks)) {
+      if (i == n_blocks && isTRUE(test_only) && is.null(cached_kv) &&
+          !is.null(train_size)) {
+        ax <- x$dim() - 1L
+        blk <- self$blocks[[i]]
+        kv <- blk$cache_kv(x$narrow(ax, 1L, train_size), rope = rp)
+        return(blk(x$narrow(ax, train_size + 1L, x$size(ax) - train_size),
+                   attn_mask = attn_mask, rope = rp, cached_kv = kv,
+                   save_peak_memory_factor = save_peak_memory_factor))
+      }
       x <- self$blocks[[i]](
         x, attn_mask = attn_mask,
         train_size = if (is.null(cached_kv)) train_size else NULL,
@@ -334,16 +361,21 @@ tabicl_encoder <- torch::nn_module(
   #' @keywords internal
   build_kv = function(x) {
     rp <- if (self$use_rope) self$rope else NULL
-    kv <- vector("list", length(self$blocks))
-    # Every row here is a labelled row, so the slice covers all of them --
-    # but it still has to be *taken*. Passing `train_size = NULL` instead
-    # would drop into the fused single-matmul self-attention branch, and
-    # the fused and split projections disagree in the last bit, which is
-    # exactly the seed a stack of blocks amplifies.
-    full <- x$size(x$dim() - 1L)
-    for (i in seq_along(self$blocks)) {
+    n_blocks <- length(self$blocks)
+    kv <- vector("list", n_blocks)
+    # Every row here is a labelled row, so each block attends over exactly
+    # the keys and values just cached -- hand them back rather than have
+    # the block recompute `norm1` and the projection. It must not fall
+    # back to `train_size = NULL` either: that is the fused single-matmul
+    # self-attention branch, and the fused and split projections disagree
+    # in the last bit, which is exactly the seed a stack of blocks
+    # amplifies. The cache is the split projection.
+    for (i in seq_len(n_blocks)) {
       kv[[i]] <- self$blocks[[i]]$cache_kv(x, rope = rp)
-      x <- self$blocks[[i]](x, train_size = full, rope = rp)
+      # The last block's output feeds nothing: its cache is taken from its
+      # input.
+      if (i == n_blocks) break
+      x <- self$blocks[[i]](x, rope = rp, cached_kv = kv[[i]])
       collect_between_layers(x)
     }
     kv

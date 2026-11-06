@@ -421,7 +421,10 @@ tabpfn26_thinking_rows <- torch::nn_module(
 #' column that is constant across the training rows and varies across the
 #' test rows: uncached, it survives and is used; cached, it was dropped
 #' before the cache existed. That is the reference's own behaviour, and
-#' the reason the cache is opt-in rather than automatic.
+#' the reason `kv_cache = TRUE` is opt-in. The cache a `predict()` call
+#' builds for itself (`chunk_cache`) checks the two masks chunk by chunk
+#' instead, with the network's `cache_matches()`, and runs any chunk
+#' where they disagree uncached.
 #'
 #' @param kv List of `list(key, value)`, one per block.
 #' @param feature_state Fitted preprocessing statistics.
@@ -536,6 +539,10 @@ tabpfn_v2_6_transformer <- torch::nn_module(
     self$needs_column_embeddings <- TRUE
     self$supports_kv_cache <- TRUE
     self$supports_chunked_eval <- TRUE
+    # Its cache fits two masks on the training rows that an uncached pass
+    # fits on train and test together; `cache_matches()` says whether
+    # they agree. See [tabpfn26_kv_cache()].
+    self$cache_needs_check <- TRUE
   },
 
   # @param x_train `(B, n_train, F)`; @param y_train `(B, n_train)` or
@@ -707,6 +714,33 @@ tabpfn_v2_6_transformer <- torch::nn_module(
     list(logits = logits, test_hidden = test_hidden)
   },
 
+  #' Would a cache built on these training rows give these test rows the
+  #' uncached answer?
+  #'
+  #' Only if the two masks fitted over train *and* test -- the constant
+  #' columns and the within-group informative features -- come out the
+  #' same over `x_train` and `x_test` together as over `x_train` alone,
+  #' which is what the cache holds. Everything else the cache carries is
+  #' fitted on the training rows either way. This runs the same
+  #' preprocessing the forward pass does, without the embedding, so it is
+  #' cheap next to the pass it decides about.
+  #' @param cache A [tabpfn26_kv_cache()] built from `x_train`.
+  #' @param x_train,x_test `(1, n, F)`, as the forward pass takes them.
+  #' @keywords internal
+  cache_matches = function(cache, x_train, x_test) {
+    x_RiBC <- torch::torch_cat(list(x_train, x_test), dim = 2L)$
+      transpose(1L, 2L)$contiguous()
+    got <- tryCatch(
+      self$preprocess_features(x_RiBC, n_train = x_train$size(2),
+                               device = x_train$device)$state,
+      # Every column constant on train and test alike: the uncached pass
+      # refuses this too, and it is not the check's place to say so.
+      error = function(e) NULL)
+    want <- cache$feature_state
+    !is.null(got) && identical(got$keep, want$keep) &&
+      torch::torch_equal(got$non_const, want$non_const$to(device = got$non_const$device))
+  },
+
   #' Preprocess and embed the feature columns.
   #'
   #' Mirrors `_preprocess_and_embed_features`: drop constant columns,
@@ -716,6 +750,33 @@ tabpfn_v2_6_transformer <- torch::nn_module(
   #' @keywords internal
   embed_features = function(x_RiBC, n_train, column_embeddings, device,
                             state = NULL) {
+    pre <- self$preprocess_features(x_RiBC, n_train, device, state = state)
+    x <- pre$x
+    Ri <- x$size(1); B <- x_RiBC$size(2); n_groups <- pre$n_groups
+
+    # --- Embed.
+    x <- torch::torch_cat(list(x, pre$nan_indicators), dim = -1L)
+    dump_if_enabled("encoder_linear_in", x)
+    x <- self$feature_group_embedder(x)                      # (Ri, B * G, E)
+    dump_if_enabled("embedded_x_pre_pos", x)
+
+    embedded <- x$view(c(Ri, B, n_groups, self$embedding_dim))$
+      transpose(1L, 2L)                                      # (B, Ri, G, E)
+
+    pos <- self$column_positional_embedding(
+      n_groups, column_embeddings, device = device, dtype = embedded$dtype
+    )
+    dump_if_enabled("positional_embedding_linear_out", pos)
+    list(
+      embedded = embedded + pos$unsqueeze(1L)$unsqueeze(1L),
+      state = pre$state
+    )
+  },
+
+  #' Everything `embed_features()` does before the embedding: the
+  #' preprocessed groups, their NaN/Inf indicators, and the fitted state.
+  #' @keywords internal
+  preprocess_features = function(x_RiBC, n_train, device, state = NULL) {
     dims <- x_RiBC$size()
     Ri <- dims[1]; B <- dims[2]
     using_state <- !is.null(state)
@@ -806,21 +867,8 @@ tabpfn_v2_6_transformer <- torch::nn_module(
                             torch::torch_zeros_like(x))
     dump_if_enabled("preproc_x_after_norm_groups_2", x)
 
-    # --- Embed.
-    x <- torch::torch_cat(list(x, nan_indicators), dim = -1L)
-    dump_if_enabled("encoder_linear_in", x)
-    x <- self$feature_group_embedder(x)                      # (Ri, B * G, E)
-    dump_if_enabled("embedded_x_pre_pos", x)
-
-    embedded <- x$view(c(Ri, B, n_groups, self$embedding_dim))$
-      transpose(1L, 2L)                                      # (B, Ri, G, E)
-
-    pos <- self$column_positional_embedding(
-      n_groups, column_embeddings, device = device, dtype = embedded$dtype
-    )
-    dump_if_enabled("positional_embedding_linear_out", pos)
     list(
-      embedded = embedded + pos$unsqueeze(1L)$unsqueeze(1L),
+      x = x, nan_indicators = nan_indicators, n_groups = n_groups,
       # Everything fitted here that a test-only pass could not recompute
       # for itself. `mean` doubles as the imputation value, which is exact:
       # imputing with the train mean leaves that mean where it was.

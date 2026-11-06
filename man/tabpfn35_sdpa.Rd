@@ -15,6 +15,7 @@ As in v3: queries, keys and values are head-last and are permuted
 inside, so the shapes in the callers line up with the reference's
 suffix notation one for one. Grouped-query attention falls back to
 \code{repeat_interleave}, which is what the reference does in float32 and is
-exact either way.
+exact either way; a single key/value head is expanded as a view, which
+is the same numbers without the copy.
 }
 \keyword{internal}
