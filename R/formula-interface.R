@@ -43,10 +43,22 @@
     if (is.logical(col)) {
       data[[j]] <- factor(col, levels = c(FALSE, TRUE))
     } else if (is.character(col) && !names(data)[[j]] %in% keep_character) {
-      data[[j]] <- factor(col)
+      data[[j]] <- factor(col, levels = .code_point_levels(col))
     }
   }
   data
+}
+
+# The level set sklearn's `OrdinalEncoder` would give a string column:
+# its distinct values in code-point order. Plain `factor()` sorts by the
+# session's collation instead, which puts "a" before "B" under
+# `en_US.UTF-8` but after it in the C locale -- so the codes, and the
+# category shuffles the ensemble draws from them, would depend on how R
+# was started. `method = "radix"` always compares in the C locale, which
+# on UTF-8 strings is code-point order.
+# @keywords internal
+.code_point_levels <- function(x) {
+  sort(unique(x[!is.na(x)]), method = "radix")
 }
 
 # Turn molded predictors into the numeric matrix the networks take.

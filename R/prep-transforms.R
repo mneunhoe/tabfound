@@ -56,6 +56,11 @@
   as.raw(bytes)
 }
 
+# `np.nan`'s bit pattern, `0x7ff8000000000000`: a quiet NaN with no sign
+# and no payload.
+.NP_NAN <- readBin(as.raw(c(0, 0, 0, 0, 0, 0, 0xf8, 0x7f)), "double",
+                   size = 8L, endian = "little")
+
 # NumPy's `np.around(a, decimals)` for floats: multiply by 10^decimals,
 # round half to even, divide back. R's own `round()` deliberately does
 # something better-conditioned, so it cannot be used where the *bytes*
@@ -104,6 +109,13 @@ apply_fingerprint <- function(X, salt_uint64, is_test = FALSE) {
   # and the two disagree on a small fraction of values. Reproduce
   # NumPy's `around` exactly instead: scale, round-half-to-even, unscale.
   X_rounded <- .np_around(X_arr, 12L)
+  # The bytes of a missing value matter just as much. R's `NA_real_` is a
+  # NaN with a payload (`a2 07 ...`), NumPy's NaN has none, and `NA` comes
+  # through the quantile and squashing reshapes unchanged -- so without
+  # this every row with a missing cell hashes to a different fingerprint.
+  # The bits are spelled out rather than taken from R's `NaN`, which is
+  # `0/0` and carries the sign bit on x86; `np.nan` never does.
+  X_rounded[is.na(X_rounded)] <- .NP_NAN
   row_bytes_list <- lapply(seq_len(n), function(i) {
     writeBin(as.vector(X_rounded[i, ], mode = "numeric"),
              raw(), size = 8L, endian = "little")
@@ -642,13 +654,14 @@ fit_quantile_transformer <- function(X_train, n_quantiles,
   effective_q <- max(1L, min(as.integer(n_quantiles), n, 20000L))
   refs <- seq(0, 1, length.out = effective_q)
 
-  # quantiles_[:, j] = np.nanpercentile(X[:, j], refs*100)
-  # sklearn uses numpy's default linear interpolation == R quantile type 7
-  quantiles_ <- apply(X_arr, 2L, function(col) {
-    col_clean <- col[!is.na(col)]
-    quantile(col_clean, probs = refs, type = 7L, names = FALSE)
-  })
-  if (!is.matrix(quantiles_)) quantiles_ <- matrix(quantiles_, nrow = 1L)
+  # quantiles_[:, j] = np.nanpercentile(X[:, j], refs*100). Not R's
+  # `quantile(type = 7)`: that is the same formula but not the same
+  # arithmetic, and on tied data the 1-ULP knot differences move values by
+  # half a rank step. See `.nanquantile()` for why the `* 100` stays here.
+  quantiles_ <- vapply(seq_len(p),
+                       function(j) .nanquantile(X_arr[, j], refs * 100),
+                       numeric(effective_q))
+  if (!is.matrix(quantiles_)) quantiles_ <- matrix(quantiles_, nrow = effective_q)
 
   list(
     quantiles_           = quantiles_,                       # (effective_q, p)
@@ -685,9 +698,11 @@ transform_quantile_transformer <- function(X, fit) {
   for (j in seq_len(ncol(X_arr))) {
     q <- fit$quantiles_[, j]
     col <- X_arr[, j]
-    # sklearn's symmetric-fold interp (handles ties continuously)
-    f_fwd <- approx(q, refs, xout = col, rule = 2, ties = "ordered")$y
-    f_bwd <- approx(-rev(q), -rev(refs), xout = -col, rule = 2, ties = "ordered")$y
+    # sklearn's symmetric fold, which lands a run of ties in the middle of
+    # its rank range -- but only with `np.interp`'s choice of index on a
+    # repeated knot, which `approx()` does not make (see `.np_interp()`).
+    f_fwd <- .np_interp(col, q, refs)
+    f_bwd <- .np_interp(-col, -rev(q), -rev(refs))
     v <- 0.5 * (f_fwd - f_bwd)
 
     # sklearn then pins the fitted range's endpoints exactly, upper first
@@ -805,11 +820,13 @@ fit_transform_svd_features <- function(X_train, global_name = "svd_quarter_compo
   # is the POPULATION variance around the column mean (ddof=0). The
   # with_mean=False flag only suppresses subtracting the mean during
   # transform -- it does NOT change how scale_ is computed.
-  col_mean <- colMeans(X_imp)
-  col_var  <- colSums((X_imp - matrix(col_mean, n_samples, n_features,
-                                      byrow = TRUE))^2) / n_samples
-  col_std  <- sqrt(col_var)
-  col_std[col_std == 0] <- 1
+  #
+  # Not just `scale == 0 -> 1`: a column like `1e8 + c(0, 2^-26)` is not
+  # exactly constant, so it survives `remove_constant_features_fit()`, but
+  # its spread is rounding noise. sklearn's `_is_constant_feature` gives it
+  # scale 1; dividing by the noise instead makes it ~1e16 and it swamps
+  # every component.
+  col_std <- fit_standard_scale_no_mean(X_imp)
 
   X_scaled <- sweep(X_imp, 2, col_std, `/`)
   post_means <- .impute_fit(X_scaled)

@@ -38,6 +38,23 @@ test_that("coercion makes formula and xy paths agree on column count", {
 })
 
 
+test_that("string columns are coded in sklearn's order, whatever the locale", {
+  skip_if_not_installed("jsonlite")
+  skip_if_not_installed("safetensors")
+  ref_path <- tabfound_file("parity", "transforms", "transforms.safetensors.gz")
+  skip_if(!nzchar(ref_path), "transform reference not found")
+  scl <- jsonlite::fromJSON(sub("\\.safetensors\\.gz$", ".json", ref_path))
+  codes <- as.numeric(as.array(read_reference_tensors(ref_path)$cat_string_codes))
+
+  # Under the C collation testthat sets, `factor()` would pass this by luck.
+  local_natural_collate()
+  d <- .coerce_for_mold(data.frame(s = scl$cat_string_values,
+                                   stringsAsFactors = FALSE))
+  expect_identical(levels(d$s), scl$cat_string_categories)
+  expect_identical(unname(.encode_predictors(d)[, "s"]), codes)
+})
+
+
 test_that("every R column type encodes to one numeric column", {
   d <- .coerce_for_mold(mixed_df())
   m <- hardhat::mold(d[setdiff(names(d), "y")], d$y)

@@ -163,11 +163,11 @@ fit_frame_expansion <- function(data, transform_text, transform_dates,
 
   expanded <- c(names(date_fits), names(text_fits))
   # A string column that is not text is categorical, and gets the level set
-  # `factor()` would have given it before mold -- recorded, so new rows are
-  # coded against the training levels rather than their own.
+  # `.coerce_for_mold()` would have given it before mold -- recorded, so new
+  # rows are coded against the training levels rather than their own.
   leftover_chr <- setdiff(nm[vapply(data, is.character, logical(1))], expanded)
   char_levels <- stats::setNames(
-    lapply(leftover_chr, function(n) levels(factor(data[[n]]))), leftover_chr)
+    lapply(leftover_chr, function(n) .code_point_levels(data[[n]])), leftover_chr)
 
   state <- structure(
     list(input_names = nm, durations = durations, instants = instants,
