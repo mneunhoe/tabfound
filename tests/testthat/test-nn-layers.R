@@ -161,6 +161,32 @@ test_that("rope in non-interleaved mode matches TabICL's", {
                       as.numeric(as.array(ref$iclrope.y)))), 1e-3)
 })
 
+test_that("split-half rope takes its halves as views, bit for bit", {
+  # The halves are `narrow()` views rather than `index_select()` copies.
+  # The rotation must not move by a single bit for it, including on the
+  # transposed, non-contiguous `(B, H, S, Dh)` input the v3/v3.5 column
+  # aggregator hands in.
+  torch::torch_manual_seed(3)
+  dh <- 16L
+  m <- rope(dh, 100000, interleaved = FALSE, learnable = TRUE)
+  m$parameters$freqs$set_data(torch::torch_rand(dh / 2L))
+  x <- torch::torch_randn(5L, 11L, 4L, dh)$transpose(2L, 3L)
+  expect_false(x$is_contiguous())
+
+  half <- dh / 2L
+  x1 <- torch::torch_index_select(x, -1L, torch::torch_arange(1L, half,
+                                  dtype = torch::torch_long()))
+  x2 <- torch::torch_index_select(x, -1L, torch::torch_arange(half + 1L, dh,
+                                  dtype = torch::torch_long()))
+  f <- torch::torch_outer(torch::torch_arange(0L, 10L,
+                                              dtype = torch::torch_float()),
+                          m$freqs)
+  cs <- torch::torch_cat(list(f$cos(), f$cos()), dim = -1L)
+  sn <- torch::torch_cat(list(f$sin(), f$sin()), dim = -1L)
+  old <- x * cs + torch::torch_cat(list(-x2, x1), dim = -1L) * sn
+  expect_true(torch::torch_equal(torch::with_no_grad(m(x)), old))
+})
+
 
 for (tag in c("iclmab", "iclmab_nobias")) {
   local({
