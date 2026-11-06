@@ -18,6 +18,7 @@ tabfound_syn(
   smoothing = FALSE,
   clamp = TRUE,
   proper = TRUE,
+  proper_frac = 0.632,
   cont_na = NULL,
   quantile_grid = 199L,
   seed = NULL,
@@ -73,8 +74,17 @@ already smooth.}
 
 \item{clamp}{Clamp \code{"predictive"} draws to the observed range.}
 
-\item{proper}{Bootstrap the context rows once per synthesis. See
-Details; \code{TRUE} by default, unlike \code{synthpop::syn()}.}
+\item{proper}{Resample the context rows once per synthesis. \code{TRUE}
+(the default, unlike \code{synthpop::syn()}) is a subsample without
+replacement, the same as \code{proper = "subsample"}; \code{FALSE} (or
+\code{"none"}) conditions on all of the data; \code{"bootstrap"} is synthpop's
+bootstrap, which copies real rows (see \emph{Properness}). The Bayesian
+bootstrap that \code{\link[=tabfound_impute]{tabfound_impute()}} offers is not available here, for
+the same reason.}
+
+\item{proper_frac}{Fraction of rows kept per synthesis when the
+context is subsampled. Defaults to 0.632, a bootstrap's expected
+distinct-row fraction, as in \code{\link[=tabfound_impute]{tabfound_impute()}}.}
 
 \item{cont_na}{Named list of extra values per column to treat as point
 masses rather than as draws from the continuous part, e.g.
@@ -95,7 +105,9 @@ An object of class \code{tabfound_syn}:
 \item \code{syn} — list of \code{m} synthetic data frames
 \item \code{data} — the input, unchanged
 \item \code{method}, \code{m}, \code{k}, \code{n}, \code{visit_sequence}, \code{predictors},
-\code{draw_mode}, \code{proper}, \code{seed}, \code{call}
+\code{draw_mode}, \code{proper} (logical, as synthpop records it),
+\code{proper_scheme} (\code{"subsample"}, \code{"bootstrap"} or \code{"none"}),
+\code{proper_frac}, \code{seed}, \code{call}
 }
 }
 \description{
@@ -130,7 +142,7 @@ highest replication-disclosure risk.
 order statistics by rank. Reproduces the marginal exactly, which also
 means that part of the fidelity is by construction rather than by
 merit. "Exactly" means the \emph{context's} marginal, so under
-\code{proper = TRUE} it is the bootstrapped one.
+\code{proper = TRUE} it is the subsample's.
 }
 
 \code{clamp} interacts with all of this: it holds \code{"predictive"} draws
@@ -151,10 +163,24 @@ so between-synthesis variance carries predictive noise and no parameter
 uncertainty — the same defect that makes an imputer improper under
 Rubin's rules. The synthetic-data variance estimators
 (\code{synthpop::lm.synds()} and friends) assume the mechanism propagates
-it. \code{proper = TRUE} bootstraps the context rows before conditioning,
-once per synthesis, which is exactly synthpop's definition of
-properness, and is the default here. It costs one fit per synthesis
+it. \code{proper = TRUE}, the default here, resamples the context rows once
+per synthesis before conditioning. It costs one fit per synthesis
 instead of one fit shared by all of them.
+
+The resample is a subsample without replacement (\code{proper_frac} of the
+rows, 63\% by default), not the bootstrap that defines properness in
+synthpop. A bootstrap puts rows in the context more than once, and
+these models treat a duplicated context row as a near-certain lookup:
+each variable is drawn almost deterministically from the row its
+synthetic covariates came from, and whole real records come out
+unchanged. On a 60-row mixed-type frame, a bootstrapped context copied
+34 to 45 real rows exactly per synthesis, the subsample 3 to 5, and
+\code{proper = FALSE} 4 to 5. The price is that a subsample propagates less
+parameter variance than a bootstrap -- for a mean, a fraction
+\code{(1 - proper_frac) / proper_frac} of it, so 0.58 at the default and
+the full amount at \code{proper_frac = 0.5}, which keeps fewer rows.
+\code{proper = "bootstrap"} remains available for synthpop's definition,
+at that replication risk.
 }
 
 \section{Missing and special values}{

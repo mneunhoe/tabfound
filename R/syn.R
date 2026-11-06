@@ -28,20 +28,30 @@
 #     carries predictive noise and *no parameter uncertainty*. That is the
 #     same defect that makes an imputer improper under Rubin's rules, and
 #     the synthetic-data variance estimators in `synthpop` assume it away.
-#     Hence `proper = TRUE` by default here: bootstrap the context before
-#     conditioning, which is exactly synthpop's definition of properness.
-#     This is the one place where this function's default deliberately
-#     differs from `synthpop::syn()`.
+#     Hence `proper = TRUE` by default here: resample the context before
+#     conditioning, once per synthesis. This is the one place where this
+#     function's default deliberately differs from `synthpop::syn()`.
+#
+#     The resample is a subsample without replacement, not synthpop's
+#     bootstrap. A PFN reads a duplicated context row as a near-certain
+#     lookup -- on a context with every row doubled, a classifier's
+#     in-sample accuracy goes from 0.60 to 1.00 -- so each variable comes
+#     back almost deterministically from the row its covariates were
+#     copied from, and the first variable *is* a real value. A
+#     bootstrapped pass copied 34-45 of 60 real records outright where
+#     `proper = FALSE` copied 4-5; the subsample copies 3-5. It
+#     varies the context as much as a bootstrap drops rows (63% kept)
+#     but, having no ties, propagates somewhat less parameter variance:
+#     for a mean, (1 - f) / f of the bootstrap's, 0.58 at f = 0.632.
 #
 #     Read that default against what the imputation side found when it
-#     measured the same correction (`inst/simulation/README.md`,
-#     "Properness"): on a PFN a bootstrapped context is not the same model
-#     with new parameters but a worse model -- 63% distinct rows, and an
-#     in-context learner's fit *is* its context -- which cost an order of
-#     magnitude in bias there, enough that `tabfound_impute()` ships with
-#     `proper = FALSE`. Synthesis has not been measured that way and its
-#     estimators assume properness, so the default stands; it is an
-#     untested one, and the utility cost is probably comparable.
+#     measured the bootstrap (`inst/simulation/README.md`, "Properness"):
+#     on a PFN a resampled context is not the same model with new
+#     parameters but a worse model -- an in-context learner's fit *is* its
+#     context -- which cost an order of magnitude in bias there, enough
+#     that `tabfound_impute()` ships with `proper = FALSE`. Synthesis has
+#     not been measured that way and its estimators assume properness, so
+#     the default stands; it is an untested one.
 #
 # The context *is* the real data at generation time. No differential
 # privacy claim is available and none is made; see `?tabfound_syn`.
@@ -408,7 +418,7 @@
 #'   order statistics by rank. Reproduces the marginal exactly, which also
 #'   means that part of the fidelity is by construction rather than by
 #'   merit. "Exactly" means the *context's* marginal, so under
-#'   `proper = TRUE` it is the bootstrapped one.
+#'   `proper = TRUE` it is the subsample's.
 #'
 #' `clamp` interacts with all of this: it holds `"predictive"` draws
 #' inside the observed range by flooring and capping them, which piles the
@@ -428,10 +438,24 @@
 #' uncertainty — the same defect that makes an imputer improper under
 #' Rubin's rules. The synthetic-data variance estimators
 #' (`synthpop::lm.synds()` and friends) assume the mechanism propagates
-#' it. `proper = TRUE` bootstraps the context rows before conditioning,
-#' once per synthesis, which is exactly synthpop's definition of
-#' properness, and is the default here. It costs one fit per synthesis
+#' it. `proper = TRUE`, the default here, resamples the context rows once
+#' per synthesis before conditioning. It costs one fit per synthesis
 #' instead of one fit shared by all of them.
+#'
+#' The resample is a subsample without replacement (`proper_frac` of the
+#' rows, 63% by default), not the bootstrap that defines properness in
+#' synthpop. A bootstrap puts rows in the context more than once, and
+#' these models treat a duplicated context row as a near-certain lookup:
+#' each variable is drawn almost deterministically from the row its
+#' synthetic covariates came from, and whole real records come out
+#' unchanged. On a 60-row mixed-type frame, a bootstrapped context copied
+#' 34 to 45 real rows exactly per synthesis, the subsample 3 to 5, and
+#' `proper = FALSE` 4 to 5. The price is that a subsample propagates less
+#' parameter variance than a bootstrap -- for a mean, a fraction
+#' `(1 - proper_frac) / proper_frac` of it, so 0.58 at the default and
+#' the full amount at `proper_frac = 0.5`, which keeps fewer rows.
+#' `proper = "bootstrap"` remains available for synthpop's definition,
+#' at that replication risk.
 #'
 #' # Missing and special values
 #'
@@ -487,8 +511,16 @@
 #'   `smoothing = "density"` does. Ignored for `"predictive"`, which is
 #'   already smooth.
 #' @param clamp Clamp `"predictive"` draws to the observed range.
-#' @param proper Bootstrap the context rows once per synthesis. See
-#'   Details; `TRUE` by default, unlike `synthpop::syn()`.
+#' @param proper Resample the context rows once per synthesis. `TRUE`
+#'   (the default, unlike `synthpop::syn()`) is a subsample without
+#'   replacement, the same as `proper = "subsample"`; `FALSE` (or
+#'   `"none"`) conditions on all of the data; `"bootstrap"` is synthpop's
+#'   bootstrap, which copies real rows (see *Properness*). The Bayesian
+#'   bootstrap that [tabfound_impute()] offers is not available here, for
+#'   the same reason.
+#' @param proper_frac Fraction of rows kept per synthesis when the
+#'   context is subsampled. Defaults to 0.632, a bootstrap's expected
+#'   distinct-row fraction, as in [tabfound_impute()].
 #' @param cont_na Named list of extra values per column to treat as point
 #'   masses rather than as draws from the continuous part, e.g.
 #'   `list(income = 0)`. `NA` is always treated this way.
@@ -501,7 +533,9 @@
 #'   * `syn` — list of `m` synthetic data frames
 #'   * `data` — the input, unchanged
 #'   * `method`, `m`, `k`, `n`, `visit_sequence`, `predictors`,
-#'     `draw_mode`, `proper`, `seed`, `call`
+#'     `draw_mode`, `proper` (logical, as synthpop records it),
+#'     `proper_scheme` (`"subsample"`, `"bootstrap"` or `"none"`),
+#'     `proper_frac`, `seed`, `call`
 #' @seealso [as_synds()] for the synthpop toolchain, [syn.tabfound()] to
 #'   let synthpop drive instead, [tabfound_synthetic()] to pull the frames
 #'   out, and [tabfound_impute()] for the imputation sibling.
@@ -523,11 +557,14 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
                                   "residual"),
                          draw_mode = c("predictive", "pmm", "rank"),
                          donors = 5L, smoothing = FALSE, clamp = TRUE,
-                         proper = TRUE, cont_na = NULL, quantile_grid = 199L,
+                         proper = TRUE, proper_frac = 0.632,
+                         cont_na = NULL, quantile_grid = 199L,
                          seed = NULL, verbose = TRUE, ...) {
   cl        <- match.call()
   draw      <- match.arg(draw)
   draw_mode <- match.arg(draw_mode)
+  proper    <- .syn_resolve_proper(proper)
+  proper_frac <- .mi_resolve_proper_frac(proper_frac)
   if (!is.null(seed)) .local_seed(seed)
 
   if (is.matrix(data)) data <- as.data.frame(data, stringsAsFactors = FALSE)
@@ -579,14 +616,15 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
   for (v in vars) mdf[[v]] <- plans[[v]]$to_model(data[[v]])
 
   # Improper synthesis shares one context across all m, so all m can share
-  # one fit and one forward pass over a stacked query. Properness
-  # bootstraps per synthesis, which forces a fit each.
-  groups <- if (isTRUE(proper)) as.list(seq_len(m)) else list(seq_len(m))
-  ctx_rows <- if (isTRUE(proper)) {
-    lapply(seq_len(m), function(j) sample.int(n, n, replace = TRUE))
-  } else {
-    rep(list(seq_len(n)), m)
-  }
+  # one fit and one forward pass over a stacked query.
+  # Properness resamples per synthesis, which forces a fit each. The
+  # resampling is imputation's (`.mi_context_rows()`), so the two
+  # functions mean the same thing by each scheme.
+  is_proper <- !identical(proper, "none")
+  groups <- if (is_proper) as.list(seq_len(m)) else list(seq_len(m))
+  ctx_rows <- lapply(seq_len(m), function(j) {
+    .mi_context_rows(seq_len(n), proper, frac = proper_frac)
+  })
 
   # An all-NA slice of the model frame: right types, right factor levels,
   # `k` rows. Unsynthesised columns hold the real values from the start,
@@ -657,12 +695,47 @@ tabfound_syn <- function(data, m = 1L, models = NULL, k = NULL,
          method = meth, visit_sequence = visit, predictors = pm,
          draw = draw, draw_mode = draw_mode, donors = as.integer(donors),
          smoothing = isTRUE(smoothing), clamp = isTRUE(clamp),
-         proper = isTRUE(proper), cont_na = cont_na, seed = seed,
+         proper = is_proper, proper_scheme = proper,
+         proper_frac = proper_frac, cont_na = cont_na, seed = seed,
          backend = c(classification = models$source[["classification"]],
                      regression     = models$source[["regression"]]),
          call = cl),
     class = "tabfound_syn"
   )
+}
+
+# Imputation's vocabulary for `proper`, less the schemes that put a row
+# in the context more than once. A PFN reads a duplicated context row as
+# a near-certain lookup: conditioned on its own covariates, a row's
+# value comes back almost deterministically, so a pass over a
+# bootstrapped context copies real records outright. `TRUE` therefore
+# means the subsample here, where in `tabfound_impute()` (which draws
+# only the missing cells, and has measured the bootstrap) it means the
+# bootstrap. "bootstrap" stays available, as synthpop's literal
+# definition; "bayes" is not offered, because its weighted draw
+# duplicates rows harder still.
+# @keywords internal
+.syn_resolve_proper <- function(proper) {
+  if (isTRUE(proper))  return("subsample")
+  if (isFALSE(proper)) return("none")
+  ok <- c("subsample", "bootstrap", "none")
+  if (is.character(proper) && length(proper) == 1L && proper %in% ok) {
+    return(proper)
+  }
+  if (identical(proper, "bayes")) {
+    cli::cli_abort(c(
+      "{.arg proper} = {.val bayes} is not supported by {.fn tabfound_syn}.",
+      x = "A Bayesian bootstrap puts rows in the context more than once, \
+           and the model copies a duplicated row's values into the \
+           synthetic data.",
+      i = "Use {.val subsample} (what {.code proper = TRUE} means here)."
+    ))
+  }
+  cli::cli_abort(c(
+    "{.arg proper} must be {.val {TRUE}}, {.val {FALSE}}, or one of \
+     {.val {ok}}.",
+    x = "Got {.val {proper}}."
+  ))
 }
 
 # Draws come back as bare labels or numbers; the synthetic frame has to
@@ -714,7 +787,8 @@ print.tabfound_syn <- function(x, ...) {
            {.field {utils::head(x$visit_sequence, 6)}}\\
            {if (length(x$visit_sequence) > 6) ' ...' else ''}",
     "*" = "draw mode: {.val {x$draw_mode}}{if (x$smoothing) ' (smoothed)' else ''}",
-    "*" = "proper: {.val {x$proper}}",
+    "*" = "proper: {.val {x$proper}}\\
+           {if (x$proper) paste0(' (', x$proper_scheme %||% 'bootstrap', ')') else ''}",
     i = "{.fn as_synds} for the synthpop toolchain \\
          ({.fn compare}, {.fn utility.gen}, {.fn lm.synds})."
   ))
