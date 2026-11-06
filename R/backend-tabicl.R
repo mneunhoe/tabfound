@@ -464,9 +464,26 @@ tabicl_model <- torch::nn_module(
   #
   # @param x `(B, train_size, H)` — the labelled rows only.
   # @param y_train `(B, train_size)`.
-  build_kv_cache = function(x, y_train, col_chunk_size = NULL) {
-    built <- self$col_embedder$build_hidden(x, y_train, col_chunk_size)
-    reps <- self$row_interactor(built$out)
+  # @param row_chunk_size Rows per pass through the column and row stages,
+  #   as for `forward()`. Without it a cache build holds the whole
+  #   `(B, train_size, HC, E)` column embedding and the row stage over it,
+  #   which gave back most of what chunking an uncached pass saves.
+  build_kv_cache = function(x, y_train, col_chunk_size = NULL,
+                            row_chunk_size = NULL) {
+    n_train <- y_train$size(2)
+    size <- suppressWarnings(as.integer(row_chunk_size %||% NA_integer_))
+    if (is.na(size) || size < 1L || size >= n_train) {
+      built <- self$col_embedder$build_hidden(x, y_train, col_chunk_size)
+      reps <- self$row_interactor(built$out)
+    } else {
+      # The summaries first, then the labelled rows a chunk at a time
+      # against them -- the same driver the uncached chunked pass uses,
+      # so the two agree to the same rounding.
+      built <- self$col_embedder$build_hidden(x, y_train, col_chunk_size,
+                                              want_out = FALSE)
+      reps <- self$stages_0_to_1(x, y_train, col_hidden = built$hidden,
+                                 row_chunk_size = size)
+    }
     tabicl_kv_cache(
       col_hidden = built$hidden,
       icl_kv     = self$icl_predictor$build_kv(reps, y_train),
@@ -732,7 +749,9 @@ tabicl_task_of <- function(config) {
   }
   cache <- member_cache(cache_store, i, function() {
     b <- .tabicl_batch(X_train, mem$y, X_train[0L, , drop = FALSE], dev)
-    torch::with_no_grad({ net$build_kv_cache(b$x, b$y, col_chunk_size) })
+    torch::with_no_grad({
+      net$build_kv_cache(b$x, b$y, col_chunk_size, row_chunk_size)
+    })
   })
   x_te <- as_float_tensor(as.matrix(X_test), device = dev)$unsqueeze(1L)
   out <- torch::with_no_grad({
