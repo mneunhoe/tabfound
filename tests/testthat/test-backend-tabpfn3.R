@@ -365,6 +365,75 @@ test_that("the between-layer collect is gated on size and changes nothing", {
 })
 
 
+test_that("a large carried state escalates the collection to a full one", {
+  # The default line sits between the small-table sizes, where a full
+  # pass is most of the wall clock, and the sizes where level-0 passes
+  # leave gigabytes of promoted garbage behind.
+  expect_false(.collect_full(COLLECT_MIN_BYTES))
+  expect_false(.collect_full(COLLECT_FULL_MIN_BYTES - 1))
+  expect_true(.collect_full(COLLECT_FULL_MIN_BYTES))
+  withr::with_options(list(tabfound.collect_full_min_bytes = Inf),
+    expect_false(.collect_full(1e12)))
+  withr::with_options(list(tabfound.collect_full_min_bytes = 0),
+    expect_true(.collect_full(0)))
+
+  # The chunk boundary has no tensor of its own, so it goes by the
+  # largest state carried since the previous boundary, and resets it.
+  withr::local_options(list(tabfound.collect_between_layers = "auto",
+                            tabfound.collect_full_min_bytes = 1024))
+  small <- torch::torch_zeros(c(1L, 8L, 8L))          # 256 B
+  big   <- torch::torch_zeros(c(1L, 64L, 64L))        # 16 KB
+  .collect_state$high_water <- 0
+  collect_between_layers(small)
+  expect_equal(.collect_state$high_water, 256)
+  collect_between_layers(big)
+  collect_between_layers(small)
+  expect_equal(.collect_state$high_water, 16384)
+  expect_true(collect_between_chunks())
+  expect_equal(.collect_state$high_water, 0)
+  # Recorded even when the layer call itself was below the gate.
+  withr::with_options(list(tabfound.collect_min_bytes = Inf), {
+    expect_false(collect_between_layers(big))
+  })
+  expect_equal(.collect_state$high_water, 16384)
+  collect_between_chunks()
+
+  # Inside a layer only a full collection is worth making.
+  expect_false(collect_between_layers(small, only_full = TRUE))
+  withr::with_options(list(tabfound.collect_min_bytes = 0), {
+    expect_false(collect_between_layers(small, only_full = TRUE))
+    expect_true(collect_between_layers(big, only_full = TRUE))
+  })
+  collect_between_chunks()
+
+  # Sized in doubles: `numel()` is an R integer and wraps past 2^31
+  # elements. An expanded view costs nothing to make at that size.
+  huge <- torch::torch_zeros(1L)$expand(c(70000L, 70000L))   # 19.6 GB
+  withr::with_options(list(tabfound.collect_min_bytes = Inf),
+    collect_between_layers(huge))
+  expect_equal(.collect_state$high_water, 70000 * 70000 * 4)
+  .collect_state$high_water <- 0
+})
+
+
+test_that("collecting between Mitra's sublayers changes nothing", {
+  net <- tiny_mitra()
+  torch::torch_manual_seed(5L)
+  xs <- torch::torch_randn(c(1L, 40L, 6L))
+  ys <- torch::torch_randint(0L, 3L, c(1L, 40L))$to(dtype = torch::torch_float())
+  xq <- torch::torch_randn(c(1L, 9L, 6L))
+  run <- function(opts) withr::with_options(opts, torch::with_no_grad({
+    cache <- net$build_kv_cache(xs, ys)
+    list(plain  = as.array(net(xs, ys, xq)),
+         cached = as.array(net(NULL, NULL, xq, kv_cache = cache)))
+  }))
+  off  <- run(list(tabfound.collect_between_layers = FALSE))
+  full <- run(list(tabfound.collect_between_layers = TRUE,
+                   tabfound.collect_full_min_bytes = 0))
+  expect_identical(full, off)
+})
+
+
 test_that("fewer columns than the grouping shifts still runs", {
   # With 2 columns the shifts 1, 2 and 4 all wrap onto the same two
   # columns. That is degenerate but legal, and it must not crash.

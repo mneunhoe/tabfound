@@ -125,6 +125,51 @@ chunked_evaluate <- function(f, x, factor, residual, batch_dims, ...) {
 # have that first gigabyte back can say so with the option.
 COLLECT_MIN_BYTES <- 4194304
 
+# Where a collection has to be a *full* one. A level-0 pass sweeps only
+# R's youngest generation, and a tensor wrapper that has lived through
+# one of the automatic minor collections R6 dispatch keeps triggering has
+# been promoted out of it -- so an activation that is garbage in
+# principle keeps its memory in practice until something sweeps the old
+# generations. Most of a large block's intermediates live long enough to
+# be promoted.
+#
+# A full pass costs about 80 ms here against a few for a level-0 one, a
+# fixed cost per call, so the question is again where the saving
+# overtakes it. Every collection made full, against none (TabICL one
+# member, Mitra one forward; peak footprint and wall clock, under load):
+#
+#   state     backend, table       peak, full vs level-0      time
+#   15 MB     TabICL 1,000 x 20    0.92 vs 0.95 GB            +56%
+#   30 MB     Mitra    500 x 20    0.85 vs 0.91 GB            +110%
+#   38 MB     TabICL 2,000 x 30    1.22 vs 1.23 GB            +39%
+#   72 MB     TabICL 2,000 x 60    1.89 vs 2.17 GB            +28%
+#   76 MB     Mitra  1,000 x 30    1.50 vs 3.42 GB            +12%
+#
+# Below about 40 MB there is nothing to free that a level-0 pass misses;
+# from about 70 MB there is, and it grows faster than the table. 64 MB
+# sits between. Above it the forward pass is long enough that the
+# collections are a few percent of it -- with the line here, TabICL at
+# 6,000 x 90 (300 MB state) went from 15.3 to 5.2 GB in the same wall
+# clock, and TabPFN v2.5 at 6,000 x 60 spent 5 s of 90 in collection to
+# take its resident peak from 12.7 to 4.1 GB. Just above the line it is
+# closer to even: TabICL at 4,000 x 60 (140 MB) pays 7% for 6.3 -> 5.8 GB
+# resident and an unchanged footprint.
+#
+# The carried state is not the whole story -- TabPFN v3's cached path
+# carries 2 MB while each layer copies hundreds of MB of keys and values
+# (#69) -- but there the copies die young. Forcing a collection after
+# every layer at 20,000 rows, a level-0 pass recovers the same 0.6 GB
+# resident as a full one, and the full one costs 8 s more. So this line
+# stays on the carried state: what a layer allocates and drops at once
+# is a question for whether to collect at all, not for how deeply.
+COLLECT_FULL_MIN_BYTES <- 67108864
+
+# The largest state any between-layer call has seen since the last
+# between-chunk collection, which is how the chunk boundary knows the
+# pass it closes was a large one.
+.collect_state <- new.env(parent = emptyenv())
+.collect_state$high_water <- 0
+
 #' Let go of a layer's intermediates before starting the next one
 #'
 #' R torch frees a tensor's memory when R's garbage collector runs, not
@@ -146,29 +191,57 @@ COLLECT_MIN_BYTES <- 4194304
 #' At 16,000 rows, collecting every block gives 2,426 MB, every fourth
 #' 4,166 MB, and every eighth 5,753 MB, which is no better than never.
 #'
+#' Kind matters as well as frequency. A level-0 collection only frees
+#' wrappers still in R's youngest generation, and most of a large block's
+#' intermediates have been promoted out of it by the time the block
+#' returns, so above `tabfound.collect_full_min_bytes` the collection is
+#' a full one. Below it, a full pass would cost more than it saves.
+#'
 #' @param x The tensor the loop carries from one layer to the next; its
-#'   size is what decides whether a collection is worth it. `NULL` means
-#'   "cannot tell", which under `"auto"` means no.
+#'   size is what decides whether a collection is worth it, and whether
+#'   it has to be a full one. `NULL` means "cannot tell", which under
+#'   `"auto"` means no.
+#' @param only_full Collect only if the collection would be a full one.
+#'   For call sites *inside* a layer, between its sublayers, where a
+#'   level-0 pass would be one more millisecond-scale cost per sublayer
+#'   for garbage the call after the layer frees anyway.
 #' @return Invisibly, whether a collection happened.
 #' @section Options:
 #' `tabfound.collect_between_layers` is `"auto"` (default: collect once
 #' the carried tensor is worth it), `TRUE` (always) or `FALSE` (never).
-#' `tabfound.collect_min_bytes` moves the `"auto"` threshold.
+#' `tabfound.collect_min_bytes` moves the `"auto"` threshold, and
+#' `tabfound.collect_full_min_bytes` the one above which the collection
+#' is a full rather than a level-0 one (`Inf` for never).
 #' @keywords internal
-collect_between_layers <- function(x = NULL) {
+collect_between_layers <- function(x = NULL, only_full = FALSE) {
   mode <- getOption("tabfound.collect_between_layers", "auto")
   if (isFALSE(mode)) return(invisible(FALSE))
+  # In doubles from the shape: `numel()` comes back as an R integer, which
+  # wraps past 2^31 elements, and its product with the element size is
+  # `NA` from 2 GB -- which used to read as "too small to bother" for
+  # exactly the states that most needed collecting.
+  bytes <- if (is.null(x)) 0 else
+    tryCatch(prod(as.numeric(x$size())) * as.numeric(x$element_size()),
+             error = function(e) 0)
+  if (isTRUE(bytes > .collect_state$high_water)) {
+    .collect_state$high_water <- bytes
+  }
   if (!isTRUE(mode)) {
     if (is.null(x)) return(invisible(FALSE))
-    bytes <- tryCatch(x$numel() * x$element_size(), error = function(e) 0)
     min_bytes <- getOption("tabfound.collect_min_bytes", COLLECT_MIN_BYTES)
     if (!isTRUE(bytes >= min_bytes)) return(invisible(FALSE))
   }
-  # `full = FALSE` deliberately: a full collection is 45x the cost
-  # (44.6 ms against 1.0 ms here) and the tensors this is for are freed
-  # by the level-0 pass all the same.
-  gc(full = FALSE)
+  full <- .collect_full(bytes)
+  if (isTRUE(only_full) && !full) return(invisible(FALSE))
+  gc(full = full)
   invisible(TRUE)
+}
+
+# Whether a collection after carrying `bytes` has to sweep every
+# generation; see `COLLECT_FULL_MIN_BYTES`.
+.collect_full <- function(bytes) {
+  isTRUE(bytes >= getOption("tabfound.collect_full_min_bytes",
+                            COLLECT_FULL_MIN_BYTES))
 }
 
 
@@ -187,6 +260,14 @@ collect_between_layers <- function(x = NULL) {
 #' running the full stack, then the next chunk doing it again -- held all
 #' of it until something else triggered a collection.
 #'
+#' Whether it is a full collection is decided by the pass it closes: the
+#' largest state any [collect_between_layers()] call saw since the
+#' previous boundary, against the same `tabfound.collect_full_min_bytes`.
+#' The boundary has no tensor of its own to measure, and what a pass
+#' leaves behind -- its stage outputs and the hand-offs between stages,
+#' all promoted by the time the next one starts -- scales with the
+#' largest thing it carried.
+#'
 #' @return Invisibly, whether a collection happened. Honours the same
 #'   `tabfound.collect_between_layers` option, so one switch turns all of
 #'   it off.
@@ -195,7 +276,9 @@ collect_between_chunks <- function() {
   if (isFALSE(getOption("tabfound.collect_between_layers", "auto"))) {
     return(invisible(FALSE))
   }
-  gc(full = FALSE)
+  full <- .collect_full(.collect_state$high_water)
+  .collect_state$high_water <- 0
+  gc(full = full)
   invisible(TRUE)
 }
 

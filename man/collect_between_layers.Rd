@@ -4,12 +4,18 @@
 \alias{collect_between_layers}
 \title{Let go of a layer's intermediates before starting the next one}
 \usage{
-collect_between_layers(x = NULL)
+collect_between_layers(x = NULL, only_full = FALSE)
 }
 \arguments{
 \item{x}{The tensor the loop carries from one layer to the next; its
-size is what decides whether a collection is worth it. \code{NULL} means
-"cannot tell", which under \code{"auto"} means no.}
+size is what decides whether a collection is worth it, and whether
+it has to be a full one. \code{NULL} means "cannot tell", which under
+\code{"auto"} means no.}
+
+\item{only_full}{Collect only if the collection would be a full one.
+For call sites \emph{inside} a layer, between its sublayers, where a
+level-0 pass would be one more millisecond-scale cost per sublayer
+for garbage the call after the layer frees anyway.}
 }
 \value{
 Invisibly, whether a collection happened.
@@ -34,12 +40,20 @@ collection placed between the blocks, which cost nothing measurable.
 Frequency is not negotiable either -- the saving is monotone in it.
 At 16,000 rows, collecting every block gives 2,426 MB, every fourth
 4,166 MB, and every eighth 5,753 MB, which is no better than never.
+
+Kind matters as well as frequency. A level-0 collection only frees
+wrappers still in R's youngest generation, and most of a large block's
+intermediates have been promoted out of it by the time the block
+returns, so above \code{tabfound.collect_full_min_bytes} the collection is
+a full one. Below it, a full pass would cost more than it saves.
 }
 \section{Options}{
 
 \code{tabfound.collect_between_layers} is \code{"auto"} (default: collect once
 the carried tensor is worth it), \code{TRUE} (always) or \code{FALSE} (never).
-\code{tabfound.collect_min_bytes} moves the \code{"auto"} threshold.
+\code{tabfound.collect_min_bytes} moves the \code{"auto"} threshold, and
+\code{tabfound.collect_full_min_bytes} the one above which the collection
+is a full rather than a level-0 one (\code{Inf} for never).
 }
 
 \keyword{internal}

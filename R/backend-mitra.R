@@ -327,17 +327,27 @@ mitra_layer <- torch::nn_module(
       self$from_rows(a1(self$to_rows(ln1(z)), cached_kv = kv),
                      b, z$size(2), f, d)
     }, x, spmf, axis = 2L)
+    # Each sublayer is a whole block's worth of intermediates at the full
+    # `(B, S, F, D)` width -- the MLPs at four times it -- so collecting
+    # only once per layer lets four of them pile up. At 2,000 x 50, one
+    # forward peaks at 5.9 GB collecting per layer and 3.8 GB per
+    # sublayer (26.6 GB with level-0 passes only). Full collections only:
+    # below that size a level-0 pass here buys nothing the one after the
+    # layer does not, and costs a few milliseconds each time.
+    collect_between_layers(x, only_full = TRUE)
 
     # --- MLP ---
     x <- chunked_evaluate_axis(function(z) {
       l2(torch::nnf_gelu(l1(ln2(z))))
     }, x, spmf, axis = 2L)
+    collect_between_layers(x, only_full = TRUE)
 
     # --- attention across features (each row is its own sequence) ---
     x <- chunked_evaluate_axis(function(z) {
       zn <- ln3(z)$reshape(c(b * z$size(2), f, d))
       a2(zn, zn, zn)$reshape(c(b, z$size(2), f, d))
     }, x, spmf, axis = 2L)
+    collect_between_layers(x, only_full = TRUE)
 
     # --- MLP ---
     chunked_evaluate_axis(function(z) {
