@@ -187,10 +187,12 @@ tabicl_isab <- torch::nn_module(
       # the branch the uncached pass would have taken anyway.
       return(self$induced_attention(src, hidden = hidden))
     }
-    # Column slots reserved for the row stage's CLS tokens arrive filled
-    # with the -100 sentinel. The reference detects those and passes them
-    # through untouched rather than letting them enter attention; the row
-    # stage overwrites them a moment later anyway.
+    # In the reference, column slots reserved for the row stage's CLS
+    # tokens arrive filled with the -100 sentinel, and it detects those and
+    # passes them through untouched rather than letting them enter
+    # attention. This port does not build the slots (see
+    # `tabicl_col_embedding$group_cells()`), so here it would take a
+    # feature column that is uniformly -100.
     #
     # In the released (target-aware) configuration this never fires: the
     # target embedding is added to the training positions *before* the

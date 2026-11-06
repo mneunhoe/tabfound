@@ -49,8 +49,10 @@ tabicl_group_features <- function(x, group_size) {
 #' Linear projection that passes the sentinel through untouched
 #'
 #' Rows whose entire input equals `-100` keep that value on the output
-#' instead of being projected. The reserved CLS-token columns are filled
-#' with the sentinel, and this is what stops them being treated as data.
+#' instead of being projected. In the reference that is what keeps the
+#' reserved CLS-token columns, filled with the sentinel, from being
+#' treated as data; this port never builds those columns (see
+#' `group_cells()`), but a cell can still carry the sentinel.
 #' @keywords internal
 tabicl_skippable_linear <- torch::nn_module(
   "TabiclSkippableLinear",
@@ -93,7 +95,6 @@ tabicl_col_embedding <- torch::nn_module(
     self$feature_group <- !identical(config$col_feature_group, FALSE)
     self$target_aware <- isTRUE(config$col_target_aware)
     self$max_classes <- as.integer(config$max_classes %||% 0L)
-    self$reserve_cls_tokens <- as.integer(config$row_num_cls %||% 0L)
 
     in_dim <- if (self$feature_group) self$group_size else 1L
     self$in_linear <- tabicl_skippable_linear(in_dim, e)
@@ -119,8 +120,18 @@ tabicl_col_embedding <- torch::nn_module(
     }
   },
 
-  # Steps 1-3 of `forward()`: group the columns and reserve the CLS
-  # slots, stopping short of the projection.
+  # Steps 1-3 of `forward()`: group the columns, stopping short of the
+  # projection.
+  #
+  # The reference also prepends `row_num_cls` sentinel-filled columns here,
+  # the slots the row stage's CLS tokens later take. They are not built:
+  # columns are independent through this whole stage, since `(B, HC)` is
+  # folded into the attention batch, and the row stage overwrites the
+  # slots, so their column-stage outputs reach nothing. Carrying them cost
+  # a full set-transformer pass each -- target-awareness keeps them out of
+  # the sentinel skip -- which is 4 / (p + 4) of the stage. Leaving them
+  # out changes the batch the column-stage ops reduce over, so the answer
+  # moves by float32 rounding (about 2e-6 of scale), not more.
   #
   # This is where the pipeline can be cut. What comes out is
   # `(B, HC, T, group_size)` -- three floats per cell -- where the
@@ -133,13 +144,6 @@ tabicl_col_embedding <- torch::nn_module(
       tabicl_group_features(x, self$group_size)
     } else {
       x$unsqueeze(-1L)
-    }
-    if (self$reserve_cls_tokens > 0L) {
-      pad <- torch::torch_full(
-        c(xg$size(1), xg$size(2), self$reserve_cls_tokens, xg$size(4)),
-        -100.0, dtype = xg$dtype, device = xg$device
-      )
-      xg <- torch::torch_cat(list(pad, xg), dim = 3L)
     }
     xg$permute(c(1L, 3L, 2L, 4L))$contiguous()               # (B, HC, T, size)
   },
@@ -288,8 +292,8 @@ tabicl_col_embedding <- torch::nn_module(
 #' Row-wise interaction, read out through CLS tokens
 #'
 #' Each row is a sequence over its columns, with RoPE supplying column
-#' position. The reserved leading columns are overwritten with learned
-#' CLS tokens; all blocks but the last run as self-attention, and the
+#' position. Learned CLS tokens are prepended as leading columns; all
+#' blocks but the last run as self-attention, and the
 #' last attends *from* the CLS columns only, so the output is a fixed
 #' `num_cls * embed_dim` vector per row regardless of table width.
 #' @keywords internal
@@ -317,16 +321,16 @@ tabicl_row_interaction <- torch::nn_module(
     self$out_ln <- affine_layer_norm(e, eps = 1e-5, bias = !isTRUE(config$bias_free_ln))
   },
 
-  # @param embeddings `(B, T, HC, E)`.
+  # @param embeddings `(B, T, H, E)`, the feature columns only. The
+  #   reference overwrites `num_cls` reserved leading slots instead; the
+  #   result is the same sequence.
   forward = function(embeddings) {
     b <- embeddings$size(1); t <- embeddings$size(2)
-    hc <- embeddings$size(3); e <- embeddings$size(4)
+    e <- embeddings$size(4)
 
     cls <- self$cls_tokens$unsqueeze(1L)$unsqueeze(1L)$
       expand(c(b, t, self$num_cls, e))
-    x <- torch::torch_cat(
-      list(cls, embeddings[, , (self$num_cls + 1L):hc, ]), dim = 3L
-    )
+    x <- torch::torch_cat(list(cls, embeddings), dim = 3L)
 
     rp <- self$tf_row$rope
     n_blocks <- length(self$tf_row$blocks)
@@ -605,8 +609,15 @@ tabicl_model <- torch::nn_module(
          got {x$size(3)}."
       )
     }
-    reps <- self$stages_0_to_1(x, y_train = NULL,
-                               col_hidden = kv_cache$col_hidden,
+    # A cache saved before the CLS slots left the column stage carries a
+    # leading summary for each slot. Columns are independent there, so
+    # dropping them leaves exactly the feature columns' summaries.
+    hidden <- kv_cache$col_hidden
+    extra <- hidden[[1]]$size(2) - x$size(3)
+    if (extra > 0L) {
+      hidden <- lapply(hidden, function(h) h$narrow(2L, extra + 1L, x$size(3)))
+    }
+    reps <- self$stages_0_to_1(x, y_train = NULL, col_hidden = hidden,
                                row_chunk_size = row_chunk_size)
     dump_if_enabled("tabicl_reps", reps)
     out <- self$icl_predictor$forward_cached(reps, kv_cache$icl_kv,
