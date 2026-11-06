@@ -765,6 +765,9 @@
 #'   whole cells instead of feature groups (TabFM). Defaults to the
 #'   number of feature groups.
 #' @param kv_cache,n_estimators Whether caches are kept, and how many.
+#' @param decoder Optional `list(heads, head_dim, classes, block_rows)`
+#'   for a retrieval decoder that attends from test rows to training rows
+#'   after the in-context stack (the TabPFN v3/v3.5 classifiers).
 #' @keywords internal
 .icl_family_terms <- function(n_context, n_query, n_features, embed_dim,
                               group_size, n_cls, col_heads, row_heads,
@@ -772,7 +775,7 @@
                               cell_tokens = NULL, kv_cache = FALSE,
                               n_estimators = 1, masked_attention = FALSE,
                               row_chunk = Inf, group_channels = 0,
-                              col_chunk = Inf) {
+                              col_chunk = Inf, decoder = NULL) {
   fg  <- max(1, ceiling(n_features / max(1, group_size)))
   tok <- cell_tokens %||% fg
   hc  <- fg + n_cls
@@ -832,6 +835,23 @@
          # context by masking where TabICL and the TabPFN family slice.
          att = if (isTRUE(masked_attention)) icl_heads * n_context * n else 0)
   )
+
+  # The retrieval decoder runs once the in-context stack has let go, so it
+  # is a stage of its own. Unlike the others it is counted, not fitted: a
+  # block of test rows holds three `(H, rows, N)` score tensors at once
+  # -- the previous block's softmax, still referenced when the collection
+  # between blocks runs, and this block's scores and softmax -- beside the
+  # keys and the one-hot values, one copy each. Written before blocking, this
+  # term would have been three copies of `(H, M, N)`: 3.7 GB at 1,024 test
+  # rows against 50,000 training rows, and the guard did not see it.
+  if (!is.null(decoder)) {
+    rows <- min(n_query, decoder$block_rows %||% Inf)
+    stages <- c(stages, list(list(
+      name = "retrieval decoder", act = 0, res = 0, att = 0,
+      counted = decoder$heads * n_context *
+        (3 * rows + decoder$head_dim + decoder$classes)
+    )))
+  }
 
   # A cache is built once per ensemble member and every one of them stays
   # alive until `predict()` returns, so this term is the one place
@@ -945,10 +965,13 @@ DTYPE_BYTES <- 4
   # own, defaulting to the shared one where nothing has measured it.
   icl_copies <- co$icl_copies %||% co$act_copies
   icl_mult <- 1 + (icl_copies - 1) / spmf
+  # `counted` is a live set whose copies are already in the element count
+  # (the retrieval decoder's), so no fitted constant multiplies it.
   stage_bytes <- vapply(stages, function(s) {
     mult <- if (identical(s$copies %||% "", "icl")) icl_mult else act_mult
     DTYPE_BYTES * (mult * (s$act %||% 0) + att_mult * (s$att %||% 0) +
-                   res_mult * (s$res %||% 0) + pre_mult * (s$prepass %||% 0))
+                   res_mult * (s$res %||% 0) + pre_mult * (s$prepass %||% 0) +
+                   (s$counted %||% 0))
   }, numeric(1))
   names(stage_bytes) <- vapply(stages, function(s) s$name %||% "", character(1))
   n_est <- max(1, suppressWarnings(as.numeric(n_estimators)))

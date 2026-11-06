@@ -711,6 +711,7 @@ tabpfn3_many_class_decoder <- torch::nn_module(
     self$max_num_classes <- as.integer(max_num_classes)
     self$head_dim  <- as.integer(head_dim)
     self$num_heads <- as.integer(num_heads)
+    self$block_rows <- TABPFN3_DECODER_BLOCK_ROWS
     attention_size <- self$head_dim * self$num_heads
     self$q_projection <- torch::nn_linear(input_size, attention_size)
     self$k_projection <- torch::nn_linear(input_size, attention_size)
@@ -730,25 +731,106 @@ tabpfn3_many_class_decoder <- torch::nn_module(
     k <- self$k_projection(train_emb)$view(c(B, n_ctx, H, D))
     if (self$has_scaling) q <- self$softmax_scaling_layer(q, n_ctx)
 
-    # The reference splits the one-hot values into head-sized chunks so a
-    # flash-attention kernel can take them; that is a memory layout, not a
-    # different computation, so the scores are formed directly here.
-    qh <- q$permute(c(1L, 3L, 2L, 4L))                       # (B, H, M, D)
-    kh <- k$permute(c(1L, 3L, 2L, 4L))                       # (B, H, N, D)  
-    scores <- torch::torch_matmul(qh, kh$transpose(3L, 4L)) / sqrt(D)
-    w <- torch::nnf_softmax(scores, dim = -1L)               # (B, H, M, N)
-
+    # An imputed label is NaN when every label was. It matches no class
+    # either way; it only has to be kept out of the class count.
+    known <- torch::torch_where(torch::torch_isnan(targets),
+                                torch::torch_zeros_like(targets), targets)
+    n_cls <- .tabpfn3_present_classes(known, self$max_num_classes)
     classes <- torch::torch_arange(
-      0L, self$max_num_classes - 1L, dtype = targets$dtype, device = targets$device
-    )$view(c(1L, 1L, self$max_num_classes))
-    one_hot <- (targets$unsqueeze(-1L) == classes)$to(dtype = w$dtype)  # (B, N, T)
+      0L, n_cls - 1L, dtype = targets$dtype, device = targets$device
+    )$view(c(1L, 1L, n_cls))
+    one_hot <- (targets$unsqueeze(-1L) == classes)$to(dtype = q$dtype)  # (B, N, T)
 
-    probs <- torch::torch_matmul(
-      w, one_hot$unsqueeze(2L)$expand(c(B, H, n_ctx, self$max_num_classes))
-    )$mean(dim = 2L)                                         # (B, M, T)
-    torch::torch_log(torch::torch_clamp(probs, min = 1e-5) + 3e-5)
+    .tabpfn3_class_attention(
+      q$permute(c(1L, 3L, 2L, 4L)), k$permute(c(1L, 3L, 2L, 4L)),
+      one_hot, self$max_num_classes, self$block_rows
+    )
   }
 )
+
+# Test rows per block of the many-class decoder. A block forms
+# `(B, H, rows, N)` attention scores, so this is what bounds the decoder
+# by the training rows alone.
+TABPFN3_DECODER_BLOCK_ROWS <- 128L
+
+# Classes the decoder needs a value column for: up to the largest label
+# present, as the reference's `num_present_classes`. `known` is the
+# targets with NaN zeroed.
+# @keywords internal
+.tabpfn3_present_classes <- function(known, max_num_classes) {
+  hi <- if (known$numel() > 0L) as.numeric(known$max()$cpu()) else 0
+  as.integer(min(max_num_classes, max(1, floor(hi) + 1)))
+}
+
+#' Attention over one-hot training labels, a block of test rows at a time
+#'
+#' The half both many-class decoders share. Formed at once, the
+#' `(B, H, M, N)` scores, their scaled copy and their softmax are all alive
+#' together -- 3.7 GB at 1,024 test rows against 50,000 training rows. A
+#' test row's scores depend on no other test row, so a block of rows at a
+#' time is the same arithmetic, and the collection between blocks is what
+#' lets the previous block go; without it, blocking saves nothing.
+#'
+#' The reference splits the one-hot values into head-sized chunks so a
+#' flash-attention kernel can take them; that is a memory layout, not a
+#' different computation, so the scores are formed directly here.
+#'
+#' Only the classes present get a value column, as in the reference. An
+#' absent class would hold an all-zero column, and attention over zeros
+#' returns exactly the zero the padding writes: narrowing changes the cost
+#' and not the number. At the full 160 classes the label matmul costs
+#' 2.5x the scores'.
+#'
+#' @param qh `(B, H, M, D)` queries, already scaled; @param kh
+#'   `(B, H, N, D)` keys.
+#' @param one_hot `(B, N, T)` labels over the `T` classes present.
+#' @param n_out Class count to pad the output back to.
+#' @param block_rows Most test rows per block.
+#' @return `(B, M, n_out)` log-probabilities.
+#' @keywords internal
+.tabpfn3_class_attention <- function(qh, kh, one_hot, n_out,
+                                     block_rows = TABPFN3_DECODER_BLOCK_ROWS) {
+  B <- qh$size(1); H <- qh$size(2); M <- qh$size(3); D <- qh$size(4)
+  n_ctx <- kh$size(3); n_cls <- one_hot$size(3)
+  kt <- kh$transpose(3L, 4L)
+  # Materialised once: left broadcast, the matmul copies it out again for
+  # every block.
+  values <- one_hot$unsqueeze(2L)$expand(c(B, H, n_ctx, n_cls))$contiguous()
+  sizes <- .tabpfn3_block_sizes(M, block_rows)
+  starts <- cumsum(c(1L, sizes))
+  blocks <- vector("list", length(sizes))
+  for (i in seq_along(sizes)) {
+    # Scaled in place -- the same kernel as `/`, one copy fewer -- and not
+    # bound to a name, so the collection below can free it.
+    w <- torch::nnf_softmax(
+      torch::torch_matmul(qh$narrow(3L, starts[[i]], sizes[[i]]), kt)$div_(sqrt(D)),
+      dim = -1L
+    )                                                        # (B, H, rows, N)
+    blocks[[i]] <- torch::torch_matmul(w, values)            # (B, H, rows, T)
+    # Between blocks only: after the last one nothing larger is allocated,
+    # and a single block -- up to 128 test rows -- pays nothing.
+    if (i < length(sizes)) collect_between_layers(w)
+  }
+  probs <- if (length(blocks) == 1L) blocks[[1L]] else torch::torch_cat(blocks, dim = 3L)
+  # Padded back, and averaged over heads, before anything else: the mean
+  # takes a different path through its vector loop depending on the
+  # tensor's shape, so it is only bit for bit the one-shot mean when it
+  # sees the one-shot's `(B, H, M, n_out)` -- a few MB at most.
+  if (n_cls < n_out) probs <- torch::nnf_pad(probs, c(0L, n_out - n_cls))
+  probs <- probs$mean(dim = 2L)                              # (B, M, n_out)
+  torch::torch_log(torch::torch_clamp(probs, min = 1e-5) + 3e-5)
+}
+
+# `M` rows in `ceiling(M / block_rows)` blocks as even as they come, rather
+# than full blocks and a remainder. A one-row matmul takes a different
+# kernel from the rest -- on real widths it is the one block size that
+# does not reproduce the one-shot scores bit for bit -- and an even split
+# never leaves a block that small unless `M` itself is.
+# @keywords internal
+.tabpfn3_block_sizes <- function(M, block_rows) {
+  n <- ceiling(M / max(1L, as.integer(block_rows)))
+  as.integer(diff(round(seq(0, M, length.out = n + 1L))))
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1791,7 +1873,8 @@ tabpfn3_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     # The grouped input the row loop slices from: `feature_group_size`
     # values per column, doubled when the checkpoint carries NaN/Inf
     # indicators.
-    group_channels = g * (if (isTRUE(config$use_nan_indicators %||% TRUE)) 2 else 1)
+    group_channels = g * (if (isTRUE(config$use_nan_indicators %||% TRUE)) 2 else 1),
+    decoder = if (identical(config$head, "classifier")) .tabpfn3_decoder_terms(opts, config)
   )
 
   # v3's cached path keeps `icl_num_kv_heads_test` heads rather than all
@@ -1808,6 +1891,22 @@ tabpfn3_peak_terms <- function(n_context, n_query, n_features, opts, config) {
                                   n_context * d_icl)
   }
   terms
+}
+
+# The many-class decoder's shape, for `.icl_family_terms()`. Shared with
+# v3.5, whose decoder is the same. The class count is the one `fit()`
+# passes when it is known and the head's width when it is not -- the
+# one-hot is narrowed to the classes present, so that is the bound.
+# @keywords internal
+.tabpfn3_decoder_terms <- function(opts, config) {
+  max_cls <- as.numeric(config$max_num_classes %||% config$n_out %||% 10)
+  k <- suppressWarnings(as.numeric(opts$n_classes %||% NA))
+  list(
+    heads      = as.numeric(config$decoder_num_heads %||% 6),
+    head_dim   = as.numeric(config$decoder_head_dim %||% 64),
+    classes    = if (isTRUE(is.finite(k))) min(k, max_cls) else max_cls,
+    block_rows = TABPFN3_DECODER_BLOCK_ROWS
+  )
 }
 
 
