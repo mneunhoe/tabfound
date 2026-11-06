@@ -127,6 +127,13 @@
   on the small regressor at 1,000 context rows) and predictions are
   bit-identical. Kumo's memory-guard constants were re-measured to match,
   so its estimates are lower and it chunks or warns less often (#99).
+* `as_synds()` now passes the special values declared with
+  `tabfound_syn(cont_na = )` to synthpop as `cont.na`. Before, the `synds`
+  it built had `cont.na = NA` for every column, so `compare()`,
+  `utility.tab()` and `utility.gen()` -- including when called on a
+  `tabfound_syn` object directly -- binned a declared point mass such as
+  `income == -8` with the lowest real values instead of giving it its own
+  `miss.-8` category (#105).
 * Fixed TabICL and TabFM classifiers fitted on a factor with a level no
   training row has -- common in cross-validation folds, subsets, and any
   `tabfound()` fit, since hardhat keeps the outcome's levels. The class

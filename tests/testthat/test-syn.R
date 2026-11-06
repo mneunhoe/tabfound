@@ -551,6 +551,29 @@ test_that("as_synds produces a synds synthpop can work with", {
 })
 
 
+test_that("as_synds carries cont_na into synthpop's cont.na", {
+  skip_if_not_installed("synthpop")
+  set.seed(105)
+  n <- 150L
+  d <- data.frame(x = rnorm(n),
+                  inc = c(rep(-8, 40), round(rlnorm(110) * 100, 1)))
+  s <- tabfound_syn(d, m = 2L, models = stub_models(),
+                    cont_na = list(inc = -8), seed = 27L, verbose = FALSE)
+  sds <- as_synds(s)
+  expect_identical(sds$cont.na$inc, -8)
+  expect_true(is.na(sds$cont.na$x))
+
+  cmp <- synthpop::compare(s, d, vars = "inc", plot = FALSE,
+                           print.flag = FALSE)
+  expect_true("miss.-8" %in% colnames(cmp$tables$inc))
+
+  # Without cont_na the object keeps synthpop's all-NA default.
+  s0 <- tabfound_syn(d, m = 1L, models = stub_models(), seed = 28L,
+                     verbose = FALSE)
+  expect_true(all(is.na(unlist(as_synds(s0)$cont.na))))
+})
+
+
 test_that("synthpop's generics take a tabfound_syn object directly", {
   skip_if_not_installed("synthpop")
   set.seed(111)

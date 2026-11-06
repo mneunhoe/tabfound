@@ -43,7 +43,9 @@
 #' The skeleton comes from `synthpop::syn(data, m = 0)`, which builds the
 #' object without synthesising anything. What is filled in afterwards is
 #' the part that is ours: the syntheses, the visit sequence, the predictor
-#' matrix, `k`, and `proper`.
+#' matrix, `k`, and `proper`. Values declared with `cont_na` are passed to
+#' it as `cont.na`, so synthpop's comparisons treat them as the point
+#' masses they are.
 #'
 #' Methods are reported as `"tabfound"` (or `"sample"` for variables drawn
 #' from their marginal, and `""` for variables carried through
@@ -70,10 +72,15 @@ as_synds.tabfound_syn <- function(x, ...) {
   # m = 0 synthesises nothing: it returns the fully-formed object with an
   # empty `syn` slot, which is the part that is tedious and
   # version-sensitive to build by hand. synthpop reports on the data with
-  # `cat()` regardless of `print.flag`, hence the capture.
+  # `cat()` regardless of `print.flag`, hence the capture. Declared
+  # special values go in as `cont.na`, so synthpop stores and checks them
+  # in its own format and `compare()` / `utility.*()` give them their own
+  # category instead of binning them with the real values (#105).
+  cont_na <- Filter(length, lapply(x$cont_na %||% list(), as.vector))
   invisible(utils::capture.output(
     skel <- suppressWarnings(
-      synthpop::syn(x$data, m = 0L, print.flag = FALSE)
+      synthpop::syn(x$data, m = 0L, print.flag = FALSE,
+                    cont.na = if (length(cont_na)) cont_na)
     )
   ))
 
