@@ -679,10 +679,12 @@ test_that("Kumo's advice names a smaller size, then its own knobs", {
 test_that("suggest_chunk_sizes searches Kumo's chunks", {
   # Not "has no stage chunking": Kumo is on the list, and a run that does
   # not fit unchunked gets a chunk size that does.
-  plain <- peak(mem_config_kumo("small"), 6000, 1000, 50, available = 40e9)
+  # 20 GB rather than 40: since Kumo's layer loops collect (#99) the
+  # unchunked estimate at this size is about 27 GB.
+  plain <- peak(mem_config_kumo("small"), 6000, 1000, 50, available = 20e9)
   expect_false(plain$verdict %in% c("ok", "tight"))
   got <- suggest_chunk_sizes(mem_config_kumo("small"), n_context = 6000,
-                             n_features = 50, available = 40e9,
+                             n_features = 50, available = 20e9,
                              verdict = "tight")
   expect_null(got$note)
   expect_true(got$feasible)

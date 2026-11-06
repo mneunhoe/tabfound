@@ -172,6 +172,21 @@ guard produces: 47.9 GB for eight members at 6,000 × 90, which measures
 10.7 GB. One member there is 13.3 against 10.0. At the small end the
 estimate is the 4.0 GB floor, against 1.0–2.5 GB measured.
 
+**7. Kumo, re-measured 2026-11-06 (#99).** Kumo was the one backend
+whose layer loops never collected, and its first constants were fitted
+to that accumulation. With the collection in, every grid was measured
+again: the size grid's top point (6,400 × 90) fell from 29.3 to
+14.6 GB, the chunked grid's from 23.5 to 12.2 GB, and the column-chunk
+sweep at 5,000 × 120 from 32.9 to 17.3 GB (row chunking alone) and 28.2
+to 14.3 GB (plus `col_chunk_size = 8`). `act_copies` went 89 → 53,
+`res_copies` 32 → 14, `prepass_copies` 70 → 41, the floor 4.4 → 3.4 GB,
+and the safety factor 1.35 → 1.38. The member sweep at 3,200 × 32 now
+grows by only 1.09× over 32 members, but the one at 800 × 32 still adds
+a near-constant 1.6–3.0 GB of allocator growth to a 1.3 GB transient, so
+the shipped envelope (0.25 per doubling, capped at 2.25) is set by hand
+to the smallest line that covers both sweeps rather than fitted to
+either.
+
 ### Where the estimator and the field reports still disagree
 
 The hand-off records TabICL completing a 6,426 × 90 fold in 66 s at its
@@ -587,6 +602,7 @@ tables and 2.3–2.9× less memory on large ones:
 | `tabfm` | 500 × 20 | 17.4 GB | **12.9 GB** |
 | `mitra` | 1,000 × 50 | 17.4 GB | **12.8 GB** |
 | `tabpfn26` | 6,000 × 50 | 8.9 GB | **7.8 GB** |
+| `kumo` (small) | 6,400 × 90 | 29.3 GB | **14.6 GB** |
 
 It pays when the peak is accumulation and is a wash when the peak is
 genuinely live data — Mitra at 2,000 × 50, whose 36 GB really is resident

@@ -424,3 +424,48 @@ test_that("the chunk-length rule takes the smaller of size and factor", {
   expect_true(is.na(.kumo_chunk_len(10L)))
   expect_true(is.na(.kumo_chunk_len(0L, 4L)))
 })
+
+
+test_that("every Kumo layer loop collects between layers", {
+  # Kumo used to be the one backend whose layer loops never collected, so
+  # a forward's intermediates stayed alive until torch's own threshold
+  # fired mid-block (#99). Each loop is counted -- the row embedding's
+  # column/row blocks, the ICL stack's plain and GQA branches, the
+  # cache-building `record` loop and the cached loop -- so dropping any
+  # one of the calls fails.
+  calls <- 0L
+  local_mocked_bindings(collect_between_layers = function(x = NULL,
+                                                          only_full = FALSE) {
+    calls <<- calls + 1L
+    invisible(FALSE)
+  })
+  count <- function(net, i, ...) {
+    calls <<- 0L
+    torch::with_no_grad(net(i$x, i$y, i$mask, ...))
+    calls
+  }
+  i <- tiny_input(R = 30L, Rt = 20L, C = 5L)
+  for (kv in list(NULL, 2L)) {
+    net <- randomized(kumo_model(tiny_cfg(kv = kv)))
+    # Two row-embedding layers and two ICL layers.
+    expect_identical(count(net, i), 4L)
+    # The cache over the context (2 + 2 in `record`), then the ten query
+    # rows against it (2 + 2).
+    expect_identical(count(net, i, row_chunk_size = 10L), 8L)
+  }
+})
+
+test_that("collecting between Kumo's layers does not move the answer", {
+  i <- tiny_input(R = 30L, Rt = 20L, C = 5L)
+  off  <- list(tabfound.collect_between_layers = FALSE)
+  full <- list(tabfound.collect_between_layers = TRUE,
+               tabfound.collect_full_min_bytes = 0)
+  for (kv in list(NULL, 2L)) {
+    net <- randomized(kumo_model(tiny_cfg(kv = kv)))
+    run <- function(opts, ...) withr::with_options(opts,
+      as.array(torch::with_no_grad(net(i$x, i$y, i$mask, ...))))
+    expect_identical(run(full), run(off))
+    expect_identical(run(full, row_chunk_size = 10L),
+                     run(off, row_chunk_size = 10L))
+  }
+})

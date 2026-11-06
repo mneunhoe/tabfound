@@ -141,6 +141,9 @@ kumo_row_embedding <- torch::nn_module(
         rb(if (last) sq$narrow(nd, 1L, K) else sq, sq)
       }, seq, nd - 1L, rows, factor)
       dump_if_enabled(sprintf("kumo_row%d", i - 1L), seq)
+      # A column block and a row block leave their intermediates for R's
+      # collector; see [collect_between_layers()].
+      collect_between_layers(seq)
     }
     reps <- self$norm(seq)$flatten(start_dim = -2L)
     if (!isTRUE(record)) return(reps)
@@ -249,6 +252,7 @@ kumo_icl_block <- torch::nn_module(
       for (j in seq_len(L)) {
         x <- .kumo_split_apply(against(self$layers[[j]], icl_kv[[j]]), x, ax,
                                rows, factor)
+        collect_between_layers(x)
       }
       return(self$head(self$norm(x)))
     }
@@ -260,6 +264,7 @@ kumo_icl_block <- torch::nn_module(
         kv <- layer$attn$project_kv(layer$key_value_norm(x))
         out[[j]] <- cut(kv)
         if (j < L) x <- .kumo_split_apply(against(layer, kv), x, ax, rows, factor)
+        collect_between_layers(x)
       }
       return(out)
     }
@@ -277,6 +282,7 @@ kumo_icl_block <- torch::nn_module(
         # One call over every row, as the reference makes it: the same
         # call shapes are what keep the rounding the same.
         x <- layer(if (last) qry else x, ctx)
+        collect_between_layers(x)
         next
       }
       # Context rows attend with every head; query rows with the first
@@ -286,6 +292,7 @@ kumo_icl_block <- torch::nn_module(
       x <- if (last) xq else torch::torch_cat(
         list(.kumo_split_apply(against(layer, kv), ctx, ax, rows, factor), xq),
         dim = ax)
+      collect_between_layers(x)
     }
     self$head(self$norm(x))
   }
