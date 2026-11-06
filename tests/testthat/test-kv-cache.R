@@ -519,6 +519,25 @@ test_that("the TabFM predictor gives the same answer with the cache on", {
 })
 
 
+test_that("a row-chunked cache build gives the uncached answer", {
+  # `row_chunk_size` now reaches the cache build as well as the forward,
+  # with a chunk that splits the 30 training rows. A chunk that dropped
+  # the target embedding of the labelled rows it carries would still run.
+  X <- cache_test_matrix(); y <- factor(rep(c("a", "b", "c"), length.out = 30L))
+  X_new <- cache_test_matrix(n = 22L, seed = 47L)
+  for (make in list(
+    function(...) tabicl_classifier(fake_ctx(tiny_tabicl()), n_estimators = 2L, ...),
+    function(...) tabfm_classifier(fake_ctx(tiny_tabfm()), n_estimators = 2L, ...)
+  )) {
+    plain <- make()
+    cached <- make(kv_cache = TRUE, row_chunk_size = 8L)
+    a <- plain$predict(plain$fit(X, y), X_new, type = "prob")
+    b <- cached$predict(cached$fit(X, y), X_new, type = "prob")
+    expect_equal(a, b, tolerance = 1e-5)
+  }
+})
+
+
 test_that("a cached regressor prediction matches an uncached one", {
   X <- cache_test_matrix(); y <- as.numeric(X[, 1] * 2 + stats::rnorm(30L, sd = 0.1))
   X_new <- cache_test_matrix(n = 15L, seed = 45L)
