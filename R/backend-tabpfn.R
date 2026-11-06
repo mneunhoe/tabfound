@@ -703,13 +703,15 @@ tabpfn_regressor <- function(ctx,
     # makes a draw agree with the quantiles reported beside it. (This
     # used to warn and quietly use one unensembled forward pass.)
     if (!is.null(ensemble_configs)) {
+      # Drawn on the z-scale borders and rescaled in double, like the mean
+      # and the quantiles: see `apply_ensemble_predict_regressor()`.
       probs <- .common(state, newdata, quantiles = 0.5)$avg_probs
-      raw_borders <- borders * state$y_std + state$y_mean
       pseudo <- torch::torch_log(torch::torch_tensor(
         probs, dtype = torch::torch_float(), device = dev))
-      return(as.matrix(bar_logits_to_samples(pseudo, raw_borders,
+      return(as.matrix(bar_logits_to_samples(pseudo, borders,
                                              n_samples = as.integer(n_samples),
-                                             seed = seed)$cpu()))
+                                             seed = seed)$cpu()) *
+               state$y_std + state$y_mean)
     }
     x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
     y_z  <- (state$y_train - state$y_mean) / state$y_std
