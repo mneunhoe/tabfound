@@ -120,6 +120,30 @@ test_that("the transient peak is the largest stage, not the sum of them", {
   expect_gt(chunked$stage_bytes[["column summaries"]], 0)
 })
 
+test_that("the TabPFN v3 retrieval decoder is a counted stage of its own", {
+  e <- peak(mem_config_tabpfn3(), 50000, 1024, 20, n_estimators = 1,
+            n_classes = 10)
+  dec <- e$stage_bytes[["retrieval decoder"]]
+  # Three `(H, 128, N)` score tensors, the keys and a one-hot ten wide, at
+  # four bytes and no fitted multiple: the copies are in the count.
+  expect_equal(unname(dec), 4 * 6 * 50000 * (3 * 128 + 64 + 10))
+  # Bounded by the block of test rows, not by how many there are.
+  more <- peak(mem_config_tabpfn3(), 50000, 4096, 20, n_estimators = 1,
+               n_classes = 10)
+  expect_equal(more$stage_bytes[["retrieval decoder"]], dec)
+  # The one-hot is narrowed to the classes present, so more classes cost
+  # more, up to the head's width.
+  wide <- peak(utils::modifyList(mem_config_tabpfn3(), list(max_num_classes = 160)),
+               50000, 1024, 20, n_estimators = 1, n_classes = 500)
+  expect_equal(unname(wide$stage_bytes[["retrieval decoder"]]),
+               4 * 6 * 50000 * (3 * 128 + 64 + 160))
+
+  # A regressor has no decoder to count.
+  reg <- utils::modifyList(mem_config_tabpfn3(), list(head = "regressor"))
+  expect_false("retrieval decoder" %in%
+                 names(peak(reg, 50000, 1024, 20, task = "regression")$stage_bytes))
+})
+
 test_that("weights come exactly from the config's recorded shapes", {
   cfg <- mem_config_tabpfn25()
   e <- peak(cfg)

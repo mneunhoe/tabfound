@@ -325,7 +325,11 @@ test_that("peak_terms() still produces the shapes the constants assume", {
       )
       tm <- tabfound:::.peak_terms_for(get_backend(backend), p$n_context,
                                        p$n_query, p$n_features, opts, config)
-      act <- vapply(tm$stages, function(s) s$act, numeric(1))
+      # A `counted` stage is not part of what was fitted -- its copies are
+      # in its element count, with no constant to go stale -- so the
+      # measurement files do not record one.
+      fitted <- Filter(function(s) is.null(s$counted), tm$stages)
+      act <- vapply(fitted, function(s) s$act, numeric(1))
       expect_equal(unname(act), unname(p$act),
                    info = sprintf("%s ctx=%d p=%d", backend, p$n_context,
                                   p$n_features))

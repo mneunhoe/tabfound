@@ -433,6 +433,69 @@ test_that("test rows cannot see each other", {
 })
 
 
+test_that("the blocked, narrowed decoder reproduces the one-shot one", {
+  # The decoder as it was: every test row's scores formed at once, and a
+  # value column for every class the head could carry. Kept here as the
+  # reference the blocked decoder has to reproduce.
+  one_shot <- function(dec, train_emb, test_emb, targets) {
+    B <- test_emb$size(1); M <- test_emb$size(2); N <- train_emb$size(2)
+    D <- dec$head_dim; H <- dec$num_heads; Tm <- dec$max_num_classes
+    q <- dec$q_projection(test_emb)$view(c(B, M, H, D))
+    k <- dec$k_projection(train_emb)$view(c(B, N, H, D))
+    q <- dec$softmax_scaling_layer(q, N)
+    qh <- q$permute(c(1L, 3L, 2L, 4L)); kh <- k$permute(c(1L, 3L, 2L, 4L))
+    w <- torch::nnf_softmax(torch::torch_matmul(qh, kh$transpose(3L, 4L)) / sqrt(D),
+                            dim = -1L)
+    classes <- torch::torch_arange(0L, Tm - 1L, dtype = targets$dtype)$
+      view(c(1L, 1L, Tm))
+    one_hot <- (targets$unsqueeze(-1L) == classes)$to(dtype = w$dtype)
+    probs <- torch::torch_matmul(
+      w, one_hot$unsqueeze(2L)$expand(c(B, H, N, Tm)))$mean(dim = 2L)
+    torch::torch_log(torch::torch_clamp(probs, min = 1e-5) + 3e-5)
+  }
+  dec <- tiny_net("classifier")$many_class_decoder
+  expect_identical(dec$block_rows, 128L)
+  torch::torch_manual_seed(9)
+  train_emb <- torch::torch_randn(c(1L, 40L, 32L))
+  test_emb  <- torch::torch_randn(c(1L, 12L, 32L))
+
+  # Every class present, so nothing is narrowed: blocking alone.
+  y_all <- torch::torch_tensor(matrix(rep(0:5, length.out = 40L), 1L))$
+    to(dtype = torch::torch_float())
+  want <- torch::with_no_grad(one_shot(dec, train_emb, test_emb, y_all))
+  for (rows in c(128L, 4L, 5L)) {
+    dec$block_rows <- rows
+    got <- torch::with_no_grad(dec(train_emb, test_emb, y_all))
+    expect_true(torch::torch_equal(got, want), info = paste("block", rows))
+  }
+
+  # Three classes of the head's six. The absent ones are the padding's
+  # exact floor; the present ones are bit-identical at real widths
+  # (measured at 20,000 training rows, 10 of 160 classes), but a GEMM this
+  # small picks its kernel by output width, so here they are held to
+  # rounding.
+  y <- torch::torch_randint(0L, 3L, c(1L, 40L))$to(dtype = torch::torch_float())
+  want <- torch::with_no_grad(one_shot(dec, train_emb, test_emb, y))
+  got <- torch::with_no_grad(dec(train_emb, test_emb, y))
+  expect_true(torch::torch_equal(got[, , 4:6], want[, , 4:6]))
+  expect_equal(as.array(got), as.array(want), tolerance = 1e-6)
+})
+
+
+test_that("decoder blocks split evenly, so none is a lone row", {
+  # A one-row matmul takes its own kernel and does not reproduce the
+  # one-shot scores; an even split only produces one when M is 1.
+  for (M in c(1L, 127L, 128L, 129L, 1025L, 5000L)) {
+    s <- .tabpfn3_block_sizes(M, 128L)
+    expect_identical(sum(s), M)
+    expect_identical(length(s), as.integer(ceiling(M / 128)))
+    expect_lte(max(s), 128L)
+    expect_lte(max(s) - min(s), 1L)
+  }
+  expect_identical(.tabpfn3_block_sizes(129L, 128L), c(64L, 65L))
+})
+
+
 test_that("the KV cache reproduces the forward it was built from", {
   net <- tiny_net("classifier")
   set.seed(7)

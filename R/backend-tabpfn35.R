@@ -1063,6 +1063,7 @@ tabpfn35_many_class_decoder <- torch::nn_module(
     self$max_num_classes <- as.integer(max_num_classes)
     self$head_dim  <- as.integer(head_dim)
     self$num_heads <- as.integer(num_heads)
+    self$block_rows <- TABPFN3_DECODER_BLOCK_ROWS
     attention_size <- self$head_dim * self$num_heads
     self$q_projection <- torch::nn_linear(input_size, attention_size)
     self$k_projection <- torch::nn_linear(input_size, attention_size)
@@ -1084,32 +1085,22 @@ tabpfn35_many_class_decoder <- torch::nn_module(
     k <- self$k_projection(train_emb)$view(c(B, n_ctx, H, D))
     if (self$has_scaling) q <- self$softmax_scaling_layer(q, n_ctx)
 
-    # The reference splits the one-hot values into head-sized chunks so a
-    # flash-attention kernel can take them; that is a memory layout, not a
-    # different computation, so the scores are formed directly here.
-    qh <- q$permute(c(1L, 3L, 2L, 4L))                       # (B, H, M, D)
-    kh <- k$permute(c(1L, 3L, 2L, 4L))                       # (B, H, N, D)
-    scores <- torch::torch_matmul(qh, kh$transpose(3L, 4L)) / sqrt(D)
-    w <- torch::nnf_softmax(scores, dim = -1L)               # (B, H, M, N)
-
-    # The reference narrows the one-hot to the classes actually present and
-    # pads the rest back with zeros. That is the same number: an absent
-    # class holds an all-zero value column, and attention over zeros
-    # returns exactly the zero the padding would have written. The full
-    # width is used here because it needs no label scan.
+    # Narrowed to the classes present, as the reference does; see
+    # `.tabpfn3_class_attention()`, which the two generations share.
     is_finite <- torch::torch_isfinite(targets)
     safe <- torch::torch_where(is_finite, targets,
                                torch::torch_zeros_like(targets))
+    n_cls <- .tabpfn3_present_classes(safe, self$max_num_classes)
     classes <- torch::torch_arange(
-      0L, self$max_num_classes - 1L, dtype = safe$dtype, device = safe$device
-    )$view(c(1L, 1L, self$max_num_classes))
+      0L, n_cls - 1L, dtype = safe$dtype, device = safe$device
+    )$view(c(1L, 1L, n_cls))
     one_hot <- (safe$unsqueeze(-1L) == classes)$
-      logical_and(is_finite$unsqueeze(-1L))$to(dtype = w$dtype)  # (B, N, T)
+      logical_and(is_finite$unsqueeze(-1L))$to(dtype = q$dtype)  # (B, N, T)
 
-    probs <- torch::torch_matmul(
-      w, one_hot$unsqueeze(2L)$expand(c(B, H, n_ctx, self$max_num_classes))
-    )$mean(dim = 2L)                                         # (B, M, T)
-    torch::torch_log(torch::torch_clamp(probs, min = 1e-5) + 3e-5)
+    .tabpfn3_class_attention(
+      q$permute(c(1L, 3L, 2L, 4L)), k$permute(c(1L, 3L, 2L, 4L)),
+      one_hot, self$max_num_classes, self$block_rows
+    )
   }
 )
 
@@ -2126,7 +2117,12 @@ tabpfn35_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     col_chunk    = .stage_col_chunk(opts, config),
     # The grouped input the row loop slices from. Three channels per group
     # position in v3.5 -- value, indicator, ECDF rank -- where v3 had two.
-    group_channels = g * 3
+    group_channels = g * 3,
+    # One checkpoint serves both tasks and nothing here says which, so the
+    # classifier's decoder is always counted. At the fitted constants it
+    # is about a thirtieth of the in-context stage at any shape, and only
+    # the largest stage counts, so a regression estimate does not move.
+    decoder = .tabpfn3_decoder_terms(opts, config)
   )
 
   # Edges per column, capped by the bucket count: this is what stops the
