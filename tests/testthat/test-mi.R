@@ -60,6 +60,16 @@ test_that("a seed makes the whole imputation reproducible", {
 })
 
 
+test_that("a seeded imputation leaves the caller's random stream alone", {
+  d <- mi_test_df()
+  set.seed(1)
+  before <- .Random.seed
+  invisible(tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                   seed = 42L, verbose = FALSE))
+  expect_identical(.Random.seed, before)
+})
+
+
 test_that("imputations differ between data sets", {
   d <- mi_test_df()
   imp <- tabfound_impute(d, m = 4L, models = stub_models(), maxit = 2L,

@@ -274,6 +274,36 @@ test_that("Mitra's sign mirrors are reproducible under a seed", {
   expect_false(identical(a$mirror, d$mirror))
 })
 
+test_that("a Mitra fit leaves the caller's random stream alone", {
+  X <- matrix(as.numeric(1:40), ncol = 4L)
+  y <- factor(rep(c("a", "b"), 5))
+  # The real backend's fit, on a tiny network, behind the public `fit()`.
+  m <- mem_stub_model("mitra", mem_config_mitra())
+  m$spec <- mitra_classifier(fake_ctx(tiny_mitra(n_layers = 2L)),
+                             n_estimators = 2L)
+
+  # Before the fix every fit ran `set.seed(42)` on the caller's stream, so
+  # the draw after it was the same whatever the caller had seeded.
+  after <- vapply(1:2, function(s) {
+    set.seed(s)
+    before <- .Random.seed
+    fitted <- fit(m, X, y)
+    expect_identical(.Random.seed, before)
+    expect_identical(fitted$state$preps[[1]]$mirror,
+                     mitra_preprocessor_fit(X, as.integer(y) - 1L,
+                                            seed = 42L)$mirror)
+    stats::runif(1)
+  }, numeric(1))
+  expect_false(after[[1]] == after[[2]])
+
+  # No `.Random.seed` before the call, none after it.
+  withr::with_preserve_seed({
+    rm(".Random.seed", envir = globalenv())
+    mitra_preprocessor_fit(X, as.integer(y) - 1L, seed = 42L)
+    expect_false(exists(".Random.seed", envir = globalenv(), inherits = FALSE))
+  })
+})
+
 
 test_that("the quantile distribution matches TabICL's", {
   r <- ensemble_ref()

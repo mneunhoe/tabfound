@@ -70,6 +70,16 @@ test_that("a seed makes the whole synthesis reproducible", {
 })
 
 
+test_that("a seeded synthesis leaves the caller's random stream alone", {
+  d <- syn_test_df()
+  set.seed(1)
+  before <- .Random.seed
+  invisible(tabfound_syn(d, m = 1L, models = stub_models(), seed = 42L,
+                verbose = FALSE))
+  expect_identical(.Random.seed, before)
+})
+
+
 test_that("the syntheses differ from each other and from the real data", {
   d <- syn_test_df(n = 80L)
   s <- tabfound_syn(d, m = 4L, models = stub_models(), seed = 2L,

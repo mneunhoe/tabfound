@@ -586,7 +586,8 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #'   completed data -- the place to squeeze a draw into a plausible range
 #'   or enforce a constraint. mice's `post` is a string evaluated inside
 #'   its sampler; a function is the same idea without the reach-in.
-#' @param seed Optional integer seed.
+#' @param seed Optional integer seed. The run is seeded locally, so the
+#'   caller's random number stream is left as it was.
 #' @param verbose Show a progress bar.
 #' @param ... Passed to [tabfound_models()] when `models` is `NULL`.
 #' @return An object of class `tabfound_mi`:
@@ -626,7 +627,7 @@ tabfound_impute <- function(data, m = 5L, models = NULL, maxit = 5L,
   draw   <- match.arg(draw)
   proper <- .mi_resolve_proper(proper)
   proper_frac <- .mi_resolve_proper_frac(proper_frac)
-  if (!is.null(seed)) set.seed(seed)
+  if (!is.null(seed)) .local_seed(seed)
 
   if (is.matrix(data)) data <- as.data.frame(data, stringsAsFactors = FALSE)
   if (!is.data.frame(data)) {
