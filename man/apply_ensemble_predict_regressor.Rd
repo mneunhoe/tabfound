@@ -23,7 +23,8 @@ apply_ensemble_predict_regressor(
   col_chunk_size = NA_integer_,
   pipelines = NULL,
   member_weights = NULL,
-  return_members = FALSE
+  return_members = FALSE,
+  want_logits = FALSE
 )
 }
 \arguments{
@@ -49,6 +50,12 @@ to it.}
 
 \item{return_members}{Also return each member's translated bucket
 probabilities, as \verb{$members} (a list of \verb{(n_test, n_bins)} matrices).}
+
+\item{want_logits}{Also return the averaged distribution's
+pseudo-logits, the log of the averaged bucket probabilities, as
+\verb{$pseudo_logits}: a \verb{(n_test, n_bins)} tensor on the z-scale borders,
+on \code{device}. Only sampling reads them, and at 5,000 buckets a row they
+outweigh the mean many times over, so they are not kept otherwise.}
 }
 \value{
 List with \code{mean}, \code{quantiles}, etc. on the RAW y scale.

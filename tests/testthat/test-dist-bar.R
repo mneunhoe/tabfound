@@ -68,6 +68,22 @@ test_that("sampling is reproducible under a seed and spans the support", {
 })
 
 
+test_that("drawing a chunk at a time draws what one call over every row does", {
+  set.seed(12)
+  borders <- torch::torch_tensor(seq(-4, 4, length.out = 31),
+                                 dtype = torch::torch_float())
+  logits <- torch::torch_tensor(matrix(rnorm(23 * 30), nrow = 23),
+                                dtype = torch::torch_float())
+  whole <- as.matrix(bar_logits_to_samples(logits, borders, 40L, seed = 5L)$cpu())
+  for (size in c(1L, 7L, 23L, 100L)) {
+    got <- .bar_samples_over_chunks(
+      23L, size, function(s, e) logits[s:e, , drop = FALSE], borders,
+      n_samples = 40L, seed = 5L)
+    expect_identical(got, whole, label = paste("chunk size", size))
+  }
+})
+
+
 test_that("border translation preserves total mass and endpoint conventions", {
   frm <- torch::torch_tensor(seq(0, 10, length.out = 11),
                              dtype = torch::torch_float())

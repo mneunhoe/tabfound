@@ -177,14 +177,56 @@ bar_logits_to_samples <- function(logits, borders, n_samples, seed = NULL) {
   sample_shape <- c(dims[-length(dims)], as.integer(n_samples))
   u <- torch::torch_rand(sample_shape,
                           dtype = logits$dtype, device = logits$device)
-  # For each sample k, compute icdf(logits, u[..., k]) and stack.
-  outs <- lapply(seq_len(n_samples), function(k) {
-    bar_logits_to_quantile_single(
-      logits, borders,
-      u$select(dim = -1L, index = as.integer(k))
-    )
+  .bar_icdf(logits, borders, u)
+}
+
+
+# The inverse CDF at K levels per row: `needle` is `(..., K)`, row i's
+# levels, and the result has the same shape. Level k is
+# `bar_logits_to_quantile_single()` at `needle[..., k]`, stacked.
+# @keywords internal
+.bar_icdf <- function(logits, borders, needle) {
+  dims <- as.integer(needle$size())
+  outs <- lapply(seq_len(dims[length(dims)]), function(k) {
+    bar_logits_to_quantile_single(logits, borders,
+                                  needle$select(dim = -1L, index = k))
   })
   torch::torch_stack(outs, dim = -1L)
+}
+
+
+# Draws for `n` rows whose logits arrive a chunk at a time: `logits_of(s, e)`
+# returns rows `s:e` as `(e - s + 1, n_bins)`. Returns the `(n, n_samples)`
+# R matrix of draws on the borders' scale.
+#
+# The uniforms are drawn once, for all `n` rows, right after seeding, and
+# each chunk decodes its own rows of them. That is the stream one
+# `bar_logits_to_samples()` call over every row draws, so a seeded result
+# does not depend on the chunk size. Drawing per chunk would not be: on
+# `mps` two consecutive `torch_rand()` calls are not one call split in two.
+# The uniforms are `n * n_samples` floats; the logits they replace holding
+# are `n * n_bins`.
+# @keywords internal
+.bar_samples_over_chunks <- function(n, chunk_size, logits_of, borders,
+                                     n_samples, seed = NULL) {
+  chunk_size <- as.integer(chunk_size)
+  starts <- seq(1L, n, by = chunk_size)
+  u <- NULL
+  draws <- lapply(seq_along(starts), function(k) {
+    if (k > 1L) collect_between_chunks()
+    s <- starts[[k]]
+    e <- min(s + chunk_size - 1L, n)
+    logits <- logits_of(s, e)
+    if (is.null(u)) {
+      # Drawn once the first chunk says which dtype and device. Seeding
+      # right before means no forward pass, here or later, moves the stream.
+      if (!is.null(seed)) torch::torch_manual_seed(as.integer(seed))
+      u <<- torch::torch_rand(c(n, as.integer(n_samples)),
+                              dtype = logits$dtype, device = logits$device)
+    }
+    as.matrix(.bar_icdf(logits, borders, u[s:e, , drop = FALSE])$cpu())
+  })
+  do.call(rbind, draws)
 }
 
 # ---------------------------------------------------------------------------

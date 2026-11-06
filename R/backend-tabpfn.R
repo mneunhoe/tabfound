@@ -624,7 +624,8 @@ tabpfn_regressor <- function(ctx,
   }
 
   .ensemble_chunk <- function(state, X_test_chunk, quantiles, cache,
-                              pipelines, return_members = FALSE) {
+                              pipelines, return_members = FALSE,
+                              want_logits = FALSE) {
     apply_ensemble_predict_regressor(
       net, col_emb, state$X_train, X_test_chunk, state$y_train,
       configs = ensemble_configs, borders = borders,
@@ -634,7 +635,7 @@ tabpfn_regressor <- function(ctx,
       kv_caches = cache, save_peak_memory_factor = save_peak_memory_factor,
       row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
       pipelines = pipelines, member_weights = member_weights,
-      return_members = return_members
+      return_members = return_members, want_logits = want_logits
     )
   }
 
@@ -700,8 +701,7 @@ tabpfn_regressor <- function(ctx,
       chunk_fn(state, X_te[s:e, , drop = FALSE], quantiles, caches, pipelines)
     })
     list(mean      = unlist(lapply(chunks, `[[`, "mean")),
-         quantiles = do.call(rbind, lapply(chunks, `[[`, "quantiles")),
-         avg_probs = do.call(rbind, lapply(chunks, `[[`, "avg_probs")))
+         quantiles = do.call(rbind, lapply(chunks, `[[`, "quantiles")))
   }
 
   predict_fn <- function(state, newdata, type = "mean",
@@ -727,14 +727,21 @@ tabpfn_regressor <- function(ctx,
     # used to warn and quietly use one unensembled forward pass.)
     if (!is.null(ensemble_configs)) {
       # Drawn on the z-scale borders and rescaled in double, like the mean
-      # and the quantiles: see `apply_ensemble_predict_regressor()`.
-      probs <- .common(state, newdata, quantiles = 0.5)$avg_probs
-      pseudo <- torch::torch_log(torch::torch_tensor(
-        probs, dtype = torch::torch_float(), device = dev))
-      return(as.matrix(bar_logits_to_samples(pseudo, borders,
-                                             n_samples = as.integer(n_samples),
-                                             seed = seed)$cpu()) *
-               state$y_std + state$y_mean)
+      # and the quantiles: see `apply_ensemble_predict_regressor()`. Each
+      # chunk's pseudo-logits are decoded and dropped before the next is
+      # built; collecting all of them first held an `n_test x n_bins`
+      # matrix, twice over for the `rbind`, that only this branch reads.
+      X_te <- as.matrix(newdata)
+      pipelines <- .build_pipelines(state)
+      caches <- .build_caches(state, pipelines)
+      return(.bar_samples_over_chunks(
+        nrow(X_te), predict_chunk_size,
+        function(s, e) {
+          .ensemble_chunk(state, X_te[s:e, , drop = FALSE], quantiles = 0.5,
+                          caches, pipelines, want_logits = TRUE)$pseudo_logits
+        },
+        borders, n_samples = n_samples, seed = seed) *
+          state$y_std + state$y_mean)
     }
     x_tr <- as_float_tensor(state$X_train, device = dev)$unsqueeze(1L)
     y_z  <- (state$y_train - state$y_mean) / state$y_std
