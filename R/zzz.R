@@ -7,5 +7,6 @@
   register_tabicl_backend()
   register_mitra_backend()
   register_kumo_backend()
+  .mark_builtin_backends()
   invisible()
 }

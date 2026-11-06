@@ -45,6 +45,53 @@ test_that("a third-party backend can be registered and detected", {
 })
 
 
+test_that("register_backend() checks what it is given", {
+  on.exit(if (exists("dummy", envir = .tabfound_backends, inherits = FALSE)) {
+    rm("dummy", envir = .tabfound_backends)
+  }, add = TRUE)
+  nul <- function(config, task) NULL
+  for (bad in list(NA_character_, "", c("a", "b"), 1)) {
+    expect_error(register_backend(bad, build = nul), "single non-empty string")
+  }
+  expect_error(register_backend("dummy", build = 42), "Not a function: `build`")
+  expect_error(register_backend("dummy", build = nul, detect = TRUE),
+               "Not a function: `detect`")
+  expect_error(register_backend("dummy", build = nul, classifier = "x"),
+               "`classifier`")
+  expect_error(register_backend("dummy", build = nul, aliases = "org/model"),
+               "named character vector")
+  expect_error(register_backend("dummy", build = nul,
+                                aliases = c(a = "org/a", "org/b")),
+               "named character vector")
+  expect_error(register_backend("dummy", build = nul, description = NA),
+               "single string")
+  # None of those got as far as the registry.
+  expect_false("dummy" %in% list_backends()$name)
+  expect_false(NA_character_ %in% list_backends()$name)
+})
+
+
+test_that("a built-in backend is replaced only on request", {
+  orig <- get_backend("tabicl")
+  on.exit(assign("tabicl", orig, envir = .tabfound_backends), add = TRUE)
+  nul <- function(config, task) NULL
+  expect_error(register_backend("tabicl", build = nul), "tabfound's own")
+  expect_identical(get_backend("tabicl"), orig)
+  register_backend("tabicl", build = nul, overwrite = TRUE)
+  expect_identical(get_backend("tabicl")$build, nul)
+})
+
+
+test_that("one plug-in's failing detect() does not break detection", {
+  on.exit(rm("broken", envir = .tabfound_backends), add = TRUE)
+  register_backend("broken", build = function(config, task) NULL,
+                   detect = function(config) stop("boom"))
+  cfg <- list(arch = "per_feature_transformer", head = "classifier")
+  expect_warning(bk <- detect_backend(cfg), "boom")
+  expect_identical(bk$name, "tabpfn")
+})
+
+
 test_that("checkpoint keys map onto R module paths", {
   # nn_module_list inserts a `steps` component that nn.Sequential lacks.
   expect_identical(tabpfn_translate_key("encoder.5.layer.weight"),

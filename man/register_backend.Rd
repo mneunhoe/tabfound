@@ -20,7 +20,8 @@ register_backend(
   kv_cache_capable = FALSE,
   handles_missing = FALSE,
   imputes_internally = FALSE,
-  parity = NA_character_
+  parity = NA_character_,
+  overwrite = FALSE
 )
 }
 \arguments{
@@ -94,6 +95,11 @@ whole question -- see \code{\link[=tabfound_impute]{tabfound_impute()}}.}
 
 \item{parity}{Optional character. Reference Python package + version
 this backend has been checked against.}
+
+\item{overwrite}{Logical. Replacing one of the package's own backends
+(see \code{\link[=list_backends]{list_backends()}}) is refused unless this is \code{TRUE}, so a
+plug-in cannot shadow one by accident. Registering a name that is not
+built in again simply replaces it.}
 }
 \value{
 Invisibly, the backend spec.

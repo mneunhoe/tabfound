@@ -65,6 +65,10 @@
 #'   whole question -- see [tabfound_impute()].
 #' @param parity Optional character. Reference Python package + version
 #'   this backend has been checked against.
+#' @param overwrite Logical. Replacing one of the package's own backends
+#'   (see [list_backends()]) is refused unless this is `TRUE`, so a
+#'   plug-in cannot shadow one by accident. Registering a name that is not
+#'   built in again simply replaces it.
 #' @return Invisibly, the backend spec.
 #' @export
 register_backend <- function(name,
@@ -82,7 +86,19 @@ register_backend <- function(name,
                              kv_cache_capable = FALSE,
                              handles_missing = FALSE,
                              imputes_internally = FALSE,
-                             parity = NA_character_) {
+                             parity = NA_character_,
+                             overwrite = FALSE) {
+  .check_backend_name(name, overwrite)
+  .check_backend_hooks(list(build = build, translate_key = translate_key,
+                            detect = detect, task_of = task_of,
+                            subfolder_for = subfolder_for),
+                       list(classifier = classifier, regressor = regressor,
+                            describe = describe, peak_terms = peak_terms))
+  .check_backend_aliases(aliases)
+  if (!is.character(description) || length(description) != 1L ||
+      is.na(description)) {
+    cli::cli_abort("{.arg description} must be a single string.")
+  }
   spec <- list(
     name = name, build = build, translate_key = translate_key,
     detect = detect, task_of = task_of, subfolder_for = subfolder_for,
@@ -96,6 +112,66 @@ register_backend <- function(name,
   class(spec) <- "tabfound_backend"
   assign(name, spec, envir = .tabfound_backends)
   invisible(spec)
+}
+
+# The package's own backends, recorded once `.onLoad()` has registered
+# them. A plug-in that reused one of these names would silently replace
+# it for every model of that family.
+.builtin_backends <- new.env(parent = emptyenv())
+
+# @keywords internal
+.mark_builtin_backends <- function() {
+  .builtin_backends$names <- ls(.tabfound_backends)
+  invisible()
+}
+
+# @keywords internal
+.check_backend_name <- function(name, overwrite) {
+  if (!is.character(name) || length(name) != 1L || is.na(name) ||
+      !nzchar(name)) {
+    cli::cli_abort("{.arg name} must be a single non-empty string.")
+  }
+  if (name %in% .builtin_backends$names && !isTRUE(overwrite)) {
+    cli::cli_abort(c(
+      "{.val {name}} is one of tabfound's own backends.",
+      i = "Pick another name, or pass {.code overwrite = TRUE} to replace it."
+    ))
+  }
+  invisible(TRUE)
+}
+
+# The hooks are called on every config the package reads, so one that is
+# not a function fails far from the registration that caused it -- and,
+# for `detect`, breaks detection for every other backend too.
+# @keywords internal
+.check_backend_hooks <- function(required, optional) {
+  bad <- c(names(required)[!vapply(required, is.function, logical(1))],
+           names(optional)[!vapply(optional, function(f) {
+             is.null(f) || is.function(f)
+           }, logical(1))])
+  if (length(bad)) {
+    cli::cli_abort(c(
+      "Backend hooks must be functions.",
+      x = "Not a function: {.arg {bad}}."
+    ))
+  }
+  invisible(TRUE)
+}
+
+# Alias lookup goes by name, so an unnamed entry could never be found.
+# @keywords internal
+.check_backend_aliases <- function(aliases) {
+  if (!length(aliases)) return(invisible(TRUE))
+  nms <- names(aliases)
+  if (!is.character(aliases) || anyNA(aliases) || is.null(nms) ||
+      anyNA(nms) || !all(nzchar(nms))) {
+    cli::cli_abort(c(
+      "{.arg aliases} must be a named character vector.",
+      i = "Each name is a model shorthand, each value the path or Hub id \\
+           it stands for, e.g. {.code c(\"my-model\" = \"org/my-model\")}."
+    ))
+  }
+  invisible(TRUE)
 }
 
 #' List registered backends
@@ -170,7 +246,18 @@ expand_model_alias <- function(model) {
 #' @keywords internal
 detect_backend <- function(config) {
   nms <- ls(.tabfound_backends)
-  hits <- Filter(function(nm) isTRUE(get_backend(nm)$detect(config)), nms)
+  # One plug-in's broken `detect()` must not take detection down for every
+  # other backend, so an error counts as not recognising the config.
+  claims <- function(nm) {
+    tryCatch(isTRUE(get_backend(nm)$detect(config)), error = function(e) {
+      cli::cli_warn(c(
+        "Backend {.val {nm}}'s {.fn detect} failed; skipping it.",
+        x = conditionMessage(e)
+      ))
+      FALSE
+    })
+  }
+  hits <- Filter(claims, nms)
   if (length(hits) == 1L) return(get_backend(hits))
   if (length(hits) == 0L) {
     cli::cli_abort(c(
@@ -221,7 +308,9 @@ detect_backend <- function(config) {
       if (!is.null(sub) || !is.null(bk)) stop(e)
       # Try each registered backend's subfolder convention.
       for (nm in ls(.tabfound_backends)) {
-        cand <- get_backend(nm)$subfolder_for(task)
+        # Guarded for the same reason as `detect()`: a plug-in's hook.
+        cand <- tryCatch(get_backend(nm)$subfolder_for(task),
+                         error = function(e2) NULL)
         if (is.null(cand)) next
         got <- tryCatch(resolve_artifacts(model, subfolder = cand),
                         error = function(e2) NULL)

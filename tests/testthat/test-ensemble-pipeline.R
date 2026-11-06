@@ -258,6 +258,24 @@ test_that("the native generator writes configs its own pipeline can read", {
 })
 
 
+test_that("a constant target gets no target transform, rather than a crash", {
+  # Standardising a constant `y` divides by zero, and the Yeo-Johnson fit
+  # then failed on the NaNs. There is no lambda to fit, so the members
+  # that would carry one go without.
+  y <- rep(5, nrow(X_tr))
+  cfgs <- generate_ensemble_configs_native(X_tr, y, n_estimators = 4L,
+                                           head = "regressor", variant = "v2.5")
+  expect_length(cfgs, 4L)
+  for (cfg in cfgs) expect_null(cfg$target_transform_lambda)
+  # A target that varies still gets one on every other member.
+  varied <- generate_ensemble_configs_native(
+    X_tr, rnorm(nrow(X_tr)), n_estimators = 4L, head = "regressor",
+    variant = "v2.5")
+  expect_identical(vapply(varied, function(c) !is.null(c$target_transform_lambda),
+                          logical(1)), c(FALSE, TRUE, FALSE, TRUE))
+})
+
+
 test_that("the forward helper only names arguments the network has", {
   # The predictors serve both TabPFN generations from one code path, and
   # v2.5's `forward` has no `kv_cache` or `save_peak_memory_factor`.

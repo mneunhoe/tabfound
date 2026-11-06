@@ -369,6 +369,9 @@ generate_ensemble_configs_native <- function(X_train, y_train,
     .check_presets(presets)
   cat_ix <- detect_categorical_features(X_mat, categorical_features)
 
+  y_constant <- head == "regressor" &&
+    length(unique(as.numeric(y_train))) == 1L
+
   n_classes <- NULL
   if (head == "classifier") {
     n_classes <- if (is.factor(y_train)) nlevels(y_train) else length(unique(y_train))
@@ -475,8 +478,11 @@ generate_ensemble_configs_native <- function(X_train, y_train,
       )
     }
 
+    # A constant target has no Yeo-Johnson lambda to fit -- standardising
+    # it divides by zero -- and nothing for one to do, so its members go
+    # without. The fit path predicts the constant either way.
     if (head == "regressor" && identical(variant, "v2.5") &&
-        isTRUE(add_target_transform) && (i %% 2L == 0L)) {
+        isTRUE(add_target_transform) && (i %% 2L == 0L) && !y_constant) {
       y_raw  <- as.numeric(y_train)
       y_mean <- mean(y_raw)
       y_std  <- sqrt(mean((y_raw - y_mean) ^ 2))
