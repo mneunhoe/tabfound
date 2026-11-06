@@ -6,20 +6,20 @@
     "n_query": 500,
     "n_features": 50
   },
-  "measured_on": "2026-11-04",
+  "measured_on": "2026-11-06",
   "machine_total_bytes": 51539607552,
-  "spmf_floor": 0.539446428377529,
+  "spmf_floor": 0.780410560400458,
   "points": [
     {
       "n_context": 4000,
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 23184965632,
-      "loaded_bytes": 617054208,
-      "elapsed_sec": 19.0025,
+      "peak_bytes": 8954527744,
+      "loaded_bytes": 606027776,
+      "elapsed_sec": 30.784,
       "method": "rss-sampling",
-      "samples": 1113,
+      "samples": 1452,
       "spmf": 1
     },
     {
@@ -27,11 +27,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 18008178688,
-      "loaded_bytes": 618643456,
-      "elapsed_sec": 18.9541,
+      "peak_bytes": 7344603136,
+      "loaded_bytes": 607125504,
+      "elapsed_sec": 34.7091,
       "method": "rss-sampling",
-      "samples": 1125,
+      "samples": 1709,
       "spmf": 2
     },
     {
@@ -39,11 +39,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 14754906112,
-      "loaded_bytes": 586252288,
-      "elapsed_sec": 23.6836,
+      "peak_bytes": 7406452736,
+      "loaded_bytes": 601636864,
+      "elapsed_sec": 37.1672,
       "method": "rss-sampling",
-      "samples": 1393,
+      "samples": 1912,
       "spmf": 4
     },
     {
@@ -51,11 +51,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 11931598848,
-      "loaded_bytes": 609599488,
-      "elapsed_sec": 27.8402,
+      "peak_bytes": 7482638336,
+      "loaded_bytes": 591183872,
+      "elapsed_sec": 53.2236,
       "method": "rss-sampling",
-      "samples": 1632,
+      "samples": 2644,
       "spmf": 8
     },
     {
@@ -63,11 +63,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 10897670144,
-      "loaded_bytes": 577110016,
-      "elapsed_sec": 30.0362,
+      "peak_bytes": 7467139072,
+      "loaded_bytes": 613826560,
+      "elapsed_sec": 70.3685,
       "method": "rss-sampling",
-      "samples": 1788,
+      "samples": 3423,
       "spmf": 16
     },
     {
@@ -75,11 +75,11 @@
       "n_query": 500,
       "n_features": 50,
       "status": "ok",
-      "peak_bytes": 9241214976,
-      "loaded_bytes": 609992704,
-      "elapsed_sec": 45.9179,
+      "peak_bytes": 6157746176,
+      "loaded_bytes": 596754432,
+      "elapsed_sec": 87.0624,
       "method": "rss-sampling",
-      "samples": 2711,
+      "samples": 4420,
       "spmf": 32
     }
   ]
