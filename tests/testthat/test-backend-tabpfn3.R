@@ -407,32 +407,6 @@ test_that("NaN, Inf and constant columns are absorbed, not propagated", {
 })
 
 
-test_that("out-of-range labels are refused rather than silently truncated", {
-  net <- tiny_net("classifier")
-  x_tr <- torch::torch_randn(c(1L, 12L, 3L))
-  x_te <- torch::torch_randn(c(1L, 3L, 3L))
-  # The head is 6 wide; a label of 7 has no slot to be decoded into.
-  y_bad <- torch::torch_full(c(1L, 12L), 7)$to(dtype = torch::torch_float())
-  expect_error(net(x_tr, y_bad, x_te), "out of range")
-})
-
-
-test_that("test rows cannot see each other", {
-  # The ICL stage restricts keys and values to the training rows, so a
-  # test row's prediction must not move when its neighbours change. This
-  # is the property a mis-set `single_eval_pos` would quietly break.
-  net <- tiny_net("classifier")
-  set.seed(6)
-  x_tr <- torch::torch_randn(c(1L, 16L, 4L))
-  x_te <- torch::torch_randn(c(1L, 5L, 4L))
-  y_tr <- torch::torch_randint(0L, 3L, c(1L, 16L))$to(dtype = torch::torch_float())
-
-  base <- torch::with_no_grad(net(x_tr, y_tr, x_te))$logits
-  alone <- torch::with_no_grad(net(x_tr, y_tr, x_te[, 1, , drop = FALSE]))$logits
-  expect_equal(as.array(alone[1, 1, ]), as.array(base[1, 1, ]), tolerance = 1e-5)
-})
-
-
 test_that("the blocked, narrowed decoder reproduces the one-shot one", {
   # The decoder as it was: every test row's scores formed at once, and a
   # value column for every class the head could carry. Kept here as the
@@ -493,6 +467,32 @@ test_that("decoder blocks split evenly, so none is a lone row", {
     expect_lte(max(s) - min(s), 1L)
   }
   expect_identical(.tabpfn3_block_sizes(129L, 128L), c(64L, 65L))
+})
+
+
+test_that("out-of-range labels are refused rather than silently truncated", {
+  net <- tiny_net("classifier")
+  x_tr <- torch::torch_randn(c(1L, 12L, 3L))
+  x_te <- torch::torch_randn(c(1L, 3L, 3L))
+  # The head is 6 wide; a label of 7 has no slot to be decoded into.
+  y_bad <- torch::torch_full(c(1L, 12L), 7)$to(dtype = torch::torch_float())
+  expect_error(net(x_tr, y_bad, x_te), "out of range")
+})
+
+
+test_that("test rows cannot see each other", {
+  # The ICL stage restricts keys and values to the training rows, so a
+  # test row's prediction must not move when its neighbours change. This
+  # is the property a mis-set `single_eval_pos` would quietly break.
+  net <- tiny_net("classifier")
+  set.seed(6)
+  x_tr <- torch::torch_randn(c(1L, 16L, 4L))
+  x_te <- torch::torch_randn(c(1L, 5L, 4L))
+  y_tr <- torch::torch_randint(0L, 3L, c(1L, 16L))$to(dtype = torch::torch_float())
+
+  base <- torch::with_no_grad(net(x_tr, y_tr, x_te))$logits
+  alone <- torch::with_no_grad(net(x_tr, y_tr, x_te[, 1, , drop = FALSE]))$logits
+  expect_equal(as.array(alone[1, 1, ]), as.array(base[1, 1, ]), tolerance = 1e-5)
 })
 
 

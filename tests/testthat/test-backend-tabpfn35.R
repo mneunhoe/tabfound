@@ -358,6 +358,46 @@ test_that("the KV cache reproduces the forward it was built from", {
 })
 
 
+test_that("test rows cannot see each other", {
+  # The ICL stack restricts keys to the training rows by slicing, not by
+  # masking, so this is the check that the slice is where it should be.
+  net <- tiny35_net("classification")
+  d <- tiny35_data(n_test = 6L)
+  torch::with_no_grad({
+    all_rows <- net(d$x_train, d$y_train, d$x_test,
+                    row_chunk_size = NULL, col_chunk_size = NULL)$logits
+    first_two <- net(d$x_train, d$y_train, d$x_test[, 1:2, ],
+                     row_chunk_size = NULL, col_chunk_size = NULL)$logits
+  })
+  expect_lt(as.numeric((first_two - all_rows[, 1:2, ])$abs()$max()$cpu()), 1e-5)
+})
+
+
+test_that("NaN, Inf and constant columns are absorbed", {
+  net <- tiny35_net("classification")
+  d <- tiny35_data(n_feat = 4L)
+  x_train <- d$x_train$clone()
+  x_train[1, 2, 1] <- NaN
+  x_train[1, 3, 2] <- Inf
+  x_train[1, 4, 2] <- -Inf
+  x_train[1, , 3] <- 5                      # constant column
+  x_test <- d$x_test$clone()
+  x_test[1, 1, 1] <- NaN
+  torch::with_no_grad({
+    out <- net(x_train, d$y_train, x_test,
+               row_chunk_size = NULL, col_chunk_size = NULL)
+  })
+  expect_true(as.logical(torch::torch_isfinite(out$logits)$all()$cpu()))
+
+  # The indicator channel carries the three sentinels the architecture
+  # uses, and it is read off the *raw* input, before imputation.
+  ind <- tabpfn35_nan_inf_indicator(x_train$transpose(1L, 2L))
+  expect_equal(as.numeric(ind[2, 1, 1]$cpu()), TABPFN35_NAN_INDICATOR)
+  expect_equal(as.numeric(ind[3, 1, 2]$cpu()), TABPFN35_POS_INF_INDICATOR)
+  expect_equal(as.numeric(ind[4, 1, 2]$cpu()), TABPFN35_NEG_INF_INDICATOR)
+})
+
+
 test_that("the blocked, narrowed decoder reproduces the one-shot one", {
   # The decoder as it was: every test row's scores formed at once, and a
   # value column for every class the head could carry. Kept as the
@@ -407,46 +447,6 @@ test_that("the blocked, narrowed decoder reproduces the one-shot one", {
   got <- torch::with_no_grad(dec(train_emb, test_emb, y))
   expect_true(torch::torch_equal(got[, , 4:6], want[, , 4:6]))
   expect_equal(as.array(got), as.array(want), tolerance = 1e-6)
-})
-
-
-test_that("test rows cannot see each other", {
-  # The ICL stack restricts keys to the training rows by slicing, not by
-  # masking, so this is the check that the slice is where it should be.
-  net <- tiny35_net("classification")
-  d <- tiny35_data(n_test = 6L)
-  torch::with_no_grad({
-    all_rows <- net(d$x_train, d$y_train, d$x_test,
-                    row_chunk_size = NULL, col_chunk_size = NULL)$logits
-    first_two <- net(d$x_train, d$y_train, d$x_test[, 1:2, ],
-                     row_chunk_size = NULL, col_chunk_size = NULL)$logits
-  })
-  expect_lt(as.numeric((first_two - all_rows[, 1:2, ])$abs()$max()$cpu()), 1e-5)
-})
-
-
-test_that("NaN, Inf and constant columns are absorbed", {
-  net <- tiny35_net("classification")
-  d <- tiny35_data(n_feat = 4L)
-  x_train <- d$x_train$clone()
-  x_train[1, 2, 1] <- NaN
-  x_train[1, 3, 2] <- Inf
-  x_train[1, 4, 2] <- -Inf
-  x_train[1, , 3] <- 5                      # constant column
-  x_test <- d$x_test$clone()
-  x_test[1, 1, 1] <- NaN
-  torch::with_no_grad({
-    out <- net(x_train, d$y_train, x_test,
-               row_chunk_size = NULL, col_chunk_size = NULL)
-  })
-  expect_true(as.logical(torch::torch_isfinite(out$logits)$all()$cpu()))
-
-  # The indicator channel carries the three sentinels the architecture
-  # uses, and it is read off the *raw* input, before imputation.
-  ind <- tabpfn35_nan_inf_indicator(x_train$transpose(1L, 2L))
-  expect_equal(as.numeric(ind[2, 1, 1]$cpu()), TABPFN35_NAN_INDICATOR)
-  expect_equal(as.numeric(ind[3, 1, 2]$cpu()), TABPFN35_POS_INF_INDICATOR)
-  expect_equal(as.numeric(ind[4, 1, 2]$cpu()), TABPFN35_NEG_INF_INDICATOR)
 })
 
 
