@@ -147,6 +147,20 @@ test_that("printing reports the breakdown, the verdict and the advice", {
   expect_true(any(grepl("n_context", no)))
 })
 
+test_that("the printed lines add up to the printed peak", {
+  # The process intercept, safety factor and floor make the peak more than
+  # weights + persistent + transient; the printout names the difference
+  # rather than leaving the reader to wonder where 13 GB went.
+  e <- peak(mem_config_tabfm(), 60, 1, 2)
+  extra <- e$total_peak_bytes -
+    (e$weights_bytes + e$persistent_bytes + e$transient_bytes)
+  expect_gt(extra, 0)
+  out <- cli::cli_fmt(print(e))
+  line <- grep("overhead", out, value = TRUE)
+  expect_length(line, 1L)
+  expect_match(line, tabfound:::.fmt_bytes(extra), fixed = TRUE)
+})
+
 
 # ---------------------------------------------------------------------------
 # Monotonicity: more of anything is never less memory

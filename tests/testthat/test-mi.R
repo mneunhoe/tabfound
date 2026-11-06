@@ -191,6 +191,15 @@ test_that("tabfound_complete matches mice's complete() contract", {
   expect_identical(nrow(long), nrow(d) * 2L)
   expect_true(all(c(".imp", ".id") %in% names(long)))
   expect_setequal(unique(long$.imp), 1:2)
+  # mice's `.id` is the frame's row names as R stores them: integers
+  # unless they were set, the names otherwise.
+  expect_identical(long$.id, rep(seq_len(nrow(d)), 2L))
+  named <- d
+  rownames(named) <- paste0("r", seq_len(nrow(d)))
+  imp_named <- tabfound_impute(named, m = 2L, models = stub_models(),
+                               maxit = 1L, seed = 8L, verbose = FALSE)
+  expect_identical(tabfound_complete(imp_named, "long")$.id,
+                   rep(rownames(named), 2L))
 
   long0 <- tabfound_complete(imp, "long", include = TRUE)
   expect_identical(nrow(long0), nrow(d) * 3L)

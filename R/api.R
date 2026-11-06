@@ -49,6 +49,7 @@
 # meant it, so a non-empty declaration that nobody can honour says so.
 # @keywords internal
 .predictor_args <- function(fn, ctx, categorical_features, args) {
+  categorical_features <- .check_categorical_spec(categorical_features)
   if (!is.null(categorical_features) &&
       !"categorical_features" %in% names(formals(fn))) {
     if (length(categorical_features)) {
@@ -64,6 +65,84 @@
     if (!is.null(categorical_features))
       list(categorical_features = categorical_features),
     args)
+}
+
+# `categorical_features` as the caller wrote it: positions, or column
+# names. Anything else -- a logical mask, a list -- is refused here, where
+# the mistake was made, instead of reaching a backend's `as.integer()` and
+# coming back as "NAs introduced by coercion" followed by an index error.
+# A factor of names is read as its labels, not its codes.
+# @keywords internal
+.check_categorical_spec <- function(categorical_features) {
+  if (is.null(categorical_features)) return(NULL)
+  if (is.factor(categorical_features)) {
+    categorical_features <- as.character(categorical_features)
+  }
+  if (is.character(categorical_features)) {
+    bad <- is.na(categorical_features) | !nzchar(categorical_features)
+    if (any(bad)) {
+      cli::cli_abort("{.arg categorical_features} has {sum(bad)} missing or \\
+                      empty column name{?s}.")
+    }
+    return(categorical_features)
+  }
+  if (!is.numeric(categorical_features)) {
+    cli::cli_abort(c(
+      "{.arg categorical_features} takes column positions or column names.",
+      x = "Got a {.cls {class(categorical_features)[1]}} vector."
+    ))
+  }
+  categorical_features
+}
+
+# Turn a `categorical_features` declaration into column positions in a
+# table with columns `cols`. Positions pass through untouched -- their
+# range is the backend's to check, against the matrix it is given. Names
+# are matched exactly; any that match nothing abort, naming them, since a
+# misspelt name silently dropped would leave that column to inference.
+# @keywords internal
+.categorical_positions <- function(categorical_features, cols) {
+  if (!is.character(categorical_features)) return(categorical_features)
+  if (is.null(cols)) {
+    cli::cli_abort(c(
+      "{.arg categorical_features} names columns, but {.arg X} has no \\
+       column names to match them against.",
+      i = "Give {.arg X} column names, or declare the columns by position."
+    ))
+  }
+  idx <- match(categorical_features, cols)
+  if (anyNA(idx)) {
+    missing <- categorical_features[is.na(idx)]
+    cli::cli_abort(c(
+      "{.arg categorical_features} names {length(missing)} column{?s} \\
+       not in {.arg X}: {.field {missing}}.",
+      i = "{.arg X} has {.field {cols}}."
+    ))
+  }
+  idx
+}
+
+# A declaration by name can only become positions once `fit()` sees the
+# columns, so the predictor is built without one and rebuilt here. The
+# names stay on `model_ref`: they are what the caller wrote, they survive
+# a refit on a reordered frame, and `tabfound_load()` rebuilds from them.
+# @keywords internal
+.resolve_categorical_names <- function(object, X) {
+  declared <- object$model_ref$args$categorical_features
+  if (!is.character(declared)) return(object)
+  idx <- .categorical_positions(declared, colnames(X))
+  keep_ref <- object$model_ref
+  object <- .rebuild_predictor(object, idx)
+  object$model_ref <- keep_ref
+  object
+}
+
+# The arguments a predictor constructor is actually called with: names in
+# `categorical_features` wait for `fit()`, which has the columns.
+# @keywords internal
+.ctor_args <- function(args) {
+  if (is.character(args$categorical_features)) args$categorical_features <- NULL
+  args
 }
 
 # Read an `ensemble_configs_dir` into `ensemble_configs`, once, here.
@@ -97,8 +176,9 @@
 #'   when `NULL`.
 #' @param device One of `"cpu"`, `"cuda"`, `"mps"`.
 #' @param categorical_features Integer vector of 1-based column indices to
-#'   treat as categorical, `integer()` to declare that none are, or `NULL`
-#'   to let the backend infer. Declaring is much stronger than inferring:
+#'   treat as categorical, a character vector of column names (matched
+#'   against `colnames(X)` at [fit()]), `integer()` to declare that none
+#'   are, or `NULL` to let the backend infer. Declaring is much stronger than inferring:
 #'   on TabPFN, inference takes a column nobody declared as categorical
 #'   only when it has fewer than four distinct values and the training
 #'   set has more than 100 rows, so an ordinal-coded factor with five
@@ -149,7 +229,7 @@ tabular_classifier <- function(model, backend = NULL, device = "cpu",
   }
   args <- .predictor_args(ctx$backend$classifier, ctx, categorical_features,
                           .resolve_configs_dir(ctx$backend$classifier, list(...)))
-  .new_tabfound_model(ctx, do.call(ctx$backend$classifier, args),
+  .new_tabfound_model(ctx, do.call(ctx$backend$classifier, .ctor_args(args)),
                       "classification", args[-1L], preprocess)
 }
 
@@ -172,7 +252,7 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
   }
   args <- .predictor_args(ctx$backend$regressor, ctx, categorical_features,
                           .resolve_configs_dir(ctx$backend$regressor, list(...)))
-  .new_tabfound_model(ctx, do.call(ctx$backend$regressor, args),
+  .new_tabfound_model(ctx, do.call(ctx$backend$regressor, .ctor_args(args)),
                       "regression", args[-1L], preprocess)
 }
 
@@ -457,6 +537,8 @@ fit <- function(object, X, y, ...) UseMethod("fit")
 fit.tabfound_model <- function(object, X, y, ...) {
   .check_weights_alive(object)
   .check_target(y)
+  # Before expansion, so names are matched against the caller's columns.
+  object <- .resolve_categorical_names(object, X)
   expanded <- .fit_expansion_for(object, X)
   X <- expanded$X
   .warn_undeclared_categoricals(object, X)
@@ -501,7 +583,8 @@ fit.tabfound_model <- function(object, X, y, ...) {
   if (!.frame_needs_expansion(X, opts)) {
     return(list(fit_spec = object$spec, X = X, state = NULL))
   }
-  declared_idx <- object$model_ref$args$categorical_features
+  declared_idx <- .categorical_positions(
+    object$model_ref$args$categorical_features, names(X))
   declared <- if (length(declared_idx)) names(X)[declared_idx] else character()
   fitted <- fit_frame_expansion(
     X,
