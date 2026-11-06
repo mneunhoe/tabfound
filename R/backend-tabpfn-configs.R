@@ -350,6 +350,10 @@ generate_ensemble_configs_native <- function(X_train, y_train,
   require_suggested("safetensors")
   require_suggested("jsonlite")
 
+  # Every member is seeded below, and reading the configs back draws from
+  # the stream too; the caller's stream is put back on exit.
+  .local_rng()
+
   # The in-memory form is the on-disk one read back: one format, and one
   # reader, whichever way the configs travel.
   if (is.null(output_dir)) {

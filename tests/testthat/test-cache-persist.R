@@ -209,3 +209,129 @@ test_that("a Kumo cache survives a bundle and does not move predictions", {
   refit$state$kv_guard  <- reloaded$state$kv_guard
   expect_error(predict(refit, X[te, ]), "does not match its training rows")
 })
+
+
+test_that("the guard notices a predictor the cache was not built by", {
+  state <- list(X_train = matrix(rnorm(20), ncol = 2), n_train = 10L,
+                y_train_int = rep(0:1, 5))
+  args <- list(ensemble_configs = list(list(shuffle_perm = 1:2)), kv_cache = TRUE)
+  state$kv_caches <- list(1)
+  state$kv_guard <- .kv_guard_of(state, args)
+  expect_silent(.kv_guard_check(state, args))
+  # Order is not meaning, and an RDS round trip changes nothing.
+  expect_silent(.kv_guard_check(state, rev(args)))
+  f <- withr::local_tempfile(fileext = ".rds")
+  saveRDS(args, f)
+  expect_silent(.kv_guard_check(state, readRDS(f)))
+
+  # Same rows, other members: the rows alone cannot tell.
+  other <- args
+  other$ensemble_configs[[1]]$shuffle_perm <- 2:1
+  expect_error(.kv_guard_check(state, other), "different predictor")
+
+  # A guard from before the arguments were fingerprinted is checked on
+  # the rows alone, as it was.
+  state$kv_guard$args <- NULL
+  expect_silent(.kv_guard_check(state, other))
+})
+
+
+test_that("saving over an earlier save replaces it, whichever form it took", {
+  dir <- local_fake_backend()
+  X <- matrix(rnorm(40), ncol = 2)
+  y <- factor(rep(c("a", "b"), 10))
+  m <- fit(tabular_classifier(dir), X, y)
+  cached <- m
+  cached$state$kv_caches <- list(nested_cache())
+  cached$state$kv_guard  <- .kv_guard_of(cached$state, cached$model_ref$args)
+
+  # An uncached model over a bundle: one file, and it is what loads.
+  target <- file.path(withr::local_tempdir(), "model")
+  tabfound_save(cached, target)
+  expect_true(dir.exists(target))
+  tabfound_save(m, target)
+  expect_true(file.exists(target) && !dir.exists(target))
+  expect_false(has_cache(tabfound_load(target)))
+
+  # And back: a cached model over that file becomes a bundle.
+  tabfound_save(cached, target)
+  expect_true(dir.exists(target))
+  expect_true(has_cache(tabfound_load(target)))
+
+  # A directory that is not a bundle is not ours to delete.
+  other <- withr::local_tempdir()
+  writeLines("keep me", file.path(other, "notes.txt"))
+  expect_error(tabfound_save(m, other), "not a .*bundle")
+  expect_true(file.exists(file.path(other, "notes.txt")))
+})
+
+
+test_that("a save from before the configs travelled loads, or says why not", {
+  dir <- local_fake_backend()
+  X <- matrix(rnorm(40), ncol = 2)
+  y <- factor(rep(c("a", "b"), 10))
+  m <- fit(tabular_classifier(dir), X, y)
+  # What an older tabfound wrote: the directory, not the configs. The
+  # fake backend ignores the argument, which is all this needs.
+  cfg_dir <- withr::local_tempdir()
+  m$model_ref$args$ensemble_configs_dir <- cfg_dir
+  f <- withr::local_tempfile(fileext = ".tabfound")
+  tabfound_save(m, f)
+
+  # Gone, as a `tempfile()` is with its session: a message, not a JSON
+  # parser's complaint about the path.
+  expect_error(tabfound_load(f), "ensemble configs are gone")
+
+  # Still there: loads, and a cache it cannot check is flagged.
+  writeLines("[]", file.path(cfg_dir, "ensemble_configs.json"))
+  expect_no_warning(tabfound_load(f))
+  m$state$kv_caches <- list(nested_cache())
+  m$state$kv_guard  <- .kv_guard_of(m$state)
+  bundle <- file.path(withr::local_tempdir(), "bundle")
+  tabfound_save(m, bundle)
+  expect_warning(back <- tabfound_load(bundle), "older tabfound")
+  expect_true(has_cache(back))
+})
+
+
+test_that("a reloaded TabPFN runs the members it was saved with", {
+  d <- Sys.getenv("TABFOUND_TABPFN26_CLF_DIR", unset = "")
+  skip_if(!nzchar(d) || !dir.exists(d), "TABFOUND_TABPFN26_CLF_DIR not configured")
+
+  set.seed(5)
+  X  <- matrix(rnorm(180), 60); y <- factor(ifelse(X[, 1] > 0, "a", "b"))
+  Xn <- matrix(rnorm(45), 15)
+  root <- withr::local_tempdir()
+  cfg_dir <- file.path(root, "cfg")
+  gen <- function(seed, out = NULL) {
+    generate_ensemble_configs_native(X, y, n_estimators = 4, head = "classifier",
+                                     variant = "v2.6", output_dir = out,
+                                     random_state = seed)
+  }
+  gen(0L, cfg_dir)
+  m  <- fit(tabular_classifier(d, ensemble_configs_dir = cfg_dir), X, y)
+  p0 <- predict(m, Xn, type = "prob")
+  expect_null(m$model_ref$args[["ensemble_configs_dir"]])
+  bundle <- file.path(root, "bundle")
+  plain  <- file.path(root, "plain.tabfound")
+  tabfound_save(tabfound_cache(m), bundle)
+  tabfound_save(m, plain)
+
+  # The directory is regenerated with another seed. Before, the reload
+  # re-read it: an uncached model moved by 1e-3, and a cached one mixed
+  # the old members' cache with the new configs and moved by 0.74.
+  unlink(cfg_dir, recursive = TRUE)
+  gen(1L, cfg_dir)
+  expect_identical(predict(tabfound_load(bundle), Xn, type = "prob"), p0)
+  expect_identical(predict(tabfound_load(plain), Xn, type = "prob"), p0)
+  unlink(cfg_dir, recursive = TRUE)
+  expect_identical(predict(tabfound_load(plain), Xn, type = "prob"), p0)
+
+  # A cache moved onto a predictor with other members is refused, though
+  # the training rows are the same.
+  other <- fit(tabular_classifier(d, ensemble_configs = gen(1L)), X, y)
+  cached <- tabfound_cache(m)
+  other$state$kv_caches <- cached$state$kv_caches
+  other$state$kv_guard  <- cached$state$kv_guard
+  expect_error(predict(other, Xn), "different predictor")
+})

@@ -27,6 +27,16 @@ test_that("every missing cell is filled and every observed cell is untouched", {
 })
 
 
+test_that("a string column is coded in code-point order, whatever the locale", {
+  # The levels become the predictor codes and the classifier's classes, so
+  # they follow sklearn's sort rather than the session's collation.
+  local_natural_collate()
+  plan <- .mi_column_plan(c("b", "B", NA, "a", "_x", "Z"))
+  expect_identical(levels(plan$to_model(c("a", "B"))),
+                   c("B", "Z", "_x", "a", "b"))
+})
+
+
 test_that("imputed columns keep their original type", {
   d <- mi_test_df()
   got <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
@@ -57,6 +67,16 @@ test_that("a seed makes the whole imputation reproducible", {
 
   expect_equal(a$imputations, b$imputations)
   expect_false(isTRUE(all.equal(a$imputations, c3$imputations)))
+})
+
+
+test_that("a seeded imputation leaves the caller's random stream alone", {
+  d <- mi_test_df()
+  set.seed(1)
+  before <- .Random.seed
+  invisible(tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                   seed = 42L, verbose = FALSE))
+  expect_identical(.Random.seed, before)
 })
 
 
@@ -261,6 +281,27 @@ test_that("as_mids produces a mids mice can work with", {
 
   pooled <- summary(mice::pool(with(mids, lm(ok ~ num + fac))))
   expect_true(all(is.finite(pooled$estimate)))
+})
+
+
+test_that("as_mids carries over cells that where over-imputes", {
+  skip_if_not_installed("mice")
+  set.seed(17)
+  d <- data.frame(a = rnorm(30), b = rnorm(30), c = rnorm(30))
+  d$a[1:4] <- NA
+  w <- is.na(d)
+  w[5:8, "a"] <- TRUE   # extra cells in a column that has NAs
+  w[1:3, "b"] <- TRUE   # cells in a fully observed column
+  imp <- tabfound_impute(d, m = 2L, models = stub_models(), maxit = 1L,
+                         where = w, seed = 17L, verbose = FALSE)
+  mids <- as_mids(imp)
+
+  expect_identical(unname(mids$where), unname(w))
+  for (k in 1:2) {
+    expect_equal(mice::complete(mids, k), imp$imputations[[k]],
+                 ignore_attr = TRUE)
+  }
+  expect_false(any(mice::complete(mids, 1)$b[1:3] == d$b[1:3]))
 })
 
 
@@ -482,6 +523,43 @@ test_that("mice can drive the loop through mice.impute.tabfound", {
 
   pooled <- summary(mice::pool(with(mids, lm(ok ~ num + int))))
   expect_true(all(is.finite(pooled$estimate)))
+})
+
+
+test_that("an integer dummy stays an integer through tabfound_impute", {
+  d <- mi_test_df()
+  d$ibin <- sample(0:1, nrow(d), replace = TRUE)
+  d$ibin[1:6] <- NA
+  got <- tabfound_impute(d, m = 1L, models = stub_models(), maxit = 1L,
+                         seed = 2L, verbose = FALSE)$imputations[[1]]
+  expect_type(got$ibin, "integer")
+  expect_true(all(got$ibin %in% 0:1))
+})
+
+
+test_that("mice.impute.tabfound keeps a target's type and support", {
+  withr::local_options(tabfound.models = stub_models())
+  set.seed(16)
+  x <- cbind(1, rnorm(40))
+  miss <- 1:8
+
+  # A numeric dummy goes to the classifier, not the regressor, and comes
+  # back as 0/1 in the storage mode it went in with.
+  b <- as.numeric(x[, 2] + rnorm(40) > 0); b[miss] <- NA
+  got <- mice.impute.tabfound(b, !is.na(b), x)
+  expect_type(got, "double")
+  expect_true(all(got %in% c(0, 1)))
+  ib <- as.integer(b)
+  got <- mice.impute.tabfound(ib, !is.na(ib), x)
+  expect_type(got, "integer")
+  expect_true(all(got %in% 0:1))
+
+  o <- factor(sample(c("lo", "mid", "hi"), 40, TRUE),
+              levels = c("lo", "mid", "hi"), ordered = TRUE)
+  o[miss] <- NA
+  got <- mice.impute.tabfound(o, !is.na(o), x)
+  expect_true(is.ordered(got))
+  expect_identical(levels(got), levels(o))
 })
 
 

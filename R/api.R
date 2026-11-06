@@ -145,6 +145,29 @@
   args
 }
 
+# Read an `ensemble_configs_dir` into `ensemble_configs`, once, here.
+#
+# The argument list is what `tabfound_save()` records to rebuild the
+# object. A directory in it would be re-read at `tabfound_load()`, so a
+# model reloaded after the directory was regenerated -- or deleted, as a
+# `tempfile()` is with its session -- would run other members than the
+# ones it was fitted with, or none. The configs are plain R data and
+# small, so they travel with the object instead.
+# @keywords internal
+.resolve_configs_dir <- function(fn, args) {
+  # `[[`, not `$`: `args$ensemble_configs` would partially match the
+  # directory argument itself.
+  dir <- args[["ensemble_configs_dir"]]
+  # Both given is the backend's error to raise, in its own words.
+  if (is.null(dir) || !is.null(args[["ensemble_configs"]]) ||
+      !"ensemble_configs" %in% names(formals(fn))) {
+    return(args)
+  }
+  args$ensemble_configs_dir <- NULL
+  args$ensemble_configs <- load_ensemble_configs_from_dump(dir)
+  args
+}
+
 #' Load a tabular foundation model for classification
 #'
 #' @param model Local directory of model artifacts, a HuggingFace repo
@@ -205,7 +228,7 @@ tabular_classifier <- function(model, backend = NULL, device = "cpu",
     cli::cli_abort("Backend {.val {ctx$backend$name}} does not provide a classifier.")
   }
   args <- .predictor_args(ctx$backend$classifier, ctx, categorical_features,
-                          list(...))
+                          .resolve_configs_dir(ctx$backend$classifier, list(...)))
   .new_tabfound_model(ctx, do.call(ctx$backend$classifier, .ctor_args(args)),
                       "classification", args[-1L], preprocess)
 }
@@ -228,7 +251,7 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
     cli::cli_abort("Backend {.val {ctx$backend$name}} does not provide a regressor.")
   }
   args <- .predictor_args(ctx$backend$regressor, ctx, categorical_features,
-                          list(...))
+                          .resolve_configs_dir(ctx$backend$regressor, list(...)))
   .new_tabfound_model(ctx, do.call(ctx$backend$regressor, .ctor_args(args)),
                       "regression", args[-1L], preprocess)
 }
@@ -517,7 +540,6 @@ fit.tabfound_model <- function(object, X, y, ...) {
   # Before expansion, so names are matched against the caller's columns.
   object <- .resolve_categorical_names(object, X)
   expanded <- .fit_expansion_for(object, X)
-  object <- expanded$object
   X <- expanded$X
   .warn_undeclared_categoricals(object, X)
   train_levels <- .training_levels(.coerce_for_mold(X))
@@ -533,7 +555,7 @@ fit.tabfound_model <- function(object, X, y, ...) {
                   length(unique(y[!is.na(y)])))
   # Assigning into a list copies it, so the caller's object is untouched.
   # The network is shared, not copied -- it is read-only and large.
-  state <- object$spec$fit(X, y)
+  state <- expanded$fit_spec$fit(X, y)
   # The training schema, kept next to the training rows: what `predict()`
   # checks new data against. Backends record their own view of `X_train`,
   # which by then is a bare matrix with no promise about column names.
@@ -546,15 +568,20 @@ fit.tabfound_model <- function(object, X, y, ...) {
 }
 
 # Text and date expansion for the engine API, before anything else sees
-# the frame. Returns the (possibly rebuilt) object alongside, because an
-# explicit `categorical_features` was written in the caller's column
-# positions, and expansion moves every column that follows an expanded
-# one.
+# the frame. Returns the spec to fit with alongside, because an explicit
+# `categorical_features` was written in the caller's column positions,
+# and expansion moves every column that follows an expanded one.
+#
+# That spec is for this one fit only. The object `fit()` returns keeps its
+# own: the moved positions belong to this frame's layout, and a refit on a
+# frame that expands differently -- or not at all -- has to start from the
+# declaration as written. `predict()` needs nothing from it, since the
+# categoricals a fit decided live in `state`.
 # @keywords internal
 .fit_expansion_for <- function(object, X) {
   opts <- object$preprocess %||% .preprocess_options()
   if (!.frame_needs_expansion(X, opts)) {
-    return(list(object = object, X = X, state = NULL))
+    return(list(fit_spec = object$spec, X = X, state = NULL))
   }
   declared_idx <- .categorical_positions(
     object$model_ref$args$categorical_features, names(X))
@@ -569,15 +596,14 @@ fit.tabfound_model <- function(object, X, y, ...) {
     text_n_components = opts$text_n_components,
     declared = declared
   )
+  spec <- object$spec
   if (length(declared_idx)) {
     moved <- .expanded_indices_of(declared, fitted$state)
     if (!identical(as.integer(moved), as.integer(declared_idx))) {
-      keep_ref <- object$model_ref
-      object <- .rebuild_predictor(object, moved)
-      object$model_ref <- keep_ref
+      spec <- .rebuild_predictor(object, moved)$spec
     }
   }
-  list(object = object, X = fitted$data, state = fitted$state)
+  list(fit_spec = spec, X = fitted$data, state = fitted$state)
 }
 
 #' Predict from a tabular foundation model
@@ -621,7 +647,7 @@ predict.tabfound_regressor <- function(object, newdata,
     ))
   }
   .check_predict_dots(object, ...)
-  .check_quantiles(...)
+  .check_quantiles(object$spec$predict, ...)
   newdata <- .prepare_newdata(object, newdata)
   object$spec$predict(object$state, newdata, type, ...)
 }
@@ -633,7 +659,7 @@ predict.tabfound_regressor <- function(object, newdata,
 # it lives on the object rather than in the call.
 # @keywords internal
 .prepare_newdata <- function(object, newdata) {
-  .kv_guard_check(object$state)
+  .kv_guard_check(object$state, object$model_ref$args)
   newdata <- .replay_expansion(object$state$expansion, newdata)
   newdata <- .as_model_matrix(newdata, "newdata", object$state$feature_levels)
   .check_newdata_schema(object, newdata)
@@ -690,24 +716,38 @@ predict.tabfound_regressor <- function(object, newdata,
            {.fn fit} time."
     ))
   }
-  train_nm <- object$state$feature_names
-  new_nm   <- colnames(newdata)
+  .check_column_names(object$state$feature_names, colnames(newdata))
+}
+
+# The name half of the schema check, on its own so the frame expansion can
+# run it on the raw columns: once a date or text column has been expanded,
+# the expanded frame is renamed by position, and a check after that would
+# pass whatever the columns had been called.
+# @keywords internal
+.check_column_names <- function(train_nm, new_nm) {
   if (is.null(train_nm) || is.null(new_nm) || identical(train_nm, new_nm)) {
     return(invisible(TRUE))
   }
   if (setequal(train_nm, new_nm)) {
+    # Quoted and comma-joined by hand: `{.val}` would collapse the vector
+    # with an "and", which is not code anyone can paste.
+    cols <- paste0('"', train_nm, '"', collapse = ", ")
     cli::cli_abort(c(
       "{.arg newdata} has the training columns in a different order.",
       x = "Column {which(train_nm != new_nm)[1]} is \\
            {.field {new_nm[which(train_nm != new_nm)[1]]}}, but was \\
            {.field {train_nm[which(train_nm != new_nm)[1]]}} at fit time.",
-      i = "Reorder with {.code newdata[, c({.val {train_nm}})]}."
+      i = "Reorder with {.code newdata[, c({cols})]}."
     ))
   }
+  # An expanded fit reaches here with only extra columns, which the count
+  # check would otherwise have caught first; say only what applies.
+  missing <- setdiff(train_nm, new_nm)
+  extra <- setdiff(new_nm, train_nm)
   cli::cli_abort(c(
     "{.arg newdata} does not have the columns the model was fitted on.",
-    x = "Missing: {.field {setdiff(train_nm, new_nm)}}.",
-    x = "Unexpected: {.field {setdiff(new_nm, train_nm)}}."
+    x = if (length(missing)) "Missing: {.field {missing}}.",
+    x = if (length(extra)) "Unexpected: {.field {extra}}."
   ))
 }
 
@@ -738,11 +778,25 @@ predict.tabfound_regressor <- function(object, newdata,
 
 # Quantile levels outside (0, 1) are extrapolated off the end of the
 # predicted distribution and come back as plausible-looking numbers.
+#
+# The dots reach the backend's predict function after `state`, `newdata`
+# and `type`, so an unnamed one binds to its `quantiles` by position, and
+# `quant =` by partial matching. Matching them against that function's
+# formals checks the value the backend will actually use, not only a dot
+# that happens to be spelled `quantiles`.
 # @keywords internal
-.check_quantiles <- function(...) {
+.check_quantiles <- function(predict_fn, ...) {
   dots <- list(...)
-  if (!"quantiles" %in% names(dots)) return(invisible(TRUE))
-  quantiles <- dots[["quantiles"]]
+  if ("quantiles" %in% names(formals(predict_fn))) {
+    call <- match.call(predict_fn,
+                       as.call(c(quote(predict_fn), list(NULL, NULL, NULL),
+                                 dots)))
+    if (!"quantiles" %in% names(call)) return(invisible(TRUE))
+    quantiles <- call[["quantiles"]]
+  } else {
+    if (!"quantiles" %in% names(dots)) return(invisible(TRUE))
+    quantiles <- dots[["quantiles"]]
+  }
   if (!is.numeric(quantiles) || !length(quantiles)) {
     cli::cli_abort("{.arg quantiles} must be a numeric vector.")
   }
@@ -915,7 +969,11 @@ predict_members.tabfound_model <- function(object, newdata, ...) {
 #' already the same file the object was built from; duplicating them
 #' would mean writing 6.5 GB per saved TabFM model. [tabfound_load()]
 #' re-resolves them from that reference, so the artifacts (or the
-#' HuggingFace cache) must still be reachable.
+#' HuggingFace cache) must still be reachable. A local model directory is
+#' recorded as an absolute path, so it is found again from any working
+#' directory. TabPFN ensemble configs are saved themselves, not the
+#' `ensemble_configs_dir` they were read from, so the reloaded model runs
+#' the same members even once that directory is gone.
 #'
 #' Both object types are supported: the engine-level `tabfound_model`
 #' from [tabular_classifier()] / [tabular_regressor()], and the
@@ -924,7 +982,9 @@ predict_members.tabfound_model <- function(object, newdata, ...) {
 #' encoding and the same factor levels to new data.
 #'
 #' @param object A `tabfound_model` or a `tabfound_fit`, fitted or not.
-#' @param file Path to write to.
+#' @param file Path to write to: a file, or a directory bundle when the
+#'   model carries a cache from [tabfound_cache()]. An earlier save at the
+#'   same path is replaced, whichever of the two forms it took.
 #' @return `file`, invisibly.
 #' @examples
 #' \dontrun{
@@ -965,6 +1025,7 @@ tabfound_save <- function(object, file) {
   # `state.rds` beside `cache.safetensors`. Without a cache nothing has
   # changed and the single file stays a single file.
   caches <- blob$state$kv_caches
+  .clear_save_target(file, bundle = !is.null(caches))
   if (is.null(caches)) {
     saveRDS(blob, file)
     return(invisible(file))
@@ -979,6 +1040,34 @@ tabfound_save <- function(object, file) {
   blob$cache_file      <- written$file
   saveRDS(blob, file.path(file, "state.rds"))
   invisible(file)
+}
+
+# Saving over an earlier save is an overwrite, whichever form either one
+# took. Left alone, a file where a bundle should go cannot become a
+# directory, and a bundle where a file should go makes `saveRDS()` fail
+# on "it is a directory" -- while `tabfound_load()`, which goes by what is
+# on disk, keeps returning the old model. A file is replaced as
+# `saveRDS()` would replace it anyway. A directory is removed only when it
+# holds nothing but what `tabfound_save()` writes: anything else in it is
+# not ours to delete.
+# @keywords internal
+.clear_save_target <- function(file, bundle) {
+  if (bundle) {
+    if (file.exists(file) && !dir.exists(file)) unlink(file)
+    return(invisible())
+  }
+  if (!dir.exists(file)) return(invisible())
+  ours <- c("state.rds", "cache.safetensors")
+  found <- list.files(file, all.files = TRUE, no.. = TRUE)
+  if (!"state.rds" %in% found || !all(found %in% ours)) {
+    cli::cli_abort(c(
+      "Cannot save to {.path {file}}: it is a directory.",
+      x = "It is not a {.fn tabfound_save} bundle, so it is not replaced.",
+      i = "Choose another path, or remove the directory first."
+    ))
+  }
+  unlink(file, recursive = TRUE)
+  invisible()
 }
 
 # Bumped when the payload's layout changes in a way an older reader could
@@ -1014,6 +1103,8 @@ tabfound_load <- function(file, device = NULL) {
   }
 
   ref  <- blob$model_ref
+  .check_saved_configs_dir(file, ref$args$ensemble_configs_dir,
+                           cached = !is.null(blob$cache_skeleton))
   ctor <- if (identical(blob$task, "classification")) tabular_classifier
           else tabular_regressor
   obj <- do.call(ctor, c(
@@ -1042,6 +1133,35 @@ tabfound_load <- function(file, device = NULL) {
     blueprint = blob$blueprint,
     class     = "tabfound_fit"
   )
+}
+
+# Saves written before the configs were read in at construction record
+# the directory instead, and loading re-reads it. That still works while
+# the directory is there and unchanged; nothing on disk can say whether it
+# is unchanged, so a cache from such a save, which the guard cannot check
+# against the members, is flagged rather than trusted silently.
+# @keywords internal
+.check_saved_configs_dir <- function(file, dir, cached) {
+  if (is.null(dir)) return(invisible())
+  if (!file.exists(file.path(dir, "ensemble_configs.json"))) {
+    cli::cli_abort(c(
+      "Cannot load {.path {file}}: its ensemble configs are gone.",
+      x = "It was saved by an older tabfound, which recorded \\
+           {.path {dir}} rather than the configs themselves.",
+      i = "Restore that directory, or refit the model and save it again."
+    ))
+  }
+  if (cached) {
+    cli::cli_warn(c(
+      "{.path {file}} was saved by an older tabfound and re-reads its \\
+       ensemble configs from {.path {dir}}.",
+      i = "If that directory changed since the save, the saved cache no \\
+           longer matches the members. Rebuild it with \\
+           {.fn tabfound_cache} and save again, which records the \\
+           configs and checks the cache against them."
+    ))
+  }
+  invisible()
 }
 
 

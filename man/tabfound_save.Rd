@@ -12,7 +12,9 @@ tabfound_load(file, device = NULL)
 \arguments{
 \item{object}{A \code{tabfound_model} or a \code{tabfound_fit}, fitted or not.}
 
-\item{file}{Path to write to.}
+\item{file}{Path to write to: a file, or a directory bundle when the
+model carries a cache from \code{\link[=tabfound_cache]{tabfound_cache()}}. An earlier save at the
+same path is replaced, whichever of the two forms it took.}
 
 \item{device}{Optional device override for the reloaded model.}
 }
@@ -36,7 +38,11 @@ rows rather than learning parameters, so the weights on disk are
 already the same file the object was built from; duplicating them
 would mean writing 6.5 GB per saved TabFM model. \code{\link[=tabfound_load]{tabfound_load()}}
 re-resolves them from that reference, so the artifacts (or the
-HuggingFace cache) must still be reachable.
+HuggingFace cache) must still be reachable. A local model directory is
+recorded as an absolute path, so it is found again from any working
+directory. TabPFN ensemble configs are saved themselves, not the
+\code{ensemble_configs_dir} they were read from, so the reloaded model runs
+the same members even once that directory is gone.
 
 Both object types are supported: the engine-level \code{tabfound_model}
 from \code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\link[=tabular_regressor]{tabular_regressor()}}, and the

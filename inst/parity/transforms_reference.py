@@ -270,6 +270,60 @@ out["yeojohnson_inverse"] = spt.inverse_transform(
     yt.reshape(-1, 1)
 ).ravel().tolist()
 
+# Everything below draws from its own generator, so adding a section never
+# shifts the values pinned above.
+
+# --- quantile transformer on tied data, n_quantiles = n ------------------
+# `quantile_uni_fine` grids every sample, so its knots are meant to *be*
+# the sorted data. On rounded data (runs of ties) NumPy's `lerp` and the
+# `refs * 100 / 100` round trip move some knots by an ULP, and the fold
+# then lands half a rank step away. A well-spread column hides this.
+trng = np.random.RandomState(23)
+Xt = np.round(trng.randn(59, 2), 1)
+Xt_test = np.round(trng.randn(12, 2), 1)
+n_qt = get_user_n_quantiles_for_preset("quantile_uni_fine", Xt.shape[0])
+qtt = AdaptiveQuantileTransformer(n_quantiles=n_qt, output_distribution="uniform",
+                                  subsample=10**9, random_state=0)
+out["quantile_ties_X"] = Xt.tolist()
+out["quantile_ties_X_test"] = Xt_test.tolist()
+out["quantile_ties_n_quantiles"] = int(n_qt)
+out["quantile_ties_train"] = np.asarray(qtt.fit_transform(Xt)).tolist()
+out["quantile_ties_test"] = np.asarray(qtt.transform(Xt_test)).tolist()
+
+# --- SVD features with a near-constant column ----------------------------
+# A column whose spread is at rounding level passes the exact-equality
+# constant check, so it reaches the SVD. StandardScaler's
+# `_is_constant_feature` gives it scale 1; dividing by its true spread
+# instead blows it up to ~1e16 and it swamps every component.
+vrng = np.random.RandomState(31)
+Xv = np.column_stack([
+    vrng.randn(100), vrng.randn(100), vrng.exponential(size=100),
+    1e8 + np.tile([0.0, 2.0**-26], 50), vrng.randn(100),
+])
+n_comp_v = get_svd_n_components("svd", *Xv.shape)
+svd_v = get_svd_features_transformer("svd", *Xv.shape, random_state=0)
+svd_v.fit(Xv)
+out["svd_nearconst_X"] = Xv.tolist()
+out["svd_nearconst_n_components"] = int(n_comp_v)
+out["svd_nearconst_scale"] = np.asarray(
+    svd_v.named_steps["save_standard"].named_steps["standard"].scale_
+).tolist()
+out["svd_nearconst_train"] = np.asarray(svd_v.transform(Xv)).tolist()
+
+# --- string categories ---------------------------------------------------
+# sklearn's OrdinalEncoder sorts string categories by code point, so
+# upper case sorts before lower case and "_" between them. R's `factor()`
+# sorts by the session's collation, which only agrees in the C locale.
+str_vals = ["b", "B", "a", "A", "_x", "Z", "é", "e", "a", "Z"]
+oe_s = OrdinalEncoder()
+out["cat_string_values"] = str_vals
+out["cat_string_categories"] = [str(c) for c in
+                                oe_s.fit(np.array(str_vals, dtype=object)
+                                         .reshape(-1, 1)).categories_[0]]
+out["cat_string_codes"] = np.asarray(
+    oe_s.transform(np.array(str_vals, dtype=object).reshape(-1, 1))
+).ravel().tolist()
+
 import tabpfn  # noqa: E402
 import sklearn  # noqa: E402
 

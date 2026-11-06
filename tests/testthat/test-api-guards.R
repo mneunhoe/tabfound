@@ -93,6 +93,8 @@ test_that("predict checks new data against the fitted schema", {
   expect_error(predict(m, cbind(X, d = 1)), "4 columns")
   # The one that used to be silent: same columns, different order.
   expect_error(predict(m, X[, c("b", "a", "c")]), "different order")
+  # And the fix it suggests is code that runs.
+  expect_error(predict(m, X[, c("b", "a", "c")]), 'c("a", "b", "c")', fixed = TRUE)
   expect_error(predict(m, `colnames<-`(X, c("a", "b", "z"))), "Missing")
 })
 
@@ -132,6 +134,11 @@ test_that("out-of-range quantiles are refused", {
                "strictly inside")
   expect_error(predict_quantiles(m, nd, quantiles = c(0, 0.5)), "strictly inside")
   expect_no_error(predict(m, nd, type = "quantiles", quantiles = c(0.1, 0.9)))
+
+  # An unnamed dot binds to the backend's `quantiles` by position, so it
+  # is the value the backend uses.
+  expect_error(predict(m, nd, "quantiles", c(-0.5, 1.5)), "strictly inside")
+  expect_no_error(predict(m, nd, "quantiles", c(0.1, 0.9)))
 })
 
 

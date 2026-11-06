@@ -262,6 +262,45 @@ set_names <- function(x, nms) {
   x
 }
 
+# Seeding without touching the caller's stream. A bare `set.seed()` inside
+# a fit replaces the caller's `.Random.seed`, so every draw after the fit
+# is the same whatever the caller seeded -- a cross-validation or
+# simulation loop around it would repeat itself. These save the state on
+# entry and put it back when `envir`'s function exits, removing it again
+# if there was none (a fresh session has no `.Random.seed` until the first
+# draw). withr does the same, but it is only a suggested package.
+#
+# `.local_rng()` only schedules the restore, for a function that seeds
+# repeatedly with `set.seed()`; `.local_seed()` also seeds once. The
+# restore runs `after = FALSE`, so with nested calls the state saved first
+# -- the caller's -- is the one put back last.
+# @keywords internal
+.local_rng <- function(envir = parent.frame()) {
+  genv <- globalenv()
+  state <- if (exists(".Random.seed", envir = genv, inherits = FALSE)) {
+    get(".Random.seed", envir = genv, inherits = FALSE)
+  }
+  restore <- function() {
+    if (is.null(state)) {
+      if (exists(".Random.seed", envir = genv, inherits = FALSE)) {
+        rm(".Random.seed", envir = genv)
+      }
+    } else {
+      assign(".Random.seed", state, envir = genv)
+    }
+  }
+  do.call(base::on.exit,
+          list(as.call(list(restore)), add = TRUE, after = FALSE),
+          envir = envir)
+  invisible(state)
+}
+
+# @rdname .local_rng
+.local_seed <- function(seed, envir = parent.frame()) {
+  .local_rng(envir)
+  set.seed(seed)
+}
+
 #' Locate a file shipped in `inst/`, falling back to a source checkout
 #'
 #' During development the package is often loaded with `pkgload::load_all()`
@@ -380,6 +419,42 @@ chunk_apply <- function(X, chunk_size, fn) {
 # @keywords internal
 .members_to_run <- function(n, member_weights) {
   if (is.null(member_weights)) seq_len(n) else which(member_weights > 0)
+}
+
+# Class labels as the network sees them: only the classes that occur.
+#
+# A factor keeps levels that no training row has -- a cross-validation
+# fold, a subset, or `tabfound()` itself, since hardhat keeps the
+# outcome's levels. The reference wrappers label-encode the observed
+# classes, so the network is sized, shifted and permuted over those
+# alone. Coding the full level set instead leaves gaps in the labels,
+# and every class permutation built from the observed count then points
+# at the wrong column. `observed` holds the 1-based positions of the
+# observed classes in `levels`, for [.expand_observed_classes()].
+# @keywords internal
+.encode_observed_classes <- function(y) {
+  if (is.factor(y)) {
+    levels_ <- levels(y); code <- as.integer(y)
+  } else {
+    levels_ <- sort(unique(y)); code <- match(y, levels_)
+  }
+  observed <- sort(unique(code))
+  list(levels = levels_, observed = observed,
+       y_int = match(code, observed) - 1L)
+}
+
+# Back from the observed classes to one column per level. A class the fit
+# never saw gets `fill`: probability 0, or logit `-Inf`, which a softmax
+# turns into that same 0. A state fitted before `observed` was recorded
+# coded every level, so it has nothing to expand.
+# @keywords internal
+.expand_observed_classes <- function(m, state, fill) {
+  observed <- state$observed
+  n_levels <- length(state$class_levels)
+  if (is.null(observed) || length(observed) == n_levels) return(m)
+  full <- matrix(fill, nrow(m), n_levels)
+  full[, observed] <- m
+  full
 }
 
 # What `predict_members()` returns for a classifier, whichever backend:

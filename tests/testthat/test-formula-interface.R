@@ -38,6 +38,23 @@ test_that("coercion makes formula and xy paths agree on column count", {
 })
 
 
+test_that("string columns are coded in sklearn's order, whatever the locale", {
+  skip_if_not_installed("jsonlite")
+  skip_if_not_installed("safetensors")
+  ref_path <- tabfound_file("parity", "transforms", "transforms.safetensors.gz")
+  skip_if(!nzchar(ref_path), "transform reference not found")
+  scl <- jsonlite::fromJSON(sub("\\.safetensors\\.gz$", ".json", ref_path))
+  codes <- as.numeric(as.array(read_reference_tensors(ref_path)$cat_string_codes))
+
+  # Under the C collation testthat sets, `factor()` would pass this by luck.
+  local_natural_collate()
+  d <- .coerce_for_mold(data.frame(s = scl$cat_string_values,
+                                   stringsAsFactors = FALSE))
+  expect_identical(levels(d$s), scl$cat_string_categories)
+  expect_identical(unname(.encode_predictors(d)[, "s"]), codes)
+})
+
+
 test_that("every R column type encodes to one numeric column", {
   d <- .coerce_for_mold(mixed_df())
   m <- hardhat::mold(d[setdiff(names(d), "y")], d$y)
@@ -95,6 +112,73 @@ test_that("tabfound() declares factor columns, and nothing for a frame without",
   d$fac <- factor(rep(c("u", "v"), 4))
   f <- tabfound(y ~ ., data = d, model = dir)
   expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+})
+
+
+test_that("a factor made inside the formula is refused, not one-hot encoded", {
+  dir <- local_fake_backend()
+  set.seed(4)
+  d <- data.frame(a = rnorm(30), b = rexp(30), k = sample(1:6, 30, TRUE))
+  d$y <- d$a + d$k
+  # `model.matrix()` would make one dummy per level, and `forge()` would
+  # later build dummies only for the levels a batch has, so predict failed
+  # on any rows without every one.
+  expect_error(tabfound(y ~ a + factor(k), data = d, model = dir),
+               "factor\\(k\\).*one-hot")
+  expect_error(tabfound(y ~ a + cut(b, 3) + I(b > 1), data = d, model = dir),
+               "Formula terms")
+  # Numeric terms are left alone, and the factor as a column works.
+  expect_no_error(tabfound(y ~ a + log(b) + poly(b, 2), data = d, model = dir))
+  d$k <- factor(d$k)
+  f <- tabfound(y ~ a + k, data = d, model = dir)
+  expect_no_error(predict(f, d[1:2, ]))
+})
+
+
+test_that("categorical_features counts the formula's predictors, or names them", {
+  dir <- local_fake_backend()
+  set.seed(3)
+  d <- data.frame(g = factor(sample(letters[1:6], 40, TRUE)), x1 = rnorm(40),
+                  x2 = rnorm(40), y = rnorm(40))
+  # hardhat molds numerics first and factors last, so `g` is column 3 of
+  # the matrix. Position 1 means the formula's first term, as written.
+  f <- tabfound(y ~ g + x1 + x2, data = d, model = dir, categorical_features = 1L)
+  expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+  f <- tabfound(y ~ g + x1 + x2, data = d, model = dir, categorical_features = "g")
+  expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+  f <- tabfound(y ~ x2 + g, data = d, model = dir,
+                categorical_features = c("x2", "g"))
+  expect_identical(f$inner$model_ref$args$categorical_features, c(1L, 2L))
+  # `y ~ .` counts the data's columns.
+  f <- tabfound(y ~ ., data = d, model = dir, categorical_features = 1L)
+  expect_identical(f$inner$model_ref$args$categorical_features, 3L)
+  # An explicit none is still none.
+  f <- tabfound(y ~ ., data = d, model = dir, categorical_features = integer())
+  expect_identical(f$inner$model_ref$args$categorical_features, integer())
+
+  expect_error(tabfound(y ~ g + x1, data = d, model = dir, categorical_features = 3L),
+               "position 3 outside")
+  expect_error(tabfound(y ~ g + x1, data = d, model = dir, categorical_features = "x2"),
+               "not a predictor: x2")
+  expect_error(tabfound(y ~ g + poly(x1, 2), data = d, model = dir,
+                        categorical_features = 2L), "several columns")
+
+  # The data-frame method takes names as well, against its own columns.
+  f <- tabfound(d[c("g", "x1")], d$y, model = dir, categorical_features = "g")
+  expect_identical(f$inner$model_ref$args$categorical_features, 1L)
+})
+
+
+test_that("print() lists the predictors the model reads", {
+  dir <- local_fake_backend()
+  set.seed(4)
+  d <- data.frame(a = rnorm(30), b = rexp(30), k = sample(1:6, 30, TRUE))
+  d$y <- d$a
+  # The blueprint's ptype holds every column the formula referenced, `k`
+  # included, though the model never sees it.
+  f <- tabfound(y ~ . - k, data = d, model = dir)
+  out <- paste(cli::cli_fmt(print(f)), collapse = "\n")
+  expect_match(out, "2 predictors: a and b")
 })
 
 
@@ -272,6 +356,30 @@ test_that("regression goes through the same path and reports .pred", {
                quantiles = c(0.1, 0.5, 0.9))
   expect_identical(names(q), c(".pred_q0.1", ".pred_q0.5", ".pred_q0.9"))
   expect_true(all(q$.pred_q0.1 <= q$.pred_q0.9))
+})
+
+
+test_that("regression output columns are named by type, not position", {
+  frame <- tabfound:::.as_prediction_frame
+  inner <- list(spec = list(quantile_levels = c(0.25, 0.5, 0.75)))
+
+  expect_identical(names(frame(c(1, 2), "median", "regression", inner)),
+                   ".pred")
+
+  # The backends hand back a grid with unnamed columns; the levels are on
+  # the spec.
+  grid <- matrix(1:6, nrow = 2)
+  expect_identical(names(frame(grid, "grid", "regression", inner)),
+                   c(".pred_q0.25", ".pred_q0.5", ".pred_q0.75"))
+
+  # A repeated level is repaired rather than aborting in tibble.
+  q <- matrix(1:4, nrow = 2, dimnames = list(NULL, c("q0.5", "q0.5")))
+  expect_identical(names(frame(q, "quantiles", "regression", inner)),
+                   c(".pred_q0.5", ".pred_q0.5_1"))
+
+  # Draws have no level, so they stay positional.
+  expect_identical(names(frame(grid, "sample", "regression", inner)),
+                   c(".pred_1", ".pred_2", ".pred_3"))
 })
 
 
