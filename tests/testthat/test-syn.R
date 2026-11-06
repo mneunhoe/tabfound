@@ -325,6 +325,76 @@ test_that("proper and improper both run, and improper shares one fit", {
 })
 
 
+test_that("proper = TRUE conditions on a context with no duplicate rows", {
+  # A PFN reads a duplicated context row as a near-certain lookup, so a
+  # bootstrapped context made each synthesis copy real records outright.
+  # The classifier records every context it is fitted on.
+  seen <- new.env()
+  seen$dup <- logical(); seen$n <- integer()
+  clf  <- stub_model("classification")
+  fit0 <- clf$spec$fit
+  clf$spec$fit <- function(X, y) {
+    ctx <- data.frame(as.matrix(X), y = as.character(y))
+    seen$dup <- c(seen$dup, anyDuplicated(ctx) > 0L)
+    seen$n   <- c(seen$n, nrow(ctx))
+    fit0(X, y)
+  }
+  mods <- tabfound_models(classifier = clf, regressor = stub_model("regression"))
+  set.seed(31)
+  d <- data.frame(x = rnorm(40), g = factor(sample(c("a", "b"), 40, TRUE)))
+
+  run <- function(...) {
+    seen$dup <- logical(); seen$n <- integer()
+    tabfound_syn(d, m = 3L, models = mods, seed = 32L, verbose = FALSE, ...)
+  }
+
+  s <- run()
+  expect_true(s$proper)
+  expect_identical(s$proper_scheme, "subsample")
+  expect_identical(s$proper_frac, 0.632)
+  expect_identical(seen$n, rep(25L, 3L))
+  expect_false(any(seen$dup))
+
+  run(proper = "subsample", proper_frac = 0.5)
+  expect_identical(seen$n, rep(20L, 3L))
+  expect_false(any(seen$dup))
+
+  # synthpop's bootstrap is still there on request, duplicates and all.
+  b <- run(proper = "bootstrap")
+  expect_identical(b$proper_scheme, "bootstrap")
+  expect_true(all(seen$dup))
+
+  # Improper: one fit on all the rows, shared by every synthesis.
+  f <- run(proper = FALSE)
+  expect_false(f$proper)
+  expect_identical(f$proper_scheme, "none")
+  expect_identical(seen$n, 40L)
+})
+
+
+test_that("proper is validated instead of silently ignored", {
+  d <- syn_test_df(n = 30L)
+  # "bayes" is valid for tabfound_impute(), and used to run improper here.
+  expect_error(
+    tabfound_syn(d, models = stub_models(), proper = "bayes", verbose = FALSE),
+    "not supported"
+  )
+  expect_error(
+    tabfound_syn(d, models = stub_models(), proper = "sometimes",
+                 verbose = FALSE),
+    "must be"
+  )
+  expect_error(
+    tabfound_syn(d, models = stub_models(), proper = NA, verbose = FALSE),
+    "must be"
+  )
+  expect_error(
+    tabfound_syn(d, models = stub_models(), proper_frac = 1, verbose = FALSE),
+    "proper_frac"
+  )
+})
+
+
 test_that("a matrix comes back as a data frame", {
   set.seed(71)
   mx <- matrix(rnorm(150), ncol = 3, dimnames = list(NULL, c("a", "b", "c")))

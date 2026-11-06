@@ -189,7 +189,9 @@ A PFN draws each query row independently given a fixed context, so the
 `m` chains of an imputation differ only in the noise of the draw. No
 parameter uncertainty enters, which is exactly what makes an imputer
 improper under Rubin's rules — `tabfound_syn()` says so in its own
-documentation and bootstraps the context by default for that reason.
+documentation and resamples the context by default for that reason
+(by subsampling, since a bootstrap's duplicated rows make it copy real
+records).
 `tabfound_impute(proper = TRUE)` offers the same correction: resample the
 observed rows once per imputation, then run the chain against that
 context. mice's `norm.boot` and `polyreg.boot` are the same idea.

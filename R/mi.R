@@ -19,7 +19,7 @@
 # given a fixed context, so `m` chains conditioned on the same observed
 # rows differ only in the sampling noise of the draw -- which is the
 # defect that makes an imputer improper under Rubin's rules, and the one
-# `?tabfound_syn` corrects by bootstrapping the context.
+# `?tabfound_syn` corrects by resampling the context.
 #
 # `proper =` offers the same correction here, and the simulation in
 # `inst/simulation/` says not to take it by default. For a parametric
@@ -504,7 +504,9 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #' pooled standard errors run small. `proper = TRUE` applies the usual
 #' correction -- resample the observed rows once per imputation, the
 #' nonparametric stand-in for drawing new parameters, which is what
-#' [tabfound_syn()] does by default and what mice's `norm.boot` does.
+#' mice's `norm.boot` does. ([tabfound_syn()] resamples by default too,
+#' but by subsampling: a synthesis draws every cell, and a bootstrap's
+#' duplicated rows make it copy real records.)
 #'
 #' It is **off** by default here, which is not what the theory says, and
 #' the reason is measured rather than argued. On the MAR simulation in

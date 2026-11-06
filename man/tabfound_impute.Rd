@@ -125,7 +125,9 @@ between-imputation variance carries no parameter uncertainty, and
 pooled standard errors run small. \code{proper = TRUE} applies the usual
 correction -- resample the observed rows once per imputation, the
 nonparametric stand-in for drawing new parameters, which is what
-\code{\link[=tabfound_syn]{tabfound_syn()}} does by default and what mice's \code{norm.boot} does.
+mice's \code{norm.boot} does. (\code{\link[=tabfound_syn]{tabfound_syn()}} resamples by default too,
+but by subsampling: a synthesis draws every cell, and a bootstrap's
+duplicated rows make it copy real records.)
 
 It is \strong{off} by default here, which is not what the theory says, and
 the reason is measured rather than argued. On the MAR simulation in
