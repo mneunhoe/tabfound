@@ -38,6 +38,13 @@ lives until the query rows are through, so one member's cache is
 persistent even with \code{kv_cache = FALSE}.
 \item \code{col_chunk_size} slices the column axis of every column block,
 chunked or not.
+\item With a cache, the context is encoded on its own and each chunk of
+query rows runs against it, so a pass holds \code{max(n_context, chunk)}
+rows rather than their sum. A cache built for one \code{predict()} call
+(\code{kv_cache = TRUE}, or the predictors' \code{chunk_cache}) is built, used
+on every chunk and dropped a member at a time, so one member's is
+persistent; one kept on the model by \code{\link[=tabfound_cache]{tabfound_cache()}}
+(\code{opts$kv_cache_kept}) holds every member's.
 \item Past 10 classes (\code{opts$n_classes}), every member runs its \code{T}
 error-correcting sub-tasks as one batch, so every term -- the cache
 included -- is \code{T} times as large.

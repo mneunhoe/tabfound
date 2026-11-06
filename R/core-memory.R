@@ -752,19 +752,29 @@
 # time, not the session. Where the estimate cannot judge -- a device with
 # no constants, a machine it cannot probe -- it builds, keeping the same
 # silence the guard does.
+#
+# `or_lower` is for a backend whose cache lowers the peak rather than
+# adding to it (Kumo: no pass holds the context and a chunk at once). The
+# cache then builds on any verdict whenever the estimate with it is no
+# higher than the estimate without, since skipping it would leave the
+# call nearer the edge, not further from it.
 # @keywords internal
 .chunk_cache_fits <- function(ctx, task, n_context, n_query, n_features,
-                              opts) {
-  est <- tryCatch(
+                              opts, or_lower = FALSE) {
+  est <- function(kv) tryCatch(
     do.call(estimate_peak_memory,
             c(list(ctx$config, n_context = n_context, n_query = n_query,
                    n_features = n_features, backend = ctx$backend$name,
-                   device = ctx$device, task = task, kv_cache = TRUE),
+                   device = ctx$device, task = task, kv_cache = kv),
               opts)),
     error = function(e) NULL,
     warning = function(w) NULL
   )
-  is.null(est) || est$verdict %in% c("ok", "unknown")
+  on <- est(TRUE)
+  if (is.null(on) || on$verdict %in% c("ok", "unknown")) return(TRUE)
+  if (!isTRUE(or_lower)) return(FALSE)
+  off <- est(FALSE)
+  !is.null(off) && isTRUE(on$total_peak_bytes <= off$total_peak_bytes)
 }
 
 #' Terms for the column -> row -> in-context stack

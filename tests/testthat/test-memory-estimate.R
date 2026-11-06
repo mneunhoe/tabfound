@@ -627,13 +627,21 @@ test_that("Kumo's caches use the in-context width and the query heads", {
   # projections.
   small <- kumo_terms("small", kv_cache = TRUE)
   med   <- kumo_terms("medium", kv_cache = TRUE)
-  expect_equal(med$by[["in-context learning"]]$act, 20500 * 512)
+  # With a cache the context and a chunk never share a pass: the larger
+  # of the two is resident, not their sum.
+  expect_equal(med$by[["in-context learning"]]$act, 20000 * 512)
+  expect_equal(kumo_terms("medium")$by[["in-context learning"]]$act, 20500 * 512)
+  expect_equal(kumo_terms("medium", n_context = 300, kv_cache = TRUE)$by[[
+    "in-context learning"]]$act, 500 * 512)
   expect_equal(small$persistent - 12 * 2 * 20000 * 512,
                4 * 100 * 128 * 128 * 2 + 100)
   expect_equal(med$persistent - 24 * 2 * 20000 * 512 / 4,
                6 * 100 * 256 * 256 * 2 + 100)
-  # One cache per member, all alive through `predict()`.
+  # A cache built for one call is built and dropped a member at a time, so
+  # one is alive; one kept on the model holds every member's.
   expect_equal(kumo_terms(kv_cache = TRUE, n_estimators = 8)$persistent,
+               small$persistent)
+  expect_equal(kumo_terms(kv_cache_kept = TRUE, n_estimators = 8)$persistent,
                8 * small$persistent)
   # Columns past the recipe's cap never reach the network.
   expect_identical(kumo_terms(n_features = 2000)$stages,
@@ -644,8 +652,9 @@ test_that("Kumo past 10 classes pays for every ECOC sub-task", {
   ten <- kumo_terms(n_classes = 10)
   # 15 classes: max(ceil(15 / 9), 4 * ceil(log10(15))) = 8 sub-tasks.
   many <- kumo_terms(n_classes = 15, kv_cache = TRUE)
+  ten_cached <- kumo_terms(n_classes = 10, kv_cache = TRUE)
   for (nm in names(ten$by)) {
-    expect_equal(many$by[[nm]]$act, 8 * ten$by[[nm]]$act, info = nm)
+    expect_equal(many$by[[nm]]$act, 8 * ten_cached$by[[nm]]$act, info = nm)
   }
   expect_equal(many$persistent, 8 * kumo_terms(kv_cache = TRUE)$persistent)
   expect_identical(kumo_terms(n_classes = 250)$by[["row interaction"]]$act,
