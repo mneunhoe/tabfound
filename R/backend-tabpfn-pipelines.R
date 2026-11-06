@@ -603,8 +603,18 @@ inverse_target_transform_borders <- function(znorm_borders, tt_state) {
 load_ensemble_configs_from_dump <- function(dump_dir) {
   require_suggested("jsonlite")
   require_suggested("safetensors")
-  cfg <- jsonlite::fromJSON(file.path(dump_dir, "ensemble_configs.json"),
-                            simplifyVector = FALSE)
+  # A missing directory otherwise surfaces as jsonlite taking the path for
+  # JSON text: "lexical error: invalid char in json text".
+  json <- file.path(dump_dir, "ensemble_configs.json")
+  if (!file.exists(json)) {
+    cli::cli_abort(c(
+      "No ensemble configs at {.path {dump_dir}}.",
+      x = "{.file ensemble_configs.json} is missing -- the directory \\
+           may have been a {.fn tempfile} from another session.",
+      i = "Regenerate it with {.fn generate_ensemble_configs_native}."
+    ))
+  }
+  cfg <- jsonlite::fromJSON(json, simplifyVector = FALSE)
   read_t1 <- function(path) {
     if (!file.exists(path)) return(NULL)
     safetensors::safe_load_file(path, framework = "torch")

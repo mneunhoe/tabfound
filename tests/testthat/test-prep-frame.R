@@ -217,3 +217,31 @@ test_that("a saved fit replays its expansion after loading", {
   back <- tabfound_load(f)
   expect_identical(predict(back, df[1:6, ]), predict(fit, df[1:6, ]))
 })
+
+test_that("a refit starts from the declaration as written, not the last fit's", {
+  dir <- with_recipe(local_fake_backend(), on = TRUE)
+  # The fake regressor, recording which columns it was told are
+  # categorical -- the one thing a moved declaration changes.
+  bk <- get_backend("faketest")
+  bk$regressor <- function(ctx, categorical_features = NULL, ...) {
+    spec <- stub_regressor_spec()
+    fit0 <- spec$fit
+    spec$fit <- function(X, y) c(fit0(X, y), list(cat = categorical_features))
+    spec
+  }
+  assign("faketest", bk, envir = .tabfound_backends)
+
+  df <- wiring_frame()
+  m <- tabular_regressor(dir, backend = "faketest", categorical_features = 2L)
+  # With a date first, `lvl` (column 2) moves to 1: dates go to the end.
+  X1 <- df[c("when", "lvl", "x")]
+  expect_identical(fit(m, X1, df$y)$state$cat, 1L)
+  # Without one nothing moves -- and a refit of the first fit must not
+  # carry its move over to this layout.
+  X2 <- data.frame(a = rnorm(nrow(df)), lvl = df$lvl, x = df$x)
+  once  <- fit(m, X2, df$y)
+  twice <- fit(fit(m, X1, df$y), X2, df$y)
+  expect_identical(once$state$cat, 2L)
+  expect_identical(twice$state$cat, once$state$cat)
+  expect_identical(predict(twice, X2[1:5, ]), predict(once, X2[1:5, ]))
+})

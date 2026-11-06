@@ -125,8 +125,14 @@
 # one produces numbers rather than an error -- the shapes still line up
 # whenever the feature count does -- so the fingerprint is checked, not
 # assumed.
+#
+# The training rows are half of that context. The other half is how the
+# predictor was built -- above all which ensemble members it runs, whose
+# preprocessing and permutations the cache was conditioned through -- so
+# `args`, the constructor arguments a model keeps in `model_ref`, is
+# fingerprinted too.
 # @keywords internal
-.kv_guard_of <- function(state) {
+.kv_guard_of <- function(state, args = NULL) {
   X <- state$X_train %||% state$X_support
   # Not every backend keeps the training matrix on the state -- TabICL
   # and TabFM keep a fitted imputer and a member generator instead. What
@@ -140,8 +146,29 @@
     n_train    = as.integer(state$n_train %||% NROW(X) %||% 0L),
     n_features = as.integer(if (!is.null(X)) NCOL(X)
                             else length(state$imputer$keep) %||% 0L),
-    digest     = .context_digest(parts)
+    digest     = .context_digest(parts),
+    args       = .args_digest(args)
   )
+}
+
+# The constructor arguments as one string. Taken over `deparse()` rather
+# than `serialize()`: a saved model's arguments come back from an RDS,
+# and a compact `1:3` is not guaranteed to serialize the same way twice,
+# while it always deparses the same. Seventeen digits keep every double
+# exact. Sorted by name, since the order arguments were passed in is not
+# part of what they mean.
+# @keywords internal
+.args_digest <- function(args) {
+  if (is.null(args)) return(NULL)
+  if (length(args) && !is.null(names(args))) args <- args[order(names(args))]
+  txt <- paste(deparse(args, control = c("keepNA", "keepInteger", "niceNames",
+                                         "showAttributes", "digits17")),
+               collapse = "\n")
+  if (requireNamespace("digest", quietly = TRUE)) {
+    return(digest::digest(txt, algo = "xxhash64", serialize = FALSE))
+  }
+  code <- as.numeric(utf8ToInt(txt))
+  paste(length(code), sum(code * seq_along(code)), sep = "-")
 }
 
 # `digest` is Suggests, so fall back to something cheap and still
@@ -163,10 +190,22 @@
 }
 
 # @keywords internal
-.kv_guard_check <- function(state) {
+.kv_guard_check <- function(state, args = NULL) {
   want <- state$kv_guard
   if (is.null(want) || is.null(state$kv_caches)) return(invisible(TRUE))
-  got <- .kv_guard_of(state)
+  got <- .kv_guard_of(state, args)
+  # A guard written before the arguments were fingerprinted has no
+  # `args`; it is checked on the rows alone, as it always was.
+  if (!is.null(want$args) && !is.null(got$args) &&
+      !identical(want$args, got$args)) {
+    cli::cli_abort(c(
+      "This model's cached context was built by a different predictor.",
+      x = "Its ensemble members or constructor arguments have changed \\
+           since {.fn tabfound_cache} ran.",
+      i = "Rebuild it with {.fn tabfound_cache}, or drop it with \\
+           {.code tabfound_cache(object, build = FALSE)}."
+    ))
+  }
   same <- identical(want$n_train, got$n_train) &&
     identical(want$n_features, got$n_features) &&
     (is.na(want$digest) || is.na(got$digest) ||
@@ -246,7 +285,7 @@ tabfound_cache <- function(object, build = TRUE) {
     ))
   }
   object$state$kv_caches <- caches
-  object$state$kv_guard  <- .kv_guard_of(object$state)
+  object$state$kv_guard  <- .kv_guard_of(object$state, object$model_ref$args)
   object
 }
 
