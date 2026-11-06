@@ -144,6 +144,34 @@ it lifted every estimate for that backend by a factor of two. Those
 points now set `floor_bytes` and are excluded from the safety factor,
 which exists to cover the slope.
 
+**6. TabICL, re-measured 2026-11-06 (#68, #78).** Two of the numbers
+above were artefacts, and TabICL's constants were refitted from scratch
+once both were gone. The between-layer collection used to be a level-0
+one, which leaves promoted tensors alive; since #68 it is a full one
+above a 64 MB carried state, and the large points of the TabICL grid
+fell by a third to a half (4,096 × 120: 18.1 → 9.9 GB; 16,384 × 120:
+42.3 → 30.7 GB; 32,768 × 120, which used to die, finishes at 38.2 GB).
+And `tabicl_peak_terms()` sized the column tokens as `ceiling(p / 3)`
+where the network carries all p columns plus the four CLS slots, which
+is what an `act_copies` of 141 had been absorbing. With both corrected
+it is **28.5**, the pre-pass's 34 (the pre-pass is the very column stage
+an unchunked forward runs, so the two are the same order), and the
+safety factor 1.31. The grids measured under a load average of 30 came
+back up to 30% low at the top and were measured again on a quieter
+machine; treat the largest points as good to ±15%.
+
+The ensemble factor rose instead (0.68 → 1.03 per doubling). It is
+fitted at 800 × 32, where eight members add a near-constant 2 GB of
+allocator growth to a one-member transient of about 0.5 GB. The same
+sweep at 4,000 × 50 (`measurements/ensemble-tabicl-4000x50.json`) moves
+by 3% out to 32 members. The factor multiplies the transient, so it
+cannot describe a cost that is additive; the small point's factor is
+shipped because the large one does not contradict it, and multi-member
+estimates at working size are now the most conservative number the
+guard produces: 47.9 GB for eight members at 6,000 × 90, which measures
+10.7 GB. One member there is 13.3 against 10.0. At the small end the
+estimate is the 4.0 GB floor, against 1.0–2.5 GB measured.
+
 ### Where the estimator and the field reports still disagree
 
 The hand-off records TabICL completing a 6,426 × 90 fold in 66 s at its
@@ -176,7 +204,7 @@ exactly 1.
 | `tabpfn` | 12 | 6,400 | 1.00–2.00 | 1.42 | 2.1 GB |
 | `tabpfn26` | 12 | 6,400 | 1.00–2.22 | 1.28 | 2.4 GB |
 | `tabpfn3` | **21** | **32,768** | 1.00–1.59 | 1.33 | 2.4 GB |
-| `tabicl` | 12 | 6,400 | 1.00–1.97 | 1.43 | — |
+| `tabicl` | 40 of 44 | **32,768** | 1.00–1.96 | 1.31 | 4.0 GB |
 | `mitra` | 11 of 12 | 6,400 | 1.00–2.25 | 1.26 | — |
 | `tabfm` | 8 | 1,600 | 1.00–1.51 | 1.27 | 20.4 GB |
 

@@ -218,10 +218,18 @@ test_that("ensemble members raise the peak far less than they multiply", {
   # The naive reading -- eight members, eight times the memory -- would
   # make every TabFM estimate absurd. The measured growth is closer to
   # log2 of the member count; see `.peak_from_terms()`.
+  #
+  # How much less is measured, and depends on where. TabICL's sweep at
+  # 800 x 32 climbs to 4.1x the modelled one-member transient by eight
+  # members -- a near-constant 2 GB of allocator growth on top of a small
+  # transient -- while the same sweep at 4,000 x 50 moves by 3% out to 32
+  # members (`measurements/ensemble-tabicl-4000x50.json`). The shipped
+  # factor is the small point's, because it is the one the large point
+  # does not contradict.
   one   <- peak(mem_config_tabicl(), n_estimators = 1)
   eight <- peak(mem_config_tabicl(), n_estimators = 8)
   expect_gt(eight$transient_bytes, one$transient_bytes)
-  expect_lt(eight$transient_bytes, 4 * one$transient_bytes)
+  expect_lt(eight$transient_bytes, 0.6 * 8 * one$transient_bytes)
   expect_gt(eight$persistent_bytes, one$persistent_bytes)
 })
 
@@ -348,18 +356,47 @@ test_that("col_chunk_size bounds the pre-pass and nothing else", {
   expect_equal(a$total_peak_bytes, b$total_peak_bytes)
 })
 
+test_that("TabICL is sized at one token per column plus the CLS slots", {
+  # `group_cells()` stacks cyclic shifts as channels, so all p columns
+  # survive the grouping, and the row_num_cls sentinel columns ride along
+  # through the column stage. Sizing it as ceiling(p / 3) tokens is what
+  # the old fit's act_copies of 141 was quietly absorbing.
+  cfg <- mem_config_tabicl()
+  unchunked <- list(n_estimators = 1, row_chunk_size = NULL)
+  unchunked["row_chunk_size"] <- list(NULL)
+  tm <- tabicl_peak_terms(4000, 200, 10, unchunked, cfg)
+  st <- stats::setNames(tm$stages, vapply(tm$stages, `[[`, "", "name"))
+  n <- 4000 + 200
+  expect_equal(st[["column embedding"]]$act, n * (10 + 4) * 128)
+  expect_equal(st[["row interaction"]]$act, n * (10 + 4) * 128)
+  expect_equal(st[["in-context learning"]]$act, n * 4 * 128)
+
+  # The row-chunked residue: the grouped input, three channels per token.
+  ch <- tabicl_peak_terms(4000, 200, 10,
+                          list(n_estimators = 1, row_chunk_size = 1024L), cfg)
+  expect_equal(ch$stages[[2]]$res, n * ((10 + 4) * 3 + 4 * 128))
+})
+
 test_that("the pre-pass is charged its own copy count, not the forward's", {
   # Reusing `act_copies` here put TabICL's chunked estimate at 112 GB
   # against 36.9 GB measured. It is a narrower operation than the forward
   # that constant was fitted to -- one column-stage stack, not a whole
-  # pipeline -- and the sweep says so: 71.2 against 137.7 on TabICL, 3.9
-  # against 78.8 on v3.
+  # pipeline -- and on v3 the sweep says so: 3.9 against 78.8.
   for (nm in c("tabicl", "tabpfn3")) {
     co <- tabfound:::.memory_coefs(nm, device = "cpu")
     expect_false(is.null(co$prepass_copies), info = nm)
     expect_gt(co$prepass_copies, 0)
-    expect_lt(co$prepass_copies, co$act_copies)
   }
+  expect_lt(tabfound:::.memory_coefs("tabpfn3", device = "cpu")$prepass_copies,
+            tabfound:::.memory_coefs("tabpfn3", device = "cpu")$act_copies)
+  # TabICL's pre-pass is its whole column stage over every context row:
+  # the same stack, at the same width, as the column stage of an
+  # unchunked forward. Once both are sized at one token per column
+  # (#78) they come out at the same order -- 34 against 28.5 -- and the
+  # 71.2-against-137.7 split the old token count produced was the
+  # forward's term absorbing a threefold undercount.
+  co <- tabfound:::.memory_coefs("tabicl", device = "cpu")
+  expect_lt(co$prepass_copies, 2 * co$act_copies)
   # Unswept, it falls back to the forward's count -- which over-states
   # the pre-pass and is therefore the right way to be wrong.
   co <- tabfound:::.memory_coefs("mitra", device = "cpu")
