@@ -10,6 +10,7 @@ kumo_regressor(
   seed = 42L,
   predict_chunk_size = 1024L,
   kv_cache = FALSE,
+  chunk_cache = TRUE,
   save_peak_memory_factor = NULL,
   row_chunk_size = NULL,
   col_chunk_size = NULL,
@@ -34,7 +35,28 @@ and run every chunk against it, rather than re-encoding it with each
 chunk -- what the reference's \code{fit()} / \code{predict()} split does.
 \code{\link[=tabfound_cache]{tabfound_cache()}} keeps it across calls and sessions. Off by
 default; the answer moves only by float32 rounding (see
-\code{\link[=kumo_kv_cache]{kumo_kv_cache()}}).}
+\code{\link[=kumo_kv_cache]{kumo_kv_cache()}}). A cache built for one call is built a member at a
+time, run over every chunk and dropped before the next member's is
+built, so the call holds one member's cache rather than all of them.
+Off means no cache is \emph{kept}; a call spanning several chunks may
+still build one for itself, see \code{chunk_cache}.}
+
+\item{chunk_cache}{When no cache is asked for (\code{kv_cache = FALSE}, and
+none kept by \code{\link[=tabfound_cache]{tabfound_cache()}}) and a \code{predict()} call spans two or
+more \code{predict_chunk_size} chunks, encode each member's context once
+for that call and run every chunk against it, instead of re-encoding
+the whole context with every chunk -- 1.6 to 2.9 times faster with
+8 members over 4 chunks on the released weights, more with more
+chunks and a larger training set, at a lower peak memory. Nothing is
+kept: each member's cache is built, used on every chunk and dropped
+within the call. The answer moves by float32 rounding only, as with
+\code{kv_cache}. A cached pass never holds the context and a chunk at
+once, so it lowers the peak rather than adding to it; the cache is
+skipped only when \code{\link[=estimate_peak_memory]{estimate_peak_memory()}} finds that it would not
+leave the call comfortable room \emph{and} would not lower the call's
+estimated peak. A member whose cache cannot be built runs uncached. A single-chunk call never builds one.
+\code{TRUE} by default; \code{FALSE} re-encodes the context for every chunk, as
+before.}
 
 \item{save_peak_memory_factor}{Split every step whose keys are fixed
 (each column block's output step, each row block, the query rows of

@@ -490,9 +490,15 @@ print.kumo_kv_cache <- function(x, ...) {
 # axis, each task sees its own relabelled context, and the `T` logit sets
 # are folded back into `K` class scores by [.kumo_ecoc_scores()]. The
 # cache then carries the task axis too.
+#
+# `soft` is for a cache `predict()` builds on its own initiative
+# (`chunk_cache`): a build that fails is recorded in the store as `FALSE`,
+# so the member runs uncached on every chunk -- which raises any real
+# error itself -- rather than failing the call or retrying the build.
 # @keywords internal
 .kumo_member_out <- function(net, dev, rec, X_train, y_train, X_query, m,
-                             cache_store = NULL, chunks = list()) {
+                             cache_store = NULL, chunks = list(),
+                             soft = FALSE) {
   run <- function(...) {
     do.call(net, c(list(...), list(row_chunk_size = chunks$row_chunk_size,
                                    save_peak_memory_factor = chunks$save_peak_memory_factor,
@@ -511,18 +517,21 @@ print.kumo_kv_cache <- function(x, ...) {
   fold <- function(out) {
     if (is.null(book)) out[1, , ]$cpu() else .kumo_ecoc_scores(out, book)$cpu()
   }
-  if (is.null(cache_store)) {
-    mem <- kumo_recipe_member(rec, rbind(X_train, X_query), m)
-    out <- torch::with_no_grad(run(lead(mem$x), target(), mem$categorical_mask))
-    return(fold(out))
-  }
-  cache <- member_cache(cache_store, m, function() {
+  build <- function() {
     mem <- kumo_recipe_member(rec, X_train, m)
     torch::with_no_grad(net$build_kv_cache(
       lead(mem$x), target(), mem$categorical_mask, chunks$row_chunk_size,
       chunks$save_peak_memory_factor, chunks$col_chunk_size
     ))
+  }
+  cache <- member_cache(cache_store, m, if (!soft) build else function() {
+    tryCatch(build(), error = function(e) FALSE)
   })
+  if (is.null(cache) || isFALSE(cache)) {
+    mem <- kumo_recipe_member(rec, rbind(X_train, X_query), m)
+    out <- torch::with_no_grad(run(lead(mem$x), target(), mem$categorical_mask))
+    return(fold(out))
+  }
   mem <- kumo_recipe_member(rec, X_query, m)
   out <- torch::with_no_grad(run(lead(mem$x), NULL, mem$categorical_mask,
                                  kv_cache = cache))
@@ -598,7 +607,27 @@ print.kumo_kv_cache <- function(x, ...) {
 #'   chunk -- what the reference's `fit()` / `predict()` split does.
 #'   [tabfound_cache()] keeps it across calls and sessions. Off by
 #'   default; the answer moves only by float32 rounding (see
-#'   [kumo_kv_cache()]).
+#'   [kumo_kv_cache()]). A cache built for one call is built a member at a
+#'   time, run over every chunk and dropped before the next member's is
+#'   built, so the call holds one member's cache rather than all of them.
+#'   Off means no cache is *kept*; a call spanning several chunks may
+#'   still build one for itself, see `chunk_cache`.
+#' @param chunk_cache When no cache is asked for (`kv_cache = FALSE`, and
+#'   none kept by [tabfound_cache()]) and a `predict()` call spans two or
+#'   more `predict_chunk_size` chunks, encode each member's context once
+#'   for that call and run every chunk against it, instead of re-encoding
+#'   the whole context with every chunk -- 1.6 to 2.9 times faster with
+#'   8 members over 4 chunks on the released weights, more with more
+#'   chunks and a larger training set, at a lower peak memory. Nothing is
+#'   kept: each member's cache is built, used on every chunk and dropped
+#'   within the call. The answer moves by float32 rounding only, as with
+#'   `kv_cache`. A cached pass never holds the context and a chunk at
+#'   once, so it lowers the peak rather than adding to it; the cache is
+#'   skipped only when [estimate_peak_memory()] finds that it would not
+#'   leave the call comfortable room *and* would not lower the call's
+#'   estimated peak. A member whose cache cannot be built runs uncached. A single-chunk call never builds one.
+#'   `TRUE` by default; `FALSE` re-encodes the context for every chunk, as
+#'   before.
 #' @param save_peak_memory_factor Split every step whose keys are fixed
 #'   (each column block's output step, each row block, the query rows of
 #'   the ICL stack) into this many chunks of rows.
@@ -617,11 +646,13 @@ print.kumo_kv_cache <- function(x, ...) {
 #' @keywords internal
 kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
                             predict_chunk_size = 1024L, kv_cache = FALSE,
+                            chunk_cache = TRUE,
                             save_peak_memory_factor = NULL,
                             row_chunk_size = NULL, col_chunk_size = NULL,
                             categorical_features = NULL,
                             member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
+  .check_chunk_cache(chunk_cache)
   member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
   max_classes <- as.integer(ctx$config$num_classes)
   chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
@@ -643,16 +674,19 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
          n_train = nrow(X), categorical = categorical, recipe = rec)
   }
 
-  .chunk <- function(state, X_query, caches, return_members = FALSE) {
+  # Member `m`'s class scores for one chunk, in class order.
+  .one <- function(state, X_query, m, caches, soft = FALSE) {
     rec <- state$recipe
     K <- length(rec$target$classes)
+    o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train_int,
+                          X_query, m, caches, chunks, soft = soft)
+    kumo_recipe_unshift(rec, o[, 1:K, drop = FALSE], m)
+  }
+
+  # One chunk's answer from its members' scores, in `run` order.
+  .finish <- function(state, X_query, outs, return_members = FALSE) {
+    rec <- state$recipe
     run <- .members_to_run(rec$n_members, member_weights)
-    outs <- lapply(run, function(m) {
-      if (m > 1L) collect_between_chunks()
-      o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train_int,
-                            X_query, m, caches, chunks)
-      kumo_recipe_unshift(rec, o[, 1:K, drop = FALSE], m)
-    })
     if (return_members) {
       # Classes absent from the training rows cannot be predicted; as
       # logits they are -Inf, which a softmax turns into the zero the
@@ -670,10 +704,21 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
     full
   }
 
+  # Per-chunk results, in row order.
+  .run <- function(state, X, return_members = FALSE) {
+    src <- .kumo_store(state, kv_cache, chunk_cache, ctx, "classification",
+                       nrow(X), .kumo_guard_opts(n_estimators, predict_chunk_size,
+                                                 chunks, length(state$class_levels)))
+    .kumo_run_chunks(X, predict_chunk_size,
+                     .members_to_run(state$recipe$n_members, member_weights),
+                     function(chunk, m, store, soft) .one(state, chunk, m, store, soft),
+                     function(chunk, outs) .finish(state, chunk, outs, return_members),
+                     src)
+  }
+
   predict_fn <- function(state, newdata, type = "class", ...) {
-    caches <- .kumo_store(state, kv_cache)
-    probs <- chunk_apply(as.matrix(newdata), predict_chunk_size,
-                         function(chunk) .chunk(state, chunk, caches))
+    X <- as.matrix(newdata)
+    probs <- .stack_chunks(.run(state, X), nrow(X))
     colnames(probs) <- as.character(state$class_levels)
     if (type == "prob") return(probs)
     state$class_levels[max.col(probs, ties.method = "first")]
@@ -683,10 +728,8 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
   # classes the folded ECOC scores, which the ensemble treats the same
   # way. Kumo applies no temperature. See [predict_members()].
   predict_members_fn <- function(state, newdata) {
-    caches <- .kumo_store(state, kv_cache)
-    logits <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
-                                   function(chunk) .chunk(state, chunk, caches,
-                                                          return_members = TRUE))
+    logits <- .stack_member_chunks(.run(state, as.matrix(newdata),
+                                        return_members = TRUE))
     .classifier_members(logits, state$class_levels,
                         .members_to_run(state$recipe$n_members, member_weights),
                         member_weights, 1, "softmax_of_mean_logits")
@@ -695,16 +738,105 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
   list(fit = fit_fn, predict = predict_fn,
        predict_members = predict_members_fn,
        build_cache = function(state) .kumo_build_all(state, function(st, one, store) {
-         .chunk(st, one, store)
+         run <- .members_to_run(st$recipe$n_members, member_weights)
+         .finish(st, one, lapply(run, function(m) .one(st, one, m, store)))
        }))
 }
 
-# A cache carried on the fitted state was built once, possibly in another
-# session; otherwise build lazily, per `predict()` call, when asked to.
+# Where a `predict()` call's member caches come from: `store` is a
+# [member_cache_store()], or NULL to run uncached; `per_call` says it was
+# made for this call alone, so each member's entry is dropped once that
+# member has run every chunk; `soft` that `predict()` built it on its own
+# initiative, so a failed build leaves its member uncached.
+#
+# In order: a cache carried on the fitted state was built once, possibly
+# in another session, and is read as it is; `kv_cache = TRUE` builds one
+# per call, as asked; and `chunk_cache` builds one for a call of two or
+# more chunks -- where re-encoding the context per chunk is the cost --
+# when the memory estimate says it fits, or says it lowers the peak (see
+# `.chunk_cache_fits()`'s `or_lower`): a Kumo cache shrinks every pass.
 # @keywords internal
-.kumo_store <- function(state, kv_cache) {
-  member_cache_store_from(state$kv_caches) %||%
-    (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+.kumo_store <- function(state, kv_cache, chunk_cache = FALSE, ctx = NULL,
+                        task = NULL, n_rows = 0L, opts = list()) {
+  kept <- member_cache_store_from(state$kv_caches)
+  if (!is.null(kept)) return(list(store = kept, per_call = FALSE, soft = FALSE))
+  if (isTRUE(kv_cache)) {
+    return(list(store = member_cache_store(), per_call = TRUE, soft = FALSE))
+  }
+  if (isTRUE(chunk_cache) && isTRUE(ctx$net$supports_kv_cache) &&
+      n_rows > as.integer(opts$predict_chunk_size) &&
+      .chunk_cache_fits(ctx, task, state$n_train %||% nrow(state$X_train),
+                        n_rows, ncol(state$X_train), opts, or_lower = TRUE)) {
+    return(list(store = member_cache_store(), per_call = TRUE, soft = TRUE))
+  }
+  list(store = NULL, per_call = FALSE, soft = FALSE)
+}
+
+# The predictor's own knobs, as `estimate_peak_memory()` takes them.
+# @keywords internal
+.kumo_guard_opts <- function(n_estimators, predict_chunk_size, chunks,
+                             n_classes = NULL) {
+  c(list(n_estimators = n_estimators, predict_chunk_size = predict_chunk_size),
+    Filter(Negate(is.null), chunks),
+    if (!is.null(n_classes)) list(n_classes = n_classes))
+}
+
+# Every member over every chunk of `X`. Returns `finish(chunk, outs)` per
+# chunk, in row order, where `outs` holds `one(chunk, m, store, soft)` for
+# the members in `run`, in that order.
+#
+# With no cache, or one kept on the model, chunks are outer and members
+# inner, as they always were. A cache built for this call turns the loop
+# inside out, as `run_members_outer()` does for TabPFN: each member's
+# cache is built on its first chunk, used on every chunk and dropped from
+# the store before the next member's exists, so one is alive at a time
+# rather than one per member. Each chunk still combines the same member
+# outputs in the same order, so the order changes no arithmetic; what it
+# costs is holding every chunk's member outputs until the last member is
+# through.
+# @keywords internal
+.kumo_run_chunks <- function(X, chunk_size, run, one, finish, src) {
+  n <- nrow(X)
+  chunk_size <- as.integer(chunk_size)
+  starts <- if (n <= chunk_size) 1L else seq(1L, n, by = chunk_size)
+  slice <- function(k) {
+    if (length(starts) == 1L) return(X)
+    s <- starts[[k]]
+    X[s:min(s + chunk_size - 1L, n), , drop = FALSE]
+  }
+  store <- src$store
+  if (!isTRUE(src$per_call)) {
+    return(lapply(seq_along(starts), function(k) {
+      # A chunk's transients are torch allocations R's collector cannot
+      # see; see `chunk_apply()`.
+      if (k > 1L) collect_between_chunks()
+      chunk <- slice(k)
+      outs <- lapply(seq_along(run), function(j) {
+        if (j > 1L) collect_between_chunks()
+        one(chunk, run[[j]], store, src$soft)
+      })
+      finish(chunk, outs)
+    }))
+  }
+  outs <- rep(list(vector("list", length(run))), length(starts))
+  for (j in seq_along(run)) {
+    # The last member's cache was dropped below, but R's collector cannot
+    # see the torch allocation behind it, and the next build would
+    # otherwise allocate beside it.
+    if (j > 1L) collect_between_chunks()
+    for (k in seq_along(starts)) {
+      if (k > 1L) collect_between_chunks()
+      outs[[k]][j] <- list(one(slice(k), run[[j]], store, src$soft))
+    }
+    key <- as.character(run[[j]])
+    if (exists(key, envir = store, inherits = FALSE)) rm(list = key, envir = store)
+  }
+  res <- vector("list", length(starts))
+  for (k in seq_along(starts)) {
+    res[[k]] <- finish(slice(k), outs[[k]])
+    outs[k] <- list(NULL)
+  }
+  res
 }
 
 # Building every member's cache is what one prediction over a single
@@ -732,11 +864,13 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
 #' @keywords internal
 kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
                            predict_chunk_size = 1024L, kv_cache = FALSE,
+                           chunk_cache = TRUE,
                            save_peak_memory_factor = NULL,
                            row_chunk_size = NULL, col_chunk_size = NULL,
                            categorical_features = NULL,
                            member_weights = NULL) {
   net <- ctx$net; dev <- ctx$device
+  .check_chunk_cache(chunk_cache)
   member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
   n_q <- as.integer(ctx$config$num_quantiles)
   chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
@@ -755,28 +889,41 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
          categorical = categorical, recipe = rec)
   }
 
-  .grid <- function(state, X_query, caches = NULL, return_members = FALSE) {
+  # Member `m`'s quantile grid for one chunk, on the raw y scale.
+  .one <- function(state, X_query, m, caches, soft = FALSE) {
     rec <- state$recipe
-    run <- .members_to_run(rec$n_members, member_weights)
-    outs <- lapply(run, function(m) {
-      if (m > 1L) collect_between_chunks()
-      o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train,
-                            X_query, m, caches, chunks)
-      kumo_recipe_inverse(rec, o, m)
-    })
+    o <- .kumo_member_out(net, dev, rec, state$X_train, state$y_train,
+                          X_query, m, caches, chunks, soft = soft)
+    kumo_recipe_inverse(rec, o, m)
+  }
+
+  # One chunk's combined grid from its members' grids, in `run` order.
+  .grid <- function(state, outs, return_members = FALSE) {
+    run <- .members_to_run(state$recipe$n_members, member_weights)
     if (return_members) return(lapply(outs, as.matrix))
     as.matrix(kumo_recipe_reduce(
       outs, FALSE, weights = if (!is.null(member_weights)) member_weights[run]))
   }
 
+  # Per-chunk results of `finish(grid)`, in row order.
+  .run <- function(state, X, finish, return_members = FALSE) {
+    src <- .kumo_store(state, kv_cache, chunk_cache, ctx, "regression",
+                       nrow(X), .kumo_guard_opts(n_estimators, predict_chunk_size,
+                                                 chunks))
+    .kumo_run_chunks(X, predict_chunk_size,
+                     .members_to_run(state$recipe$n_members, member_weights),
+                     function(chunk, m, store, soft) .one(state, chunk, m, store, soft),
+                     function(chunk, outs) finish(.grid(state, outs, return_members)),
+                     src)
+  }
+
   predict_fn <- function(state, newdata, type = "mean",
                          quantiles = c(0.1, 0.5, 0.9), ...) {
     if (identical(type, "grid")) type <- "raw_quantiles"
-    caches <- .kumo_store(state, kv_cache)
-    res <- chunk_apply(as.matrix(newdata), predict_chunk_size, function(chunk) {
-      g <- .grid(state, chunk, caches)
+    X <- as.matrix(newdata)
+    res <- .stack_chunks(.run(state, X, function(g) {
       quantile_dist_stat(g, levels_, type, quantiles)
-    })
+    }), nrow(X))
     if (type %in% c("mean", "median")) return(as.numeric(res))
     if (type == "raw_quantiles") return(res)
     colnames(res) <- .quantile_colnames(quantiles)
@@ -787,10 +934,8 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
   # combines the grids level by level (a trimmed mean, or a weighted mean
   # with weights) and summarises the result. See [predict_members()].
   predict_members_fn <- function(state, newdata) {
-    caches <- .kumo_store(state, kv_cache)
-    grids <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
-                                  function(chunk) .grid(state, chunk, caches,
-                                                        return_members = TRUE))
+    grids <- .stack_member_chunks(.run(state, as.matrix(newdata), identity,
+                                       return_members = TRUE))
     index <- .members_to_run(state$recipe$n_members, member_weights)
     list(grids = grids, quantile_levels = levels_, member_index = index,
          member_weights = if (is.null(member_weights)) NULL else member_weights[index],
@@ -800,7 +945,8 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
   list(fit = fit_fn, predict = predict_fn,
        predict_members = predict_members_fn,
        build_cache = function(state) .kumo_build_all(state, function(st, one, store) {
-         .grid(st, one, store)
+         run <- .members_to_run(st$recipe$n_members, member_weights)
+         .grid(st, lapply(run, function(m) .one(st, one, m, store)))
        }),
        types = c("mean", "median", "quantiles", "grid"),
        quantile_levels = levels_)
@@ -1012,6 +1158,13 @@ kumo_describe <- function(config, task) {
 #'   persistent even with `kv_cache = FALSE`.
 #' * `col_chunk_size` slices the column axis of every column block,
 #'   chunked or not.
+#' * With a cache, the context is encoded on its own and each chunk of
+#'   query rows runs against it, so a pass holds `max(n_context, chunk)`
+#'   rows rather than their sum. A cache built for one `predict()` call
+#'   (`kv_cache = TRUE`, or the predictors' `chunk_cache`) is built, used
+#'   on every chunk and dropped a member at a time, so one member's is
+#'   persistent; one kept on the model by [tabfound_cache()]
+#'   (`opts$kv_cache_kept`) holds every member's.
 #'
 #' * Past 10 classes (`opts$n_classes`), every member runs its `T`
 #'   error-correcting sub-tasks as one batch, so every term -- the cache
@@ -1037,7 +1190,11 @@ kumo_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   tok <- max(1, min(n_features, 500))
   hc  <- tok + K
   n_q <- .resident_query(n_query, opts)
-  n   <- n_context + n_q
+  # With a cache, the context is encoded on its own and the query rows run
+  # against it afterwards, so no pass holds both: the larger of the two is
+  # resident, not their sum. This is why a cache lowers Kumo's peak.
+  cached <- isTRUE(opts$kv_cache) || isTRUE(opts$kv_cache_kept)
+  n   <- if (cached) max(n_context, n_q) else n_context + n_q
   # Kumo has no checkpoint default for either knob: absent is off.
   rows <- .stage_row_chunk(opts, list(inference_row_chunk_size = Inf))
   cc   <- min(tok, .stage_col_chunk(opts, config))
@@ -1067,8 +1224,11 @@ kumo_peak_terms <- function(n_context, n_query, n_features, opts, config) {
     list(name = "in-context learning", act = T_ * rc * E,
          res = if (chunked) T_ * n_context * E else 0, att = 0, copies = "icl")
   )
-  persistent <- if (isTRUE(opts$kv_cache)) n_est * cache
-                else if (chunked) cache else 0
+  # A cache kept on the model holds every member; one built for a single
+  # call (`kv_cache = TRUE`, or `chunk_cache`) is built, used and dropped
+  # a member at a time, so one is alive -- as with row chunking.
+  persistent <- if (isTRUE(opts$kv_cache_kept)) n_est * cache
+                else if (isTRUE(opts$kv_cache) || chunked) cache else 0
   list(stages = stages, persistent = persistent, n_estimators = n_est)
 }
 
