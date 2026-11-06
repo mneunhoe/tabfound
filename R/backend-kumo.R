@@ -779,8 +779,7 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
     })
     if (type %in% c("mean", "median")) return(as.numeric(res))
     if (type == "raw_quantiles") return(res)
-    colnames(res) <- paste0("q", format(quantiles, trim = TRUE,
-                                        drop0trailing = TRUE))
+    colnames(res) <- .quantile_colnames(quantiles)
     res
   }
 

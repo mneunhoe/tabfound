@@ -689,7 +689,7 @@ tabpfn_regressor <- function(ctx,
     }
     if (type == "quantiles") {
       q <- .common(state, newdata, quantiles = quantiles)$quantiles
-      colnames(q) <- paste0("q", format(quantiles, trim = TRUE, drop0trailing = TRUE))
+      colnames(q) <- .quantile_colnames(quantiles)
       return(q)
     }
     # type == "sample".

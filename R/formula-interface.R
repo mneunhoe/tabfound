@@ -391,12 +391,14 @@ tabfound.default <- function(x, ...) {
 #'   fitted on. Factor levels and column types are validated against the
 #'   training data and a clear error is raised if they do not match.
 #' @param type For classification, `"class"` (default) or `"prob"`. For
-#'   regression, `"mean"` (default), `"quantiles"`, `"grid"` or
-#'   `"sample"`, subject to what the backend supports.
+#'   regression, `"mean"` (default), `"median"`, `"quantiles"`, `"grid"`
+#'   or `"sample"`, subject to what the backend supports.
 #' @param ... Passed to the backend, e.g. `quantiles`.
 #' @return A tibble when tibble is available, otherwise a data frame:
-#'   `.pred_class` and `.pred_<level>` for classification, `.pred` (plus
-#'   `.pred_q<level>`) for regression.
+#'   `.pred_class` and `.pred_<level>` for classification. For regression,
+#'   `.pred` for `"mean"` and `"median"`, `.pred_q<level>` for
+#'   `"quantiles"` and `"grid"` (a repeated level gets a `_1`, `_2`, ...
+#'   suffix), and `.pred_1`, `.pred_2`, ... for `"sample"`.
 #' @export
 predict.tabfound_fit <- function(object, new_data, type = NULL, ...) {
   require_suggested("hardhat")
@@ -442,15 +444,26 @@ predict.tabfound_fit <- function(object, new_data, type = NULL, ...) {
     return(as_frame(list(.pred_class = factor(out, levels = as.character(levs)))))
   }
 
-  if (identical(type, "mean")) {
+  if (type %in% c("mean", "median")) {
     return(as_frame(list(.pred = as.numeric(out))))
   }
   # quantiles / grid / sample all come back as a matrix of one column per
-  # level or draw.
+  # level or draw. The backend leaves a grid's columns unnamed, but its
+  # levels are on the spec, so they get the same `q<level>` names a
+  # quantile request does.
   cols <- as.list(as.data.frame(out))
   nm <- colnames(out)
-  names(cols) <- if (is.null(nm)) paste0(".pred_", seq_along(cols))
-                 else paste0(".pred_", nm)
+  levels_ <- inner$spec$quantile_levels
+  if (is.null(nm) && identical(type, "grid") &&
+      length(levels_) == length(cols)) {
+    nm <- .quantile_colnames(levels_)
+  }
+  nm <- if (is.null(nm)) paste0(".pred_", seq_along(cols))
+        else paste0(".pred_", nm)
+  # A repeated level (`quantiles = c(0.5, 0.5)`) is a legitimate request,
+  # but a data frame cannot hold two columns of one name: tibble aborts
+  # and `data.frame()` renames silently. Repair it the same way in both.
+  names(cols) <- make.unique(nm, sep = "_")
   as_frame(cols)
 }
 
