@@ -156,10 +156,15 @@ fit_frame_expansion <- function(data, transform_text, transform_dates,
   text_cols <- if (isTRUE(transform_text)) {
     .text_columns(data, min_cardinality_for_text, declared)
   } else character()
-  text_fits <- stats::setNames(
+  text_encoded <- stats::setNames(
     lapply(text_cols, function(n) {
-      fit_string_encoder(data[[n]], n, n_components = text_n_components, seed = 0L)
+      .fit_string_encoder_encoded(data[[n]], n, n_components = text_n_components,
+                                  seed = 0L)
     }), text_cols)
+  text_fits <- lapply(text_encoded, `[[`, "fit")
+  # The fit has already encoded the training column; kept aside for the
+  # layout below rather than in the state, which outlives this call.
+  text_encoded <- lapply(text_encoded, `[[`, "encoded")
 
   expanded <- c(names(date_fits), names(text_fits))
   # A string column that is not text is categorical, and gets the level set
@@ -176,7 +181,8 @@ fit_frame_expansion <- function(data, transform_text, transform_dates,
          transform_dates = isTRUE(transform_dates)),
     class = "tabfound_expansion"
   )
-  out <- .assemble_expansion(data, state, fitting = TRUE)
+  out <- .assemble_expansion(data, state, fitting = TRUE,
+                             text_encoded = text_encoded)
   state$output_names <- names(out)
   list(data = out, state = state)
 }
@@ -227,9 +233,10 @@ transform_frame_expansion <- function(data, state) {
 
 # Lay out one frame under a state: convert durations in place, code
 # leftover strings against their training levels, drop the expanded
-# columns, and append their features -- dates first, then text.
+# columns, and append their features -- dates first, then text. At fit,
+# `text_encoded` carries the text blocks the fit already computed.
 # @keywords internal
-.assemble_expansion <- function(data, state, fitting) {
+.assemble_expansion <- function(data, state, fitting, text_encoded = NULL) {
   for (n in intersect(state$durations, names(data))) {
     if (.is_duration(data[[n]])) data[[n]] <- duration_seconds(data[[n]])
   }
@@ -272,7 +279,7 @@ transform_frame_expansion <- function(data, state) {
       transform_datetime_encoder(data[[n]], state$dates[[n]])
     }),
     lapply(names(state$text), function(n) {
-      transform_string_encoder(data[[n]], state$text[[n]])
+      text_encoded[[n]] %||% transform_string_encoder(data[[n]], state$text[[n]])
     })
   )
   if (!length(blocks)) return(kept)
