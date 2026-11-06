@@ -20,7 +20,9 @@ kumo_kv_cache(
 
 \item{n_features}{Columns it was built for.}
 
-\item{categorical_mask}{The member's categorical flags.}
+\item{categorical_mask}{The member's categorical flags: a logical
+vector, or a logical matrix with a row per leading batch entry when
+several members with different flags were encoded together.}
 }
 \description{
 Context rows never attend to query rows anywhere in the network: the

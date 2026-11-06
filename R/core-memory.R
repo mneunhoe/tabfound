@@ -1086,7 +1086,9 @@ DTYPE_BYTES <- 4
 #'   `predict_chunk_size`, `row_chunk_size`, `col_chunk_size`. Also
 #'   `n_classes`, the classes a classifier is fitted on: Kumo Tabular runs
 #'   more than 10 as several sub-tasks in one batch, which multiplies its
-#'   peak. `fit()` and `predict()` pass it themselves.
+#'   peak. `fit()` and `predict()` pass it themselves. And Kumo's
+#'   `member_batch_size`, the members an uncached pass stacks into one
+#'   forward, which multiplies its transient terms (absent, one).
 #' @param backend Optional backend name, when detection from the config
 #'   is ambiguous.
 #' @param device Device the run will use. Constants are per-device;
@@ -1167,8 +1169,11 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
     weights_source <- "unknown (not counted)"
   }
 
+  # The ensemble envelope counts forward passes, which is the member count
+  # unless a backend runs several members per pass (Kumo's
+  # `member_batch_size`) and says so.
   assembled <- .peak_from_terms(terms$stages, weights, persistent, co, spmf,
-                                n_estimators = n_est)
+                                n_estimators = terms$n_passes %||% n_est)
   stage_bytes <- assembled$stage_bytes
   transient <- assembled$transient
   peak <- assembled$peak
@@ -1188,7 +1193,8 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                                         c("n_estimators", "kv_cache",
                                           "save_peak_memory_factor",
                                           "predict_chunk_size",
-                                          "row_chunk_size", "col_chunk_size"))],
+                                          "row_chunk_size", "col_chunk_size",
+                                          "member_batch_size"))],
     weights_bytes      = weights,
     weights_source     = weights_source,
     persistent_bytes   = persistent,

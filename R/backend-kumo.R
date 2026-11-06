@@ -322,7 +322,10 @@ kumo_model <- torch::nn_module(
 
   .prepare = function(x, y, categorical_mask) {
     if (!inherits(categorical_mask, "torch_tensor")) {
-      categorical_mask <- torch::torch_tensor(as.logical(categorical_mask),
+      # A vector for one member, or a `[B, C]` matrix for several stacked
+      # on the leading axis; `as.logical()` would drop the matrix's shape.
+      storage.mode(categorical_mask) <- "logical"
+      categorical_mask <- torch::torch_tensor(categorical_mask,
                                               dtype = torch::torch_bool(),
                                               device = x$device)
     }
@@ -395,10 +398,18 @@ kumo_model <- torch::nn_module(
     icl_kv <- self$icl_block(self$row_project(enc$reps), p$y, record = TRUE,
                              rows = row_chunk_size,
                              factor = save_peak_memory_factor)
+    # One member's flags are one row however many sub-tasks it runs; a
+    # group of members stacked on the leading axis (`.kumo_group_out()`)
+    # keeps a row per batch entry.
+    flags <- as.matrix(p$mask$reshape(c(-1L, x$size(x$dim())))$cpu())
+    if (nrow(flags) > 1L && any(flags != flags[rep(1L, nrow(flags)), , drop = FALSE])) {
+      storage.mode(flags) <- "logical"
+    } else {
+      flags <- as.logical(flags[1, ])
+    }
     kumo_kv_cache(enc$impute_mean, enc$col_kv, icl_kv,
                   n_train = x$size(x$dim() - 1L), n_features = x$size(x$dim()),
-                  categorical_mask = as.logical(
-                    p$mask$reshape(c(-1L, x$size(x$dim())))[1, ]$cpu()))
+                  categorical_mask = flags)
   },
 
   # Predict query rows against a [kumo_kv_cache()].
@@ -453,14 +464,17 @@ kumo_model <- torch::nn_module(
 #' @param impute_mean,col_kv,icl_kv See above.
 #' @param n_train Context rows it was built from.
 #' @param n_features Columns it was built for.
-#' @param categorical_mask The member's categorical flags.
+#' @param categorical_mask The member's categorical flags: a logical
+#'   vector, or a logical matrix with a row per leading batch entry when
+#'   several members with different flags were encoded together.
 #' @keywords internal
 kumo_kv_cache <- function(impute_mean, col_kv, icl_kv, n_train, n_features,
                           categorical_mask) {
   structure(
     list(impute_mean = impute_mean, col_kv = col_kv, icl_kv = icl_kv,
          n_train = as.integer(n_train), n_features = as.integer(n_features),
-         categorical_mask = as.logical(categorical_mask)),
+         categorical_mask = if (is.matrix(categorical_mask)) categorical_mask
+                            else as.logical(categorical_mask)),
     class = "kumo_kv_cache"
   )
 }
@@ -506,24 +520,12 @@ print.kumo_kv_cache <- function(x, ...) {
 .kumo_member_out <- function(net, dev, rec, X_train, y_train, X_query, m,
                              cache_store = NULL, chunks = list(),
                              soft = FALSE) {
-  run <- function(...) {
-    do.call(net, c(list(...), list(row_chunk_size = chunks$row_chunk_size,
-                                   save_peak_memory_factor = chunks$save_peak_memory_factor,
-                                   col_chunk_size = chunks$col_chunk_size)))
-  }
+  run <- function(...) .kumo_run_net(net, chunks, ...)
   book <- rec$target$codebooks[[m]]
   tasks <- if (is.null(book)) 1L else nrow(book)
   lead <- function(x) x$to(device = dev)$unsqueeze(1L)$expand(c(tasks, -1L, -1L))
-  target <- function() {
-    yt <- kumo_recipe_target(rec, y_train, m)
-    if (is.null(book)) return(yt$to(device = dev)$unsqueeze(1L))
-    code <- as.integer(yt)
-    torch::torch_tensor(book[, code + 1L, drop = FALSE], dtype = torch::torch_long(),
-                        device = dev)
-  }
-  fold <- function(out) {
-    if (is.null(book)) out[1, , ]$cpu() else .kumo_ecoc_scores(out, book)$cpu()
-  }
+  target <- function() .kumo_member_target(rec, y_train, m, dev)
+  fold <- function(out) .kumo_member_fold(out, book)
   build <- function() {
     mem <- kumo_recipe_member(rec, X_train, m)
     torch::with_no_grad(net$build_kv_cache(
@@ -544,6 +546,87 @@ print.kumo_kv_cache <- function(x, ...) {
                                  kv_cache = cache))
   fold(out)
 }
+
+# The network call every member makes, with the predictor's chunking.
+# @keywords internal
+.kumo_run_net <- function(net, chunks, ...) {
+  do.call(net, c(list(...), list(row_chunk_size = chunks$row_chunk_size,
+                                 save_peak_memory_factor = chunks$save_peak_memory_factor,
+                                 col_chunk_size = chunks$col_chunk_size)))
+}
+
+# Member `m`'s context target on the device, `[T, Rt]`: one row, or one
+# per error-correcting sub-task, each relabelled by the member's codebook.
+# @keywords internal
+.kumo_member_target <- function(rec, y_train, m, dev) {
+  book <- rec$target$codebooks[[m]]
+  yt <- kumo_recipe_target(rec, y_train, m)
+  if (is.null(book)) return(yt$to(device = dev)$unsqueeze(1L))
+  code <- as.integer(yt)
+  torch::torch_tensor(book[, code + 1L, drop = FALSE], dtype = torch::torch_long(),
+                      device = dev)
+}
+
+# A member's `[T, n, out]` network output as its `[n, out]` answer on the
+# CPU: the one task's, or the sub-tasks folded into class scores.
+# @keywords internal
+.kumo_member_fold <- function(out, book) {
+  if (is.null(book)) out[1, , ]$cpu() else .kumo_ecoc_scores(out, book)$cpu()
+}
+
+# Several members' uncached outputs from one forward pass.
+#
+# Every member is `[R, C]` -- the recipe cuts each to the same column
+# count -- and they differ only in their values, their target and their
+# categorical flags, all of which stack. So the members of `ms` go through
+# the network together on its leading axis: their rows (each repeated
+# over its error-correcting sub-tasks, if it has any) are stacked into
+# `[sum(T), R, C]`, their targets into `[sum(T), Rt]` and their flags
+# into a `[sum(T), C]` mask, and the output is split back into members
+# before each is folded. A member's answer moves only by the float32
+# rounding a different batch shape brings. One member is
+# [.kumo_member_out()] itself, unchanged.
+#
+# Returns the members' answers, in the order of `ms`.
+# @keywords internal
+.kumo_group_out <- function(net, dev, rec, X_train, y_train, X_query, ms,
+                            chunks = list()) {
+  if (length(ms) == 1L) {
+    return(list(.kumo_member_out(net, dev, rec, X_train, y_train, X_query,
+                                 ms, chunks = chunks)))
+  }
+  X_all <- rbind(X_train, X_query)
+  mems <- lapply(ms, function(m) kumo_recipe_member(rec, X_all, m))
+  # Every member has the recipe's column count; a group that did not would
+  # not stack, and runs a member at a time instead.
+  if (length(unique(lapply(mems, function(mm) mm$x$shape))) > 1L) {
+    rm(mems)
+    return(lapply(ms, function(m) .kumo_member_out(net, dev, rec, X_train, y_train,
+                                                   X_query, m, chunks = chunks)))
+  }
+  books <- lapply(ms, function(m) rec$target$codebooks[[m]])
+  tasks <- vapply(books, function(b) if (is.null(b)) 1L else nrow(b), integer(1))
+  x <- torch::torch_cat(lapply(seq_along(ms), function(j) {
+    mems[[j]]$x$to(device = dev)$unsqueeze(1L)$expand(c(tasks[[j]], -1L, -1L))
+  }), dim = 1L)
+  y <- torch::torch_cat(lapply(ms, function(m) {
+    .kumo_member_target(rec, y_train, m, dev)
+  }), dim = 1L)
+  mask <- do.call(rbind, lapply(seq_along(ms), function(j) {
+    matrix(as.logical(mems[[j]]$categorical_mask), nrow = tasks[[j]],
+           ncol = length(mems[[j]]$categorical_mask), byrow = TRUE)
+  }))
+  mask <- torch::torch_tensor(mask, dtype = torch::torch_bool(), device = dev)
+  rm(mems)
+  out <- torch::with_no_grad(.kumo_run_net(net, chunks, x, y, mask))
+  rm(x, y, mask)
+  ends <- cumsum(tasks)
+  lapply(seq_along(ms), function(j) {
+    .kumo_member_fold(out$narrow(1L, ends[[j]] - tasks[[j]] + 1L, tasks[[j]]),
+                      books[[j]])
+  })
+}
+
 
 #' Fold error-correcting sub-task logits into class scores
 #'
@@ -650,6 +733,26 @@ print.kumo_kv_cache <- function(x, ...) {
 #'   the trimmed mean with a weighted mean: trimming drops members by
 #'   rank, which has no weighted counterpart in the reference. `NULL` (the
 #'   default) is the reference's combine, unchanged.
+#' @param member_batch_size Members per forward pass when no cache is in
+#'   use. Every member is the same `[rows, columns]` shape, so several can
+#'   share one forward on the network's leading axis, as the
+#'   error-correcting sub-tasks already do; that is faster, most of all at
+#'   small contexts, but a group's peak memory grows with its size. `NULL`
+#'   (the default) stacks members only where one member's pass is small
+#'   -- context rows plus one chunk of query rows, times the sub-tasks
+#'   above 10 classes, at most 4,000 -- since a larger pass already keeps
+#'   the CPU busy and gains nothing from company (1.2 to 1.6 times as fast
+#'   at 500 to 2,000 context rows with 8 members on the small regressor,
+#'   no faster at 4,000). There it takes the largest group whose estimated
+#'   peak (see [estimate_peak_memory()]) leaves comfortable room in the
+#'   memory available now, and one member at a time -- the behaviour
+#'   before this argument existed -- when no larger group does, or when
+#'   there is no estimate to go on (a device without calibrated
+#'   constants, which today is every device but the CPU). A whole
+#'   number forces that group size, capped at the members run; `1` is one
+#'   member at a time. A member's answer moves only by float32 rounding.
+#'   A call that uses a cache (`kv_cache`, `chunk_cache`, or one kept by
+#'   [tabfound_cache()]) runs one member at a time whatever this says.
 #' @keywords internal
 kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
                             predict_chunk_size = 1024L, kv_cache = FALSE,
@@ -657,9 +760,11 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
                             save_peak_memory_factor = NULL,
                             row_chunk_size = NULL, col_chunk_size = NULL,
                             categorical_features = NULL,
-                            member_weights = NULL) {
+                            member_weights = NULL,
+                            member_batch_size = NULL) {
   net <- ctx$net; dev <- ctx$device
   .check_chunk_cache(chunk_cache)
+  member_batch_size <- .check_member_batch_size(member_batch_size)
   member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
   max_classes <- as.integer(ctx$config$num_classes)
   chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
@@ -690,6 +795,15 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
     kumo_recipe_unshift(rec, o[, 1:K, drop = FALSE], m)
   }
 
+  # The class scores of members `ms` from one forward pass, uncached.
+  .group <- function(state, X_query, ms) {
+    rec <- state$recipe
+    K <- length(rec$target$classes)
+    os <- .kumo_group_out(net, dev, rec, state$X_train, state$y_train_int,
+                          X_query, ms, chunks)
+    Map(function(o, m) kumo_recipe_unshift(rec, o[, 1:K, drop = FALSE], m), os, ms)
+  }
+
   # One chunk's answer from its members' scores, in `run` order.
   .finish <- function(state, X_query, outs, return_members = FALSE) {
     rec <- state$recipe
@@ -713,14 +827,22 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
 
   # Per-chunk results, in row order.
   .run <- function(state, X, return_members = FALSE) {
+    opts <- .kumo_guard_opts(n_estimators, predict_chunk_size, chunks,
+                             length(state$class_levels))
     src <- .kumo_store(state, kv_cache, chunk_cache, ctx, "classification",
-                       nrow(X), .kumo_guard_opts(n_estimators, predict_chunk_size,
-                                                 chunks, length(state$class_levels)))
-    .kumo_run_chunks(X, predict_chunk_size,
-                     .members_to_run(state$recipe$n_members, member_weights),
+                       nrow(X), opts)
+    run <- .members_to_run(state$recipe$n_members, member_weights)
+    batch <- if (is.null(src$store)) {
+      .kumo_member_batch(member_batch_size, ctx, "classification",
+                         state$n_train %||% nrow(state$X_train), nrow(X),
+                         ncol(state$X_train), opts, length(run))
+    } else 1L
+    .kumo_run_chunks(X, predict_chunk_size, run,
                      function(chunk, m, store, soft) .one(state, chunk, m, store, soft),
                      function(chunk, outs) .finish(state, chunk, outs, return_members),
-                     src)
+                     src,
+                     group = function(chunk, ms) .group(state, chunk, ms),
+                     batch = batch)
   }
 
   predict_fn <- function(state, newdata, type = "class", ...) {
@@ -788,6 +910,98 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
     if (!is.null(n_classes)) list(n_classes = n_classes))
 }
 
+# `member_batch_size`: NULL, or one whole number of at least 1.
+# @keywords internal
+.check_member_batch_size <- function(member_batch_size) {
+  if (is.null(member_batch_size)) return(NULL)
+  v <- member_batch_size
+  if (!is.numeric(v) || length(v) != 1L || is.na(v) || !is.finite(v) ||
+      v < 1 || v != round(v)) {
+    cli::cli_abort("{.arg member_batch_size} must be {.code NULL} or a whole \\
+                    number of at least 1.")
+  }
+  as.integer(v)
+}
+
+# `n` members in groups of at most `batch`, as evenly as that allows:
+# eight members at five a group run as 4 + 4, not 5 + 3, so no group is
+# larger than it needs to be. Indices into the members run.
+# @keywords internal
+.kumo_member_groups <- function(n, batch) {
+  batch <- max(1L, min(as.integer(batch), n))
+  if (n < 1L) return(list())
+  k <- ceiling(n / batch)
+  unname(split(seq_len(n), sort(rep(seq_len(k), length.out = n))))
+}
+
+# Error-correcting sub-tasks per member for `n_classes` classes, as
+# `.kumo_ecoc_codebook()` counts them; 1 at or below the network's own
+# `num_classes`.
+# @keywords internal
+.kumo_task_count <- function(n_classes, num_classes) {
+  K  <- suppressWarnings(as.numeric(n_classes %||% NA))
+  Kn <- as.numeric(num_classes %||% 0)
+  if (Kn > 0 && isTRUE(K > Kn)) {
+    max(ceiling(K / (Kn - 1)), 4 * ceiling(log(K) / log(Kn)))
+  } else 1
+}
+
+# Rows in one member's pass (sub-tasks counted) past which `NULL` stops
+# stacking members. Stacking pays where a single pass is too small to keep
+# the threads busy, and the gain falls with the pass: with 8 members of
+# the small regressor, 1,024 query rows and p = 10 on a 12-thread M4 Max,
+# the best group ran 1.39x as fast at 500 context rows, 1.55x at 1,000 and
+# 1.23x at 2,000, but 0.94-1.06x at 4,000 -- while a group of three there
+# still took the peak from 5.2 GB to 8.5 GB. Between 3,024 and 5,024 rows
+# a pass, then; a forced `member_batch_size` is not held to it.
+.kumo_batch_rows_max <- 4000
+
+# How many members an uncached `predict()` call runs per forward pass.
+#
+# `size` given is used as it is, capped at the members run. NULL stacks
+# nothing where one member's pass is already large enough not to gain
+# (`.kumo_batch_rows_max`), and otherwise asks the memory estimate: the
+# largest group whose estimated peak leaves the call
+# comfortable room (verdict "ok") on what is available now. A group of one
+# is always possible and is the answer whenever the estimate cannot judge
+# -- a device with no constants, a machine it cannot probe -- or no larger
+# group fits, so batching never raises the risk of running out.
+# @keywords internal
+.kumo_member_batch <- function(size, ctx, task, n_context, n_query, n_features,
+                               opts, n_run) {
+  n_run <- as.integer(n_run)
+  if (n_run <= 1L) return(1L)
+  if (!is.null(size)) return(min(as.integer(size), n_run))
+  rows <- n_context + min(n_query, as.numeric(opts$predict_chunk_size %||% Inf))
+  tasks <- .kumo_task_count(opts$n_classes, ctx$config$num_classes)
+  if (!isTRUE(tasks * rows <= .kumo_batch_rows_max)) return(1L)
+  est <- function(g, available = NULL) tryCatch(
+    do.call(estimate_peak_memory,
+            c(list(ctx$config, n_context = n_context, n_query = n_query,
+                   n_features = n_features, backend = ctx$backend$name,
+                   device = ctx$device, task = task, kv_cache = FALSE,
+                   member_batch_size = g, available = available),
+              opts)),
+    error = function(e) NULL,
+    warning = function(w) NULL
+  )
+  # Probe the machine once; every candidate is judged against that.
+  first <- est(n_run)
+  if (is.null(first) || !isTRUE(is.finite(first$system_avail_bytes))) return(1L)
+  if (identical(first$verdict, "ok")) return(n_run)
+  avail <- first$system_avail_bytes
+  # Only the group sizes that change the grouping: 8 members at 7, 6 or 5
+  # a group all run as two groups of four.
+  sizes <- unique(vapply(seq_len(n_run - 1L), function(g) {
+    max(lengths(.kumo_member_groups(n_run, g)))
+  }, integer(1)))
+  for (g in sort(setdiff(sizes, c(1L, n_run)), decreasing = TRUE)) {
+    e <- est(g, avail)
+    if (!is.null(e) && identical(e$verdict, "ok")) return(g)
+  }
+  1L
+}
+
 # Every member over every chunk of `X`. Returns `finish(chunk, outs)` per
 # chunk, in row order, where `outs` holds `one(chunk, m, store, soft)` for
 # the members in `run`, in that order.
@@ -801,8 +1015,14 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
 # outputs in the same order, so the order changes no arithmetic; what it
 # costs is holding every chunk's member outputs until the last member is
 # through.
+#
+# With no cache at all, `group(chunk, ms)` -- the answers of the members
+# `ms` from one forward pass, see `.kumo_group_out()` -- runs the members
+# `batch` at a time. A cache keeps the member-at-a-time loop: a group
+# would hold `batch` members' caches at once.
 # @keywords internal
-.kumo_run_chunks <- function(X, chunk_size, run, one, finish, src) {
+.kumo_run_chunks <- function(X, chunk_size, run, one, finish, src,
+                             group = NULL, batch = 1L) {
   n <- nrow(X)
   chunk_size <- as.integer(chunk_size)
   starts <- if (n <= chunk_size) 1L else seq(1L, n, by = chunk_size)
@@ -813,15 +1033,25 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
   }
   store <- src$store
   if (!isTRUE(src$per_call)) {
+    groups <- if (is.null(store) && is.function(group)) {
+      .kumo_member_groups(length(run), batch)
+    }
     return(lapply(seq_along(starts), function(k) {
       # A chunk's transients are torch allocations R's collector cannot
       # see; see `chunk_apply()`.
       if (k > 1L) collect_between_chunks()
       chunk <- slice(k)
-      outs <- lapply(seq_along(run), function(j) {
-        if (j > 1L) collect_between_chunks()
-        one(chunk, run[[j]], store, src$soft)
-      })
+      outs <- if (length(groups) && length(groups) < length(run)) {
+        unlist(lapply(seq_along(groups), function(g) {
+          if (g > 1L) collect_between_chunks()
+          group(chunk, run[groups[[g]]])
+        }), recursive = FALSE)
+      } else {
+        lapply(seq_along(run), function(j) {
+          if (j > 1L) collect_between_chunks()
+          one(chunk, run[[j]], store, src$soft)
+        })
+      }
       finish(chunk, outs)
     }))
   }
@@ -875,9 +1105,11 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
                            save_peak_memory_factor = NULL,
                            row_chunk_size = NULL, col_chunk_size = NULL,
                            categorical_features = NULL,
-                           member_weights = NULL) {
+                           member_weights = NULL,
+                           member_batch_size = NULL) {
   net <- ctx$net; dev <- ctx$device
   .check_chunk_cache(chunk_cache)
+  member_batch_size <- .check_member_batch_size(member_batch_size)
   member_weights <- .check_member_weights(member_weights, as.integer(n_estimators))
   n_q <- as.integer(ctx$config$num_quantiles)
   chunks <- list(row_chunk_size = row_chunk_size, col_chunk_size = col_chunk_size,
@@ -904,6 +1136,14 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
     kumo_recipe_inverse(rec, o, m)
   }
 
+  # The quantile grids of members `ms` from one forward pass, uncached.
+  .group <- function(state, X_query, ms) {
+    rec <- state$recipe
+    os <- .kumo_group_out(net, dev, rec, state$X_train, state$y_train,
+                          X_query, ms, chunks)
+    Map(function(o, m) kumo_recipe_inverse(rec, o, m), os, ms)
+  }
+
   # One chunk's combined grid from its members' grids, in `run` order.
   .grid <- function(state, outs, return_members = FALSE) {
     run <- .members_to_run(state$recipe$n_members, member_weights)
@@ -914,14 +1154,21 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
 
   # Per-chunk results of `finish(grid)`, in row order.
   .run <- function(state, X, finish, return_members = FALSE) {
+    opts <- .kumo_guard_opts(n_estimators, predict_chunk_size, chunks)
     src <- .kumo_store(state, kv_cache, chunk_cache, ctx, "regression",
-                       nrow(X), .kumo_guard_opts(n_estimators, predict_chunk_size,
-                                                 chunks))
-    .kumo_run_chunks(X, predict_chunk_size,
-                     .members_to_run(state$recipe$n_members, member_weights),
+                       nrow(X), opts)
+    run <- .members_to_run(state$recipe$n_members, member_weights)
+    batch <- if (is.null(src$store)) {
+      .kumo_member_batch(member_batch_size, ctx, "regression",
+                         state$n_train %||% nrow(state$X_train), nrow(X),
+                         ncol(state$X_train), opts, length(run))
+    } else 1L
+    .kumo_run_chunks(X, predict_chunk_size, run,
                      function(chunk, m, store, soft) .one(state, chunk, m, store, soft),
                      function(chunk, outs) finish(.grid(state, outs, return_members)),
-                     src)
+                     src,
+                     group = function(chunk, ms) .group(state, chunk, ms),
+                     batch = batch)
   }
 
   predict_fn <- function(state, newdata, type = "mean",
@@ -1176,6 +1423,11 @@ kumo_describe <- function(config, task) {
 #' * Past 10 classes (`opts$n_classes`), every member runs its `T`
 #'   error-correcting sub-tasks as one batch, so every term -- the cache
 #'   included -- is `T` times as large.
+#' * Uncached, `opts$member_batch_size` members share a forward pass on
+#'   the same leading axis, so every term of a pass is that many times as
+#'   large again (a row-chunked pass's own cache included). The predictors
+#'   pick the largest group this keeps comfortable; a cached call runs one
+#'   member at a time and is not multiplied.
 #'
 #' Columns are capped at the recipe's 500; categorical count columns,
 #' which can add up to one per categorical, are not known here.
@@ -1213,30 +1465,42 @@ kumo_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   # layer, cut to the heads the query rows use.
   cache <- L * tok * M * D * 2 + tok + Li * 2 * n_context * E * kvh / He
 
-  # Error-correcting sub-tasks, as `.kumo_ecoc_codebook()` counts them.
-  K  <- suppressWarnings(as.numeric(opts$n_classes %||% NA))
-  Kn <- as.numeric(config$num_classes %||% 0)
-  T_ <- if (Kn > 0 && isTRUE(K > Kn)) {
-    max(ceiling(K / (Kn - 1)), 4 * ceiling(log(K) / log(Kn)))
-  } else 1
+  T_ <- .kumo_task_count(opts$n_classes, config$num_classes)
   cache <- T_ * cache
+
+  # Uncached, the members run `member_batch_size` to a forward pass,
+  # stacked on the leading axis like the sub-tasks (`.kumo_group_out()`),
+  # so every term of a pass -- and a row-chunked pass's own cache -- holds
+  # that many members. A cache keeps the member-at-a-time loop.
+  G <- suppressWarnings(as.numeric(opts$member_batch_size %||% 1))
+  G <- if (cached || !isTRUE(is.finite(G))) 1 else max(1, min(G, n_est))
+  B <- T_ * G
 
   stages <- list(
     list(name = "column summaries", act = 0, res = 0, att = 0,
-         prepass = if (chunked) T_ * n_context * cc * D else 0),
-    list(name = "column embedding", act = T_ * rc * cc * D,
-         res = if (chunked) T_ * n_context * hc * D else 0, att = 0),
-    list(name = "row interaction", act = T_ * rc * hc * D,
-         res = if (chunked) T_ * n_context * hc * D else 0, att = 0),
-    list(name = "in-context learning", act = T_ * rc * E,
-         res = if (chunked) T_ * n_context * E else 0, att = 0, copies = "icl")
+         prepass = if (chunked) B * n_context * cc * D else 0),
+    list(name = "column embedding", act = B * rc * cc * D,
+         res = if (chunked) B * n_context * hc * D else 0, att = 0),
+    list(name = "row interaction", act = B * rc * hc * D,
+         res = if (chunked) B * n_context * hc * D else 0, att = 0),
+    list(name = "in-context learning", act = B * rc * E,
+         res = if (chunked) B * n_context * E else 0, att = 0, copies = "icl")
   )
   # A cache kept on the model holds every member; one built for a single
   # call (`kv_cache = TRUE`, or `chunk_cache`) is built, used and dropped
-  # a member at a time, so one is alive -- as with row chunking.
+  # a member at a time, so one is alive -- as with row chunking, where a
+  # group of members shares one forward and so one cache of `G` members.
   persistent <- if (isTRUE(opts$kv_cache_kept)) n_est * cache
-                else if (isTRUE(opts$kv_cache) || chunked) cache else 0
-  list(stages = stages, persistent = persistent, n_estimators = n_est)
+                else if (isTRUE(opts$kv_cache)) cache
+                else if (chunked) G * cache else 0
+  # The ensemble envelope is the allocator's growth over successive
+  # forward passes, and a group is one pass: eight members at four a
+  # group are two passes, not eight. The live set is linear in `G` --
+  # measured on the small regressor at 1,000 context rows, four members
+  # stacked need a factor of at least 3.7 (exponent 0.94) to stay under
+  # the estimate -- so `G` multiplies the terms as it stands.
+  list(stages = stages, persistent = persistent, n_estimators = n_est,
+       n_passes = ceiling(n_est / G))
 }
 
 
