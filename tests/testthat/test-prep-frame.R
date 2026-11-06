@@ -198,6 +198,13 @@ test_that("the engine API expands at fit and replays at predict", {
   # A matrix cannot carry text or dates, so once they were expanded it is
   # refused rather than guessed into the expanded layout.
   expect_error(predict(m, as.matrix(X[1:4, c("lvl", "x")])), "data frame")
+  # The expanded layout is renamed to the fitted names by position, so a
+  # reordered or swapped column has to be refused before it is laid out,
+  # as it is on a fit with nothing to expand.
+  expect_error(predict(m, X[1:4, rev(names(X))]), "different order")
+  swapped <- X[1:4, ]; names(swapped)[names(swapped) == "x"] <- "z"
+  expect_error(predict(m, swapped), "Missing: x")
+  expect_error(predict(m, cbind(X[1:4, ], z = 1)), "Unexpected: z")
   # An explicit FALSE wins over the recipe.
   # Off, it is one -- and the warning it has always had comes back.
   expect_warning(

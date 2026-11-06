@@ -607,24 +607,38 @@ predict.tabfound_regressor <- function(object, newdata,
            {.fn fit} time."
     ))
   }
-  train_nm <- object$state$feature_names
-  new_nm   <- colnames(newdata)
+  .check_column_names(object$state$feature_names, colnames(newdata))
+}
+
+# The name half of the schema check, on its own so the frame expansion can
+# run it on the raw columns: once a date or text column has been expanded,
+# the expanded frame is renamed by position, and a check after that would
+# pass whatever the columns had been called.
+# @keywords internal
+.check_column_names <- function(train_nm, new_nm) {
   if (is.null(train_nm) || is.null(new_nm) || identical(train_nm, new_nm)) {
     return(invisible(TRUE))
   }
   if (setequal(train_nm, new_nm)) {
+    # Quoted and comma-joined by hand: `{.val}` would collapse the vector
+    # with an "and", which is not code anyone can paste.
+    cols <- paste0('"', train_nm, '"', collapse = ", ")
     cli::cli_abort(c(
       "{.arg newdata} has the training columns in a different order.",
       x = "Column {which(train_nm != new_nm)[1]} is \\
            {.field {new_nm[which(train_nm != new_nm)[1]]}}, but was \\
            {.field {train_nm[which(train_nm != new_nm)[1]]}} at fit time.",
-      i = "Reorder with {.code newdata[, c({.val {train_nm}})]}."
+      i = "Reorder with {.code newdata[, c({cols})]}."
     ))
   }
+  # An expanded fit reaches here with only extra columns, which the count
+  # check would otherwise have caught first; say only what applies.
+  missing <- setdiff(train_nm, new_nm)
+  extra <- setdiff(new_nm, train_nm)
   cli::cli_abort(c(
     "{.arg newdata} does not have the columns the model was fitted on.",
-    x = "Missing: {.field {setdiff(train_nm, new_nm)}}.",
-    x = "Unexpected: {.field {setdiff(new_nm, train_nm)}}."
+    x = if (length(missing)) "Missing: {.field {missing}}.",
+    x = if (length(extra)) "Unexpected: {.field {extra}}."
   ))
 }
 

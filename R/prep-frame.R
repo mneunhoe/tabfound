@@ -197,6 +197,10 @@ transform_frame_expansion <- function(data, state) {
       "{.arg newdata} is missing column{?s} the model expanded at fit: {.field {missing_cols}}."
     ))
   }
+  # Refused the way an unexpanded fit refuses them: the layout below is
+  # renamed to the fitted names by position, so a reordered or swapped
+  # column would otherwise arrive under a training column's name.
+  .check_column_names(state$input_names, names(data))
   if (state$transform_dates) {
     new_instants <- names(data)[vapply(data, .is_instant, logical(1))]
     surprise <- setdiff(intersect(new_instants, state$input_names), names(state$dates))
