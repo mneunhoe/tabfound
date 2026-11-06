@@ -4,7 +4,12 @@
 \alias{transform_tfidf}
 \title{Apply a fitted tf-idf vectorizer}
 \usage{
-transform_tfidf(docs, fit)
+transform_tfidf(docs, fit, ng = .char_wb_ngrams(docs))
+}
+\arguments{
+\item{docs}{Character vector, \code{NA} already replaced by \code{""}.}
+
+\item{ng}{\code{.char_wb_ngrams(docs)}, when the caller already has it.}
 }
 \value{
 A \code{dgCMatrix}, documents by vocabulary.
