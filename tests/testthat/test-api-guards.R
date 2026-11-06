@@ -93,6 +93,8 @@ test_that("predict checks new data against the fitted schema", {
   expect_error(predict(m, cbind(X, d = 1)), "4 columns")
   # The one that used to be silent: same columns, different order.
   expect_error(predict(m, X[, c("b", "a", "c")]), "different order")
+  # And the fix it suggests is code that runs.
+  expect_error(predict(m, X[, c("b", "a", "c")]), 'c("a", "b", "c")', fixed = TRUE)
   expect_error(predict(m, `colnames<-`(X, c("a", "b", "z"))), "Missing")
 })
 
