@@ -16,7 +16,10 @@ fit(object, X, y, ...)
 \item{...}{Unused.}
 }
 \value{
-A fitted copy of \code{object}.
+A fitted copy of \code{object}. For TabICL it also carries
+\verb{$n_members}, the number of ensemble members the fit built: fewer
+than \code{n_estimators} on a table with few features, and the number of
+\code{member_weights} that apply.
 }
 \description{
 These models do no gradient training: fitting stores the training

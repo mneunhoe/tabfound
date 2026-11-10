@@ -824,6 +824,36 @@ tabicl_task_of <- function(config) {
   list(imputer = imputer, gen = gen)
 }
 
+# How many members the ensemble generator built. Fewer than
+# `n_estimators` come out of a table with few features (#107); the count
+# is fixed by the training table, so it is known from `fit()` on.
+# @keywords internal
+.tabicl_n_members <- function(gen) {
+  idx <- .ensemble_flat_index(gen)
+  if (is.null(idx)) 0L else nrow(idx)
+}
+
+# `member_weights` are given for `n_estimators` members; the ensemble
+# runs the first `n` of them, so only their weights apply. Members come
+# out in the same order however many are built, so weight `i` always
+# belongs to member `i`.
+# @keywords internal
+.tabicl_built_weights <- function(member_weights, n) {
+  if (is.null(member_weights) || length(member_weights) == n) {
+    return(member_weights)
+  }
+  w <- member_weights[seq_len(min(n, length(member_weights)))]
+  if (sum(w) <= 0) {
+    cli::cli_abort(c(
+      "The {n} member{?s} this table yields all have weight zero.",
+      i = "TabICL builds fewer than {.arg n_estimators} members when the \\
+           table has few features; {.arg member_weights} applies to the \\
+           first {n}."
+    ))
+  }
+  w
+}
+
 # Default options shared by the classifier and the regressor, matching
 # `TabICLClassifier` / `TabICLRegressor`.
 # @keywords internal
@@ -893,7 +923,10 @@ tabicl_task_of <- function(config) {
 #'   order the ensemble generates them (`n_estimators` of them). The
 #'   members' contributions are combined with a weighted mean instead of
 #'   the plain one, and a member weighted zero is never run. `NULL` (the
-#'   default) is the reference's combine, unchanged.
+#'   default) is the reference's combine, unchanged. A table with few
+#'   features yields fewer than `n_estimators` distinct members; the fit
+#'   then uses the first `$n_members` weights (see [fit()]) and ignores
+#'   the rest, which belong to members that were never built.
 #' @keywords internal
 tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
                               feat_shuffle_method = "latin",
@@ -929,13 +962,14 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     }
     prep <- .tabicl_prepare(X, enc$y_int, TRUE, opts, categorical_features)
     c(prep, list(class_levels = enc$levels, observed = enc$observed,
-                 n_train = nrow(X)))
+                 n_train = nrow(X),
+                 n_members = .tabicl_n_members(prep$gen)))
   }
 
   .chunk <- function(state, X_test_chunk, caches, return_members = FALSE) {
     X_test <- transform_to_numerical(as.matrix(X_test_chunk), state$imputer)
     members <- tabicl_ensemble_iter(state$gen, X_test)
-    .check_member_weights(member_weights, members$n)
+    member_weights <- .tabicl_built_weights(member_weights, members$n)
     n_cls <- length(state$observed %||% state$class_levels)
     acc <- NULL
     raw <- list()
@@ -985,12 +1019,14 @@ tabicl_classifier <- function(ctx, n_estimators = 8L, norm_methods = NULL,
   predict_members_fn <- function(state, newdata) {
     caches <- member_cache_store_from(state$kv_caches) %||%
       (if (isTRUE(kv_cache)) member_cache_store() else NULL)
+    n_built <- state$n_members %||% .tabicl_n_members(state$gen)
+    w <- .tabicl_built_weights(member_weights, n_built)
     logits <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
                                    function(chunk) .chunk(state, chunk, caches,
                                                           return_members = TRUE))
     .classifier_members(logits, state$class_levels,
-                        .members_to_run(opts$n_estimators, member_weights),
-                        member_weights, softmax_temperature,
+                        .members_to_run(n_built, w),
+                        w, softmax_temperature,
                         if (average_logits) "softmax_of_mean_logits" else
                           "mean_of_softmax")
   }
@@ -1066,14 +1102,15 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     scaler <- fit_target_scaler(y)
     prep <- .tabicl_prepare(X, apply_target_scaler(y, scaler), FALSE, opts,
                             categorical_features)
-    c(prep, list(scaler = scaler, n_train = nrow(X)))
+    c(prep, list(scaler = scaler, n_train = nrow(X),
+                 n_members = .tabicl_n_members(prep$gen)))
   }
 
   .chunk <- function(state, X_test_chunk, type, quantiles, caches,
                      return_members = FALSE) {
     X_test <- transform_to_numerical(as.matrix(X_test_chunk), state$imputer)
     members <- tabicl_ensemble_iter(state$gen, X_test)
-    .check_member_weights(member_weights, members$n)
+    member_weights <- .tabicl_built_weights(member_weights, members$n)
     acc <- NULL
     raw <- list()
     for (i in .members_to_run(members$n, member_weights)) {
@@ -1131,9 +1168,11 @@ tabicl_regressor <- function(ctx, n_estimators = 8L, norm_methods = NULL,
     grids <- .members_over_chunks(as.matrix(newdata), predict_chunk_size,
                                   function(chunk) .chunk(state, chunk, "mean", 0.5,
                                                          caches, return_members = TRUE))
-    index <- .members_to_run(opts$n_estimators, member_weights)
+    n_built <- state$n_members %||% .tabicl_n_members(state$gen)
+    w <- .tabicl_built_weights(member_weights, n_built)
+    index <- .members_to_run(n_built, w)
     list(grids = grids, quantile_levels = levels_, member_index = index,
-         member_weights = if (is.null(member_weights)) NULL else member_weights[index],
+         member_weights = if (is.null(w)) NULL else w[index],
          combine = "mean_of_grid_stats")
   }
 

@@ -528,7 +528,10 @@ is_fitted.tabfound_fit <- function(object) is_fitted(object$inner)
 #' @param X Training features (matrix or data.frame).
 #' @param y Training targets.
 #' @param ... Unused.
-#' @return A fitted copy of `object`.
+#' @return A fitted copy of `object`. For TabICL it also carries
+#'   `$n_members`, the number of ensemble members the fit built: fewer
+#'   than `n_estimators` on a table with few features, and the number of
+#'   `member_weights` that apply.
 #' @seealso [estimate_peak_memory()]
 #' @export
 fit <- function(object, X, y, ...) UseMethod("fit")
@@ -564,6 +567,9 @@ fit.tabfound_model <- function(object, X, y, ...) {
   state$feature_levels <- train_levels
   state$expansion     <- expanded$state
   object$state <- state
+  # How many ensemble members the fit built, where a backend can build
+  # fewer than it was asked for (TabICL on a table with few features).
+  object$n_members <- state$n_members
   object
 }
 
