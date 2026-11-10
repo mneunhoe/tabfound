@@ -2,7 +2,7 @@
 #
 # The models in this package predict a *distribution*, not a point: the
 # TabPFN regressor carries a bar-distribution head you can sample from,
-# TabICL's regressor emits a full quantile grid, and every classifier
+# TabICL's and Kumo's regressors emit a full quantile grid, and every classifier
 # emits a categorical distribution. That is exactly what proper multiple
 # imputation needs, so this file wires it into the usual MICE loop:
 #
@@ -269,7 +269,8 @@ print.tabfound_models <- function(x, ...) {
 # `rule = 2` clamps: a uniform below the lowest predicted level returns
 # that level's value rather than extrapolating. With the default grid of
 # 199 levels that puts an atom of mass 1/200 at each end of every row's
-# support -- the tails are truncated, not modelled. `draw = "sample"`
+# support (0.001 with Kumo's 999-level grid, which spans 0.001-0.999) --
+# the tails are truncated, not modelled. `draw = "sample"`
 # (TabPFN's bar distribution) has no such grid and is the route to prefer
 # when the backend offers it.
 # @keywords internal
@@ -311,7 +312,7 @@ mi_draw_numeric <- function(reg, X_obs, y_obs, X_mis, draw = "auto",
        to draw from.",
       x = "It supports only {.val {types}}.",
       i = "Use a backend that samples ({.val tabpfn}) or predicts a quantile \\
-           grid ({.val tabicl}), or pass {.code draw = \"residual\"} to draw \\
+           grid ({.val tabicl}, {.val kumo}), or pass {.code draw = \"residual\"} to draw \\
            around the point prediction instead."
     ))
   }
@@ -500,6 +501,30 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #' the one exception — they take the classifier path and are mapped back
 #' to 0/1, because a continuous draw is not a valid value of a dummy.
 #'
+#' @section Choosing a backend:
+#' On the MAR simulation in `inst/simulation/` (200 replications,
+#' `n = 400`, ~42% of a covariate missing; numbers in its README):
+#'
+#' * **TabPFN** (`draw = "sample"`) removes 93% of the complete-case bias
+#'   on the continuous covariate and is unbiased on the binary one, with
+#'   coverage near nominal. It is the backend to use.
+#' * **Kumo Tabular, `small`** (`draw = "grid"`, a 999-level quantile
+#'   grid) is unbiased on the continuous covariate (−0.001, coverage
+#'   0.935) but leaves a residual bias on the binary one (−0.025 against
+#'   a complete-case −0.078; 0.036 below TabPFN, paired). Usable, but
+#'   second to TabPFN. Only `small` has been validated: the `medium` and
+#'   `large` checkpoints have not been run through the simulation.
+#' * **TabICL** (`draw = "grid"`) removes only 45% of the bias on the
+#'   continuous covariate and almost none on the binary one. Avoid it for
+#'   imputation. Kumo goes through the same grid inversion without the
+#'   problem, so the grid route itself is not the cause.
+#'
+#' A Kumo handle is built the same way as any other:
+#' `tabfound_models(classifier = tabular_classifier(...), regressor =
+#' tabular_regressor(...))`. Categorical columns are declared to the
+#' predictor per variable, so each conditional model sees the right
+#' columns as categorical.
+#'
 #' @section Properness:
 #' A PFN draws each query row independently given a fixed context, so `m`
 #' chains that condition on the same observed rows differ only in the
@@ -563,7 +588,7 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #'   imputing `v`. Defaults to every other column.
 #' @param draw How to turn a regressor's prediction into a draw.
 #'   `"auto"` picks the best the backend offers: `"sample"` (TabPFN's bar
-#'   distribution), else `"grid"` (TabICL's quantile grid), else
+#'   distribution), else `"grid"` (TabICL's and Kumo's quantile grids), else
 #'   `"quantile"` (inverse-CDF off a fine grid of predicted quantiles).
 #'   `"residual"` is an approximation for point-estimate-only backends —
 #'   a normal draw around the prediction, sized by the in-sample
@@ -571,7 +596,9 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #'
 #'   `"quantile"` and `"grid"` invert a finite grid of predicted
 #'   quantiles and clamp outside it, so the extreme levels carry an atom
-#'   of mass and the tails are truncated. `"sample"` has no grid.
+#'   of mass and the tails are truncated -- 0.001 at each end with
+#'   Kumo's 999-level grid (levels 0.001 to 0.999). `"sample"` has no
+#'   grid.
 #' @param quantile_grid Number of quantile levels for `draw = "quantile"`.
 #' @param proper Resample the context once per imputation rather than
 #'   conditioning on the observed rows as they are. `FALSE` (default) is

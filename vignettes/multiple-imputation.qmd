@@ -34,6 +34,7 @@ because their heads are distributions to begin with:
 |---|---|---|
 | `tabpfn` (v2.5, v2.6, v3) | bar distribution over 5000 bins | sample a bin, sample within it |
 | `tabicl` | 999-level quantile grid | invert the grid at a uniform |
+| `kumo` (Kumo Tabular) | 999-level quantile grid | invert the grid at a uniform |
 | `tabfm`, `mitra` | a single number | nothing to draw from |
 
 Every classifier emits a category distribution, which needs no
@@ -102,7 +103,7 @@ direction.
 ### `draw` picks the route
 
 `draw = "auto"` asks the backend for the best it has: `"sample"` for
-TabPFN's bar distribution, `"grid"` for TabICL's quantile grid, else
+TabPFN's bar distribution, `"grid"` for TabICL's and Kumo's quantile grids, else
 `"quantile"` (an inverse-CDF draw off a fine grid of predicted
 quantiles). A backend with only a point estimate is refused rather than
 quietly degraded:
@@ -112,7 +113,7 @@ quietly degraded:
 tabfound_impute(aq, models = tabfound_models(regressor = "mitra-regressor"))
 #> Error: The "mitra" regressor has no predictive distribution to draw from.
 #> x It supports only "mean".
-#> i Use a backend that samples ("tabpfn") or predicts a quantile grid ("tabicl"),
+#> i Use a backend that samples ("tabpfn") or predicts a quantile grid ("tabicl", "kumo"),
 #>   or pass `draw = "residual"` to draw around the point prediction instead.
 ```
 
@@ -268,6 +269,7 @@ Over 200 replications at `n = 400` with ~42% of a covariate missing:
 | MI, correctly specified imputer | +0.003 | 0.935 |
 | MI, **TabPFN** | −0.008 | 0.965 |
 | MI, **TabICL** | −0.061 | 0.860 |
+| MI, **Kumo Tabular** (small) | −0.001 | 0.935 |
 | MI, `mice` PMM | +0.013 | 0.945 |
 
 TabPFN removes 93% of the bias and restores coverage, matching both a
@@ -278,9 +280,18 @@ undercoverage (0.900 against 0.950) — so PMM remains the safer default
 if you want intervals you need not think about.
 
 **TabICL does not do the job.** It removes 45% of the bias here, and on
-a binary covariate essentially none. Use the TabPFN backend for
-imputation; why TabICL falls short is an open question, and the numbers
-are in `inst/simulation/README.md`.
+a binary covariate essentially none. Why it falls short is an open
+question, but it is not the grid inversion:
+
+**Kumo Tabular (`small`) takes the same grid route and removes all of the
+bias on the continuous covariate.** On the binary covariate it leaves
+some behind: −0.025 against complete-case's −0.078, and its estimate sits
+0.036 below TabPFN's on the same data sets. It is usable, but second to
+TabPFN. Only the `small` checkpoints were run; `medium` and `large` are
+not validated for imputation.
+
+Use the TabPFN backend for imputation. The numbers, including paired
+tests, are in `inst/simulation/README.md`.
 
 ## Properness
 

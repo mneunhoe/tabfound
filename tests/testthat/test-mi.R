@@ -747,3 +747,81 @@ test_that("the chain trace is recorded and reaches mice", {
   pdf(NULL); on.exit(dev.off(), add = TRUE)
   expect_no_error(print(plot(mids)))
 })
+
+
+# ---------------------------------------------------------------------------
+# Kumo Tabular, on real weights (#109)
+# ---------------------------------------------------------------------------
+
+test_that("Kumo imputes through the grid route, declaring categoricals per draw", {
+  clf_dir <- Sys.getenv("TABFOUND_KUMO_CLF_DIR", unset = "")
+  reg_dir <- Sys.getenv("TABFOUND_KUMO_REG_DIR", unset = "")
+  skip_if(!nzchar(clf_dir) || !dir.exists(clf_dir) ||
+            !nzchar(reg_dir) || !dir.exists(reg_dir),
+          "TABFOUND_KUMO_CLF_DIR / TABFOUND_KUMO_REG_DIR not configured")
+  mods <- tabfound_models(
+    classifier = tabular_classifier(clf_dir, n_estimators = 2L, device = "cpu"),
+    regressor  = tabular_regressor(reg_dir, n_estimators = 2L, device = "cpu")
+  )
+
+  # Kumo's regressor has no sampler, so "auto" falls to its own grid:
+  # 999 levels from 0.001 to 0.999, which `.mi_icdf()` inverts.
+  reg <- mods$get("regression")
+  expect_false("sample" %in% reg$spec$types)
+  expect_true("grid" %in% reg$spec$types)
+  lv <- reg$spec$quantile_levels
+  expect_length(lv, 999L)
+  expect_equal(range(lv), c(0.001, 0.999))
+
+  set.seed(109)
+  n <- 80L
+  d <- data.frame(x = rnorm(n),
+                  g = factor(sample(c("a", "b", "c"), n, TRUE)),
+                  z = rnorm(n))
+  d$z <- d$z + d$x + as.integer(d$g)
+  d$x[1:10] <- NA
+  d$g[11:18] <- NA
+
+  # Record every respec: the declaration each draw makes, and whether the
+  # Kumo constructor took it.
+  seen <- new.env(parent = emptyenv())
+  seen$calls <- list()
+  orig <- .respec_categoricals
+  local_mocked_bindings(.respec_categoricals = function(object, categorical_features) {
+    out <- orig(object, categorical_features)
+    seen$calls <- c(seen$calls, list(list(
+      task = object$task, declared = categorical_features,
+      applied = out$model_ref$args$categorical_features)))
+    out
+  })
+
+  imp <- tabfound_impute(d, m = 2L, models = mods, maxit = 1L, seed = 3L,
+                         verbose = FALSE)
+  for (k in 1:2) {
+    got <- imp$imputations[[k]]
+    expect_false(anyNA(got))
+    for (v in names(d)) {
+      obs <- !is.na(d[[v]])
+      expect_identical(got[[v]][obs], d[[v]][obs], info = v)
+    }
+    expect_true(all(levels(got$g) == levels(d$g)))
+    # A clamped inversion of the grid stays inside the observed range's
+    # neighbourhood; it never produces a non-finite value.
+    expect_true(all(is.finite(got$x)))
+  }
+
+  # Imputing `x` conditions on (g, z): `g` is column 1 and is declared,
+  # and the rebuilt Kumo regressor carries that declaration.
+  reg_calls <- Filter(function(cl) identical(cl$task, "regression") &&
+                        length(cl$declared), seen$calls)
+  expect_true(length(reg_calls) >= 1L)
+  for (cl in reg_calls) {
+    expect_identical(as.integer(cl$declared), 1L)
+    expect_identical(as.integer(cl$applied), 1L)
+  }
+
+  # "auto" is the grid route, draw for draw.
+  grid <- tabfound_impute(d, m = 2L, models = mods, maxit = 1L, seed = 3L,
+                          draw = "grid", verbose = FALSE)
+  expect_identical(grid$imputations, imp$imputations)
+})

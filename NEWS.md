@@ -1,5 +1,14 @@
 # tabfound (development version)
 
+* Kumo Tabular `small` is now validated as a `tabfound_impute()` backend.
+  On the 200-replication MAR simulation it is unbiased on the continuous
+  covariate (−0.001, coverage 0.935) through `draw = "grid"`, but leaves a
+  residual bias of −0.025 on the binary one, 0.036 below TabPFN on the
+  same data sets. `?tabfound_impute` gains a *Choosing a backend* section,
+  and the vignette and `inst/simulation/README.md` report the numbers and
+  paired tests. TabPFN remains the recommended imputer; Kumo `medium` and
+  `large` are not validated. `run-mi-sim.R --backend=kumo` reads
+  `TABFOUND_KUMO_CLF_DIR` / `TABFOUND_KUMO_REG_DIR` (#109).
 * `predict(type = "quantiles")` and `predict(type = "sample")` on TabPFN
   regressors decode every quantile or draw in one batched pass instead of
   one at a time. With 199 quantiles on 5,000 rows that is about 3.5x
