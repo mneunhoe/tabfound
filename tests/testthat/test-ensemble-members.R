@@ -610,6 +610,54 @@ test_that("predict_members() goes through the model API for every backend", {
 })
 
 
+test_that("TabICL on few features: member count, index and weights agree (#107)", {
+  set.seed(107)
+  X <- matrix(stats::rnorm(60L), ncol = 1L)
+  X_new <- matrix(stats::rnorm(9L), ncol = 1L)
+  y_reg <- X[, 1] + stats::rnorm(60L)
+  y_clf <- factor(ifelse(y_reg > 0, "a", "b"))
+  cases <- list(
+    regressor = list(ctx = fake_ctx(tiny_tabicl("regressor"),
+                                    config = list(num_quantiles = 9L)),
+                     make = tabicl_regressor, task = "regression", y = y_reg,
+                     field = "grids"),
+    classifier = list(ctx = fake_ctx(tiny_tabicl()), make = tabicl_classifier,
+                      task = "classification", y = y_clf, field = "logits")
+  )
+  for (nm in names(cases)) {
+    case <- cases[[nm]]
+    case$ctx$backend <- list(name = "tabicl"); case$ctx$model_ref <- "tiny"
+    fit_with <- function(...) {
+      spec <- case$make(case$ctx, n_estimators = 8L, ...)
+      fit(.new_tabfound_model(case$ctx, spec, case$task, list()), X, case$y)
+    }
+    plain <- fit_with()
+    n <- plain$n_members
+    expect_true(n < 8L, label = nm)
+
+    # member_index matches the members returned.
+    m <- predict_members(plain, X_new)
+    expect_length(m[[case$field]], n)
+    expect_identical(m$member_index, seq_len(n), label = nm)
+
+    # n_estimators weights work; only the first n apply.
+    unit <- fit_with(member_weights = rep(1, 8L))
+    expect_equal(predict(unit, X_new), predict(plain, X_new), tolerance = 1e-6,
+                 label = nm)
+    w <- c(3, rep(1, 7L))
+    weighted <- fit_with(member_weights = w)
+    wm <- predict_members(weighted, X_new)
+    expect_equal(wm$member_weights, w[seq_len(n)] / sum(w[seq_len(n)]),
+                 label = nm)
+    expect_identical(wm$member_index, seq_len(n), label = nm)
+
+    # Weight only on members that were never built: nothing left to run.
+    dead <- fit_with(member_weights = c(rep(0, n), rep(1, 8L - n)))
+    expect_error(predict(dead, X_new), "all have weight zero", label = nm)
+  }
+})
+
+
 # ---------------------------------------------------------------------------
 # Unused class levels
 # ---------------------------------------------------------------------------

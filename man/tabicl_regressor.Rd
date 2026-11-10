@@ -65,7 +65,10 @@ produces -- see \code{\link[=tabicl_kv_cache]{tabicl_kv_cache()}}.}
 order the ensemble generates them (\code{n_estimators} of them). The
 members' contributions are combined with a weighted mean instead of
 the plain one, and a member weighted zero is never run. \code{NULL} (the
-default) is the reference's combine, unchanged.}
+default) is the reference's combine, unchanged. A table with few
+features yields fewer than \code{n_estimators} distinct members; the fit
+then uses the first \verb{$n_members} weights (see \code{\link[=fit]{fit()}}) and ignores
+the rest, which belong to members that were never built.}
 }
 \description{
 TabICL's regression head emits a whole quantile grid (999 levels for

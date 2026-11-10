@@ -134,6 +134,13 @@
   `tabfound_syn` object directly -- binned a declared point mass such as
   `income == -8` with the lowest real values instead of giving it its own
   `miss.-8` category (#105).
+* TabICL builds fewer than `n_estimators` members on a table with few
+  features (2 for a one-feature regressor), and its fitted model now says
+  how many as `$n_members`. `predict_members()$member_index` lists the
+  members actually run instead of `1:n_estimators`, and `member_weights`
+  are always given for `n_estimators` members, of which the first
+  `n_members` apply. Before, weights that passed the constructor's check
+  aborted at the first `predict()` on such a table (#107).
 * Fixed TabICL and TabFM classifiers fitted on a factor with a level no
   training row has -- common in cross-validation folds, subsets, and any
   `tabfound()` fit, since hardhat keeps the outcome's levels. The class
