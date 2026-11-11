@@ -11,11 +11,11 @@ Rscript inst/simulation/run-mi-sim.R --backend=lm --reps=200
 Rscript inst/simulation/run-mi-sim.R --backend=tabpfn --reps=200 --save
 ```
 
-Options: `--backend` (`lm`, `tabpfn`, `tabicl`), `--reps`, `--n`, `--m`,
+Options: `--backend` (`lm`, `tabpfn`, `tabicl`, `kumo`), `--reps`, `--n`, `--m`,
 `--maxit`, `--proper`, `--seed`, `--save`. Real backends are located
 through the same environment variables the parity harness uses
 (`TABFOUND_TABPFN_CLF_DIR`, `TABFOUND_TABPFN_REG_DIR`, and the `TABICL`
-equivalents).
+and `KUMO` equivalents).
 
 `paired-compare.R` reads a saved `-reps.csv` and compares two arms
 replication by replication — McNemar on the coverage indicators, paired
@@ -99,6 +99,7 @@ Monte Carlo error is about 0.006–0.010 on a bias and 0.02 on a coverage.
 | MI, `lm` | +0.003 | 0.935 | 0.283 |
 | MI, `tabpfn` | −0.008 | 0.965 | 0.314 |
 | MI, `tabicl` | **−0.061** | **0.860** | 0.314 |
+| MI, `kumo` (small) | −0.001 | 0.935 | 0.300 |
 | MI, `mice` PMM | +0.013 | 0.945 | 0.311 |
 
 **`g`** — binary factor, ~23% missing, truth 1.5:
@@ -110,9 +111,10 @@ Monte Carlo error is about 0.006–0.010 on a bias and 0.02 on a coverage.
 | MI, `lm` | +0.003 | 0.945 |
 | MI, `tabpfn` | +0.011 | 0.940 |
 | MI, `tabicl` | **−0.081** | 0.925 |
+| MI, `kumo` (small) | **−0.025** | 0.910 |
 | MI, `mice` PMM | +0.013 | 0.955 |
 
-FULL, CC and PMM are identical across the three runs by construction --
+FULL, CC and PMM are identical across the four runs by construction --
 they do not depend on which backend was loaded -- so the only row that
 moves is `MI`. That is the point of the pairing.
 
@@ -140,7 +142,68 @@ with the truth equally well (0.968 both). Treat this as an open question
 rather than a diagnosis. It is consistent with `draw = "grid"` — inverting
 a 999-level predicted quantile grid — being a worse route to a posterior
 draw than TabPFN's native bar-distribution sampling, but that is a
-hypothesis, not a finding.
+hypothesis, not a finding — and the Kumo arm below, which takes the same
+route and is unbiased on `x1`, now counts against it.
+
+## Kumo Tabular (small)
+
+`--backend=kumo`, the `small` checkpoints (classifier and regressor),
+same 200 data sets. Kumo takes the same route TabICL does: it has no
+native sampler, so `draw = "auto"` resolves to `"grid"` and continuous
+cells are drawn by inverting its 999-level quantile grid. Categorical
+cells come from the classifier's probabilities, as for every backend.
+
+**`x1` (the grid route): it works.** Bias −0.001, coverage 0.935 —
+the whole complete-case bias removed, where TabICL through the same
+`.mi_icdf()` removes 45%. Whatever is wrong with the TabICL arm, it is
+not that inverting a 999-level grid is a bad way to draw an imputation.
+That narrows TabICL's open question to TabICL's own predictive
+distributions.
+
+**`g` (the classifier): a residual bias.** −0.025 against complete-case's
+−0.078, so about two-thirds of the bias removed; roughly 2.3 Monte Carlo
+standard errors from zero on its own, but sharp in the paired tests.
+Coverage 0.910.
+
+Paired against PMM (`paired-compare.R results/mi-mar-kumo-reps.csv`):
+
+| coef | coverage (Kumo / PMM) | McNemar *p* | estimate difference | *p* | width difference | *p* |
+|---|---|---|---|---|---|---|
+| x1 | 0.935 / 0.945 | 0.75 | −0.014 | <0.0001 | −0.011 | 0.040 |
+| x2 | 0.915 / 0.950 | 0.070 | −0.013 | <0.0001 | **−0.031** | **<0.0001** |
+| g  | 0.910 / 0.955 | 0.067 | **−0.038** | **<0.0001** | **−0.071** | **<0.0001** |
+
+And against TabPFN's MI arm from `mi-mar-tabpfn-reps.csv`. The two runs
+share the seed, and their FULL arms agree on all 600 estimates, so they
+saw the same data sets and pair across files (stack the two MI arms under
+different names and run `paired-compare.R` on the result):
+
+| coef | coverage (Kumo / TabPFN) | McNemar *p* | estimate difference | *p* | width difference | *p* |
+|---|---|---|---|---|---|---|
+| x1 | 0.935 / 0.965 | 0.077 | +0.007 | 0.002 | −0.014 | 0.036 |
+| x2 | 0.915 / 0.900 | 0.55 | −0.008 | <0.0001 | −0.008 | 0.15 |
+| g  | 0.910 / 0.940 | 0.15 | **−0.036** | **<0.0001** | +0.007 | 0.49 |
+
+No coverage difference survives Bonferroni (0.017) in either table. The
+estimate differences on `x1` and `x2` are real but under 0.015, which no
+analysis will notice. The one that matters is `g`: Kumo's estimate sits
+0.036 below TabPFN's and 0.038 below PMM's, in paired tests that leave
+no doubt. Its intervals are narrower than PMM's everywhere, like TabPFN's.
+
+**Reading it.** Kumo small is a usable imputer — far better than TabICL,
+unbiased on the continuous variable — but TabPFN is still the better
+choice, because of the residual attenuation on the categorical. Only
+`small` was run: the `medium` and `large` checkpoints are not validated
+here, and nothing above says how they behave.
+
+Reproduce with:
+
+```bash
+Rscript inst/simulation/run-mi-sim.R --backend=kumo --reps=200 --save
+Rscript inst/simulation/paired-compare.R results/mi-mar-kumo-reps.csv
+```
+
+The run took about 66 minutes on CPU.
 
 ## TabPFN vs PMM, paired
 

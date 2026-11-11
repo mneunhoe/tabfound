@@ -46,7 +46,7 @@ imputing \code{v}. Defaults to every other column.}
 
 \item{draw}{How to turn a regressor's prediction into a draw.
 \code{"auto"} picks the best the backend offers: \code{"sample"} (TabPFN's bar
-distribution), else \code{"grid"} (TabICL's quantile grid), else
+distribution), else \code{"grid"} (TabICL's and Kumo's quantile grids), else
 \code{"quantile"} (inverse-CDF off a fine grid of predicted quantiles).
 \code{"residual"} is an approximation for point-estimate-only backends —
 a normal draw around the prediction, sized by the in-sample
@@ -54,7 +54,9 @@ residuals.
 
 \code{"quantile"} and \code{"grid"} invert a finite grid of predicted
 quantiles and clamp outside it, so the extreme levels carry an atom
-of mass and the tails are truncated. \code{"sample"} has no grid.}
+of mass and the tails are truncated -- 0.001 at each end with
+Kumo's 999-level grid (levels 0.001 to 0.999). \code{"sample"} has no
+grid.}
 
 \item{quantile_grid}{Number of quantile levels for \code{draw = "quantile"}.}
 
@@ -117,6 +119,32 @@ numerics to the regressor. Numeric 0/1 columns with missing values are
 the one exception — they take the classifier path and are mapped back
 to 0/1, because a continuous draw is not a valid value of a dummy.
 }
+\section{Choosing a backend}{
+
+On the MAR simulation in \verb{inst/simulation/} (200 replications,
+\code{n = 400}, ~42\% of a covariate missing; numbers in its README):
+\itemize{
+\item \strong{TabPFN} (\code{draw = "sample"}) removes 93\% of the complete-case bias
+on the continuous covariate and is unbiased on the binary one, with
+coverage near nominal. It is the backend to use.
+\item \strong{Kumo Tabular, \code{small}} (\code{draw = "grid"}, a 999-level quantile
+grid) is unbiased on the continuous covariate (−0.001, coverage
+0.935) but leaves a residual bias on the binary one (−0.025 against
+a complete-case −0.078; 0.036 below TabPFN, paired). Usable, but
+second to TabPFN. Only \code{small} has been validated: the \code{medium} and
+\code{large} checkpoints have not been run through the simulation.
+\item \strong{TabICL} (\code{draw = "grid"}) removes only 45\% of the bias on the
+continuous covariate and almost none on the binary one. Avoid it for
+imputation. Kumo goes through the same grid inversion without the
+problem, so the grid route itself is not the cause.
+}
+
+A Kumo handle is built the same way as any other:
+\code{tabfound_models(classifier = tabular_classifier(...), regressor = tabular_regressor(...))}. Categorical columns are declared to the
+predictor per variable, so each conditional model sees the right
+columns as categorical.
+}
+
 \section{Properness}{
 
 A PFN draws each query row independently given a fixed context, so \code{m}
