@@ -30,7 +30,13 @@ tabfound_impute(
 \item{models}{A \code{\link[=tabfound_models]{tabfound_models()}} handle. A model reference or a
 single fitted model object is accepted too and wrapped for you; when
 \code{NULL}, \code{...} is passed to \code{\link[=tabfound_models]{tabfound_models()}}, so
-\code{tabfound_impute(data, model = "...")} works.}
+\code{tabfound_impute(data, model = "...")} works.
+
+Models the handle builds draw at \code{softmax_temperature = 1}, the
+untempered predictive distribution; see \code{\link[=tabfound_models]{tabfound_models()}}. A model
+object you built yourself keeps its own temperature, which for
+\code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\link[=tabular_regressor]{tabular_regressor()}} defaults to 0.9 --
+pass \code{softmax_temperature = 1} there too if you build them by hand.}
 
 \item{maxit}{Number of chained-equations sweeps per imputation.}
 
@@ -124,13 +130,13 @@ to 0/1, because a continuous draw is not a valid value of a dummy.
 On the MAR simulation in \verb{inst/simulation/} (200 replications,
 \code{n = 400}, ~42\% of a covariate missing; numbers in its README):
 \itemize{
-\item \strong{TabPFN} (\code{draw = "sample"}) removes 93\% of the complete-case bias
-on the continuous covariate and is unbiased on the binary one, with
-coverage near nominal. It is the backend to use.
+\item \strong{TabPFN} (\code{draw = "sample"}) removes 91\% of the complete-case bias
+on the continuous covariate and 80\% on the binary one, landing within
+0.015 of truth with coverage near nominal. It is the backend to use.
 \item \strong{Kumo Tabular, \code{small}} (\code{draw = "grid"}, a 999-level quantile
 grid) is unbiased on the continuous covariate (−0.001, coverage
 0.935) but leaves a residual bias on the binary one (−0.025 against
-a complete-case −0.078; 0.036 below TabPFN, paired). Usable, but
+a complete-case −0.078; 0.010 below TabPFN, paired). Usable, but
 second to TabPFN. Only \code{small} has been validated: the \code{medium} and
 \code{large} checkpoints have not been run through the simulation.
 \item \strong{TabICL} (\code{draw = "grid"}) removes only 45\% of the bias on the
@@ -143,6 +149,20 @@ A Kumo handle is built the same way as any other:
 \code{tabfound_models(classifier = tabular_classifier(...), regressor = tabular_regressor(...))}. Categorical columns are declared to the
 predictor per variable, so each conditional model sees the right
 columns as categorical.
+}
+
+\section{Temperature}{
+
+TabPFN, the TabICL classifier and TabFM sharpen their predictive
+distributions with \code{softmax_temperature = 0.9} by default, which suits
+point prediction. A draw should come from the distribution itself, so
+the models a \code{\link[=tabfound_models]{tabfound_models()}} handle builds use 1. On complete data
+from the simulation's design that is where both TabPFN heads are
+calibrated: at 0.9 the regressor's predictive variance is about 8\% too
+small, and the classifier is overconfident. On the MAR simulation
+itself the change moves the binary coefficient from +0.011 to −0.015
+and leaves the rest alone. A model you build yourself and pass in keeps
+its own temperature.
 }
 
 \section{Properness}{

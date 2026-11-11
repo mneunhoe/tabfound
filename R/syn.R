@@ -482,6 +482,12 @@
 #'   single fitted model object is accepted too and wrapped for you; when
 #'   `NULL`, `...` is passed to [tabfound_models()], so
 #'   `tabfound_syn(data, model = "...")` works.
+#'
+#'   Models the handle builds draw at `softmax_temperature = 1`, the
+#'   untempered predictive distribution; see [tabfound_models()]. A model
+#'   object you built yourself keeps its own temperature, which for
+#'   [tabular_classifier()] / [tabular_regressor()] defaults to 0.9 --
+#'   pass `softmax_temperature = 1` there too if you build them by hand.
 #' @param k Rows per synthetic data set. Defaults to `nrow(data)`.
 #'   Note that `k != nrow(data)` changes which variance estimator applies
 #'   downstream.

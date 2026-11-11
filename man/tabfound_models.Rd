@@ -9,6 +9,7 @@ tabfound_models(
   classifier = NULL,
   regressor = NULL,
   device = "cpu",
+  softmax_temperature = 1,
   ...
 )
 }
@@ -24,8 +25,17 @@ configured) \code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\lin
 
 \item{device}{One of \code{"cpu"}, \code{"cuda"}, \code{"mps"}.}
 
-\item{...}{Passed to \code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\link[=tabular_regressor]{tabular_regressor()}},
-e.g. \code{softmax_temperature}.}
+\item{softmax_temperature}{Temperature for the models this handle
+builds, applied to the backends that have one (TabPFN, the TabICL
+classifier, TabFM) and ignored by the rest. Defaults to 1, not the
+0.9 that \code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\link[=tabular_regressor]{tabular_regressor()}} default to.
+A temperature below 1 sharpens the predictive distribution, which
+suits point prediction; imputation and synthesis draw from that
+distribution, so they need it untempered. At 0.9 TabPFN's draws
+come out about 8\% too narrow in variance. Models you pass in already
+built keep the temperature they were built with.}
+
+\item{...}{Passed to \code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\link[=tabular_regressor]{tabular_regressor()}}.}
 }
 \value{
 An object of class \code{tabfound_models}.

@@ -199,7 +199,8 @@ as_amelia.tabfound_mi <- function(x, ...) {
 #' @param x Numeric design matrix of predictors, complete.
 #' @param wy Logical: rows to impute. Defaults to `!ry`.
 #' @param models A [tabfound_models()] handle. Defaults to
-#'   `getOption("tabfound.models")`.
+#'   `getOption("tabfound.models")`. Models the handle builds draw at
+#'   `softmax_temperature = 1`; see [tabfound_models()].
 #' @param draw Passed to the regressor draw; see [tabfound_impute()].
 #' @param proper Resample the observed rows before fitting, the way
 #'   mice's own `norm.boot` / `polyreg.boot` do. Same argument, same

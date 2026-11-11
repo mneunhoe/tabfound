@@ -297,7 +297,8 @@ columns are categorical.
 
 `softmax_temperature` defaults to `0.9` across every backend, matching
 the reference estimators. Pass `softmax_temperature = 1` for the
-untempered distribution.
+untempered distribution. `tabfound_models()` — and so imputation and synthesis — uses 1:
+a draw should come from the distribution, not a sharpened one.
 
 ## Column handling in detail
 

@@ -3,6 +3,7 @@
 #   Rscript inst/simulation/run-mi-sim.R [--backend=lm] [--reps=200]
 #                                        [--n=400] [--m=5] [--maxit=3]
 #                                        [--proper=TRUE] [--seed=20260807]
+#                                        [--temperature=1]
 #                                        [--save]
 #
 # The MI code has no Python reference to be checked against, so this is
@@ -62,6 +63,12 @@ PROPER  <- local({
   if (toupper(v) %in% c("TRUE", "FALSE")) as.logical(toupper(v)) else v
 })
 SEED    <- as.integer(opt("seed", 20260807L))
+# `softmax_temperature` for the models `tabfound_models()` builds. Unset
+# means the package default (1 since #111); runs saved before that were
+# made at the constructors' 0.9 and carry no tag. An explicit value tags
+# the output (`-temp0.9`, `-temp1`), so the two can sit side by side.
+TEMP_SET <- any(grepl("^--temperature=", args))
+TEMP    <- as.numeric(opt("temperature", 1))
 SAVE    <- "--save" %in% args
 WITH_MICE <- requireNamespace("mice", quietly = TRUE)
 
@@ -194,7 +201,8 @@ make_models <- function(backend) {
   tabfound_models(
     classifier = env_dir(sprintf("TABFOUND_%s_CLF_DIR", prefix)),
     regressor  = env_dir(sprintf("TABFOUND_%s_REG_DIR", prefix)),
-    backend    = backend
+    backend    = backend,
+    softmax_temperature = TEMP
   )
 }
 
@@ -262,8 +270,9 @@ one_rep <- function(models, i) {
 # Run
 # ---------------------------------------------------------------------------
 
-cat(sprintf("MAR simulation: backend=%s reps=%d n=%d m=%d maxit=%d proper=%s seed=%d\n",
-            BACKEND, REPS, N, M, MAXIT, as.character(PROPER), SEED))
+cat(sprintf("MAR simulation: backend=%s reps=%d n=%d m=%d maxit=%d proper=%s seed=%d temperature=%s\n",
+            BACKEND, REPS, N, M, MAXIT, as.character(PROPER), SEED,
+            format(TEMP)))
 if (!WITH_MICE) cat("  (mice not installed: no PMM arm, no MI pooling)\n")
 stopifnot(WITH_MICE)
 
@@ -316,6 +325,7 @@ if (SAVE) {
   tag <- if (isFALSE(PROPER)) BACKEND
          else sprintf("%s-%s", BACKEND,
                       if (isTRUE(PROPER)) "proper" else as.character(PROPER))
+  if (TEMP_SET) tag <- sprintf("%s-temp%s", tag, format(TEMP))
   f <- sprintf("inst/simulation/results/mi-mar-%s.csv", tag)
   utils::write.csv(res, f, row.names = FALSE)
   cat(sprintf("\nwrote %s\n", f))
