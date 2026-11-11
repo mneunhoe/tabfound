@@ -825,3 +825,56 @@ test_that("Kumo imputes through the grid route, declaring categoricals per draw"
                           draw = "grid", verbose = FALSE)
   expect_identical(grid$imputations, imp$imputations)
 })
+
+test_that("tabfound_models() builds at temperature 1, only where a backend has one", {
+  seen <- new.env()
+  fake_ctx <- function(name, with_temp) {
+    ctor <- if (with_temp) {
+      function(ctx, n_estimators = 1L, softmax_temperature = 0.9) {
+        seen[[name]] <- softmax_temperature
+        list(predict = function(state, newdata, type, ...) NULL)
+      }
+    } else {
+      function(ctx, n_estimators = 1L) {
+        seen[[name]] <- "none"
+        list(predict = function(state, newdata, type, ...) NULL)
+      }
+    }
+    list(net = NULL, config = list(), device = "cpu", model_ref = name,
+         backend = list(name = name, classifier = ctor, regressor = ctor))
+  }
+  local_mocked_bindings(load_backend_model = function(model, task, backend, device)
+    fake_ctx(model, with_temp = !identical(model, "notemp")))
+
+  tabfound_models(regressor = "temp")$get("regression")
+  expect_identical(seen$temp, 1)
+  tabfound_models(classifier = "temp2")$get("classification")
+  expect_identical(seen$temp2, 1)
+
+  # A backend without the argument never sees it.
+  expect_no_error(tabfound_models(regressor = "notemp")$get("regression"))
+  expect_identical(seen$notemp, "none")
+
+  # The caller's value wins, whether as the handle's argument...
+  tabfound_models(regressor = "t3", softmax_temperature = 0.5)$get("regression")
+  expect_identical(seen$t3, 0.5)
+
+  # ...and the constructors keep their own default for prediction.
+  tabular_regressor("t4")
+  expect_identical(seen$t4, 0.9)
+
+  # A model built by the caller keeps what it was built with.
+  pre <- tabular_regressor("t5")
+  expect_identical(tabfound_models(regressor = pre)$get("regression"), pre)
+  expect_identical(seen$t5, 0.9)
+
+  # Recorded with the model, which is what the per-variable categorical
+  # rebuild and tabfound_save() rebuild from.
+  h <- tabfound_models(regressor = "temp")
+  expect_identical(h$get("regression")$model_ref$args$softmax_temperature, 1)
+
+  expect_error(tabfound_models(regressor = "temp", softmax_temperature = 0),
+               "single positive number")
+  expect_error(tabfound_models(regressor = "temp", softmax_temperature = c(1, 2)),
+               "single positive number")
+})

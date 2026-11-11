@@ -26,7 +26,8 @@ mice.impute.tabfound(
 \item{wy}{Logical: rows to impute. Defaults to \code{!ry}.}
 
 \item{models}{A \code{\link[=tabfound_models]{tabfound_models()}} handle. Defaults to
-\code{getOption("tabfound.models")}.}
+\code{getOption("tabfound.models")}. Models the handle builds draw at
+\code{softmax_temperature = 1}; see \code{\link[=tabfound_models]{tabfound_models()}}.}
 
 \item{draw}{Passed to the regressor draw; see \code{\link[=tabfound_impute]{tabfound_impute()}}.}
 

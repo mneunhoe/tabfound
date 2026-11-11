@@ -70,8 +70,16 @@
 #'   reference as above, or an already-constructed (and possibly already
 #'   configured) [tabular_classifier()] / [tabular_regressor()] object.
 #' @param device One of `"cpu"`, `"cuda"`, `"mps"`.
-#' @param ... Passed to [tabular_classifier()] / [tabular_regressor()],
-#'   e.g. `softmax_temperature`.
+#' @param softmax_temperature Temperature for the models this handle
+#'   builds, applied to the backends that have one (TabPFN, the TabICL
+#'   classifier, TabFM) and ignored by the rest. Defaults to 1, not the
+#'   0.9 that [tabular_classifier()] / [tabular_regressor()] default to.
+#'   A temperature below 1 sharpens the predictive distribution, which
+#'   suits point prediction; imputation and synthesis draw from that
+#'   distribution, so they need it untempered. At 0.9 TabPFN's draws
+#'   come out about 8% too narrow in variance. Models you pass in already
+#'   built keep the temperature they were built with.
+#' @param ... Passed to [tabular_classifier()] / [tabular_regressor()].
 #' @return An object of class `tabfound_models`.
 #' @examples
 #' \dontrun{
@@ -81,7 +89,7 @@
 #' }
 #' @export
 tabfound_models <- function(model = NULL, classifier = NULL, regressor = NULL,
-                            device = "cpu", ...) {
+                            device = "cpu", softmax_temperature = 1, ...) {
   classifier <- classifier %||% model
   regressor  <- regressor  %||% model
   if (is.null(classifier) && is.null(regressor)) {
@@ -89,6 +97,11 @@ tabfound_models <- function(model = NULL, classifier = NULL, regressor = NULL,
       "No model artifacts supplied.",
       i = "Pass {.arg model}, or {.arg classifier} / {.arg regressor} separately."
     ))
+  }
+  if (!is.numeric(softmax_temperature) || length(softmax_temperature) != 1L ||
+      !is.finite(softmax_temperature) || softmax_temperature <= 0) {
+    cli::cli_abort("{.arg softmax_temperature} must be a single positive \
+                    number.")
   }
   dots  <- list(...)
   cache <- new.env(parent = emptyenv())
@@ -130,7 +143,8 @@ tabfound_models <- function(model = NULL, classifier = NULL, regressor = NULL,
       }
       spec
     } else {
-      ctor <- if (is_clf) tabular_classifier else tabular_regressor
+      ctor <- .tabular_ctor(task, list(softmax_temperature =
+                                         softmax_temperature))
       do.call(ctor, c(list(spec, device = device), dots))
     }
     assign(task, obj, envir = cache)
@@ -149,6 +163,7 @@ tabfound_models <- function(model = NULL, classifier = NULL, regressor = NULL,
          # were derived from it.
          loaded = function() unique(sub("\\|.*$", "", ls(cache))),
          device = device,
+         softmax_temperature = softmax_temperature,
          source = c(classification = describe(classifier),
                     regression     = describe(regressor))),
     class = "tabfound_models"
@@ -164,7 +179,9 @@ print.tabfound_models <- function(x, ...) {
            {if ('classification' %in% loaded) ' (loaded)' else ''}",
     "*" = "regressor: {.val {x$source[['regression']]}}\\
            {if ('regression' %in% loaded) ' (loaded)' else ''}",
-    "*" = "device: {.val {x$device}}"
+    "*" = "device: {.val {x$device}}",
+    "*" = "softmax temperature: {.val {x$softmax_temperature %||% 1}} \
+           (models built by the handle)"
   ))
   invisible(x)
 }
@@ -505,13 +522,13 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #' On the MAR simulation in `inst/simulation/` (200 replications,
 #' `n = 400`, ~42% of a covariate missing; numbers in its README):
 #'
-#' * **TabPFN** (`draw = "sample"`) removes 93% of the complete-case bias
-#'   on the continuous covariate and is unbiased on the binary one, with
-#'   coverage near nominal. It is the backend to use.
+#' * **TabPFN** (`draw = "sample"`) removes 91% of the complete-case bias
+#'   on the continuous covariate and 80% on the binary one, landing within
+#'   0.015 of truth with coverage near nominal. It is the backend to use.
 #' * **Kumo Tabular, `small`** (`draw = "grid"`, a 999-level quantile
 #'   grid) is unbiased on the continuous covariate (−0.001, coverage
 #'   0.935) but leaves a residual bias on the binary one (−0.025 against
-#'   a complete-case −0.078; 0.036 below TabPFN, paired). Usable, but
+#'   a complete-case −0.078; 0.010 below TabPFN, paired). Usable, but
 #'   second to TabPFN. Only `small` has been validated: the `medium` and
 #'   `large` checkpoints have not been run through the simulation.
 #' * **TabICL** (`draw = "grid"`) removes only 45% of the bias on the
@@ -524,6 +541,18 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #' tabular_regressor(...))`. Categorical columns are declared to the
 #' predictor per variable, so each conditional model sees the right
 #' columns as categorical.
+#'
+#' @section Temperature:
+#' TabPFN, the TabICL classifier and TabFM sharpen their predictive
+#' distributions with `softmax_temperature = 0.9` by default, which suits
+#' point prediction. A draw should come from the distribution itself, so
+#' the models a [tabfound_models()] handle builds use 1. On complete data
+#' from the simulation's design that is where both TabPFN heads are
+#' calibrated: at 0.9 the regressor's predictive variance is about 8% too
+#' small, and the classifier is overconfident. On the MAR simulation
+#' itself the change moves the binary coefficient from +0.011 to −0.015
+#' and leaves the rest alone. A model you build yourself and pass in keeps
+#' its own temperature.
 #'
 #' @section Properness:
 #' A PFN draws each query row independently given a fixed context, so `m`
@@ -577,6 +606,12 @@ mi_draw_factor <- function(clf, X_obs, y_obs, X_mis) {
 #'   single fitted model object is accepted too and wrapped for you; when
 #'   `NULL`, `...` is passed to [tabfound_models()], so
 #'   `tabfound_impute(data, model = "...")` works.
+#'
+#'   Models the handle builds draw at `softmax_temperature = 1`, the
+#'   untempered predictive distribution; see [tabfound_models()]. A model
+#'   object you built yourself keeps its own temperature, which for
+#'   [tabular_classifier()] / [tabular_regressor()] defaults to 0.9 --
+#'   pass `softmax_temperature = 1` there too if you build them by hand.
 #' @param maxit Number of chained-equations sweeps per imputation.
 #' @param method Optional per-variable override of the automatic choice.
 #'   A single string, or a named vector indexed by column name. One of

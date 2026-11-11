@@ -34,7 +34,13 @@ tabfound_syn(
 \item{models}{A \code{\link[=tabfound_models]{tabfound_models()}} handle. A model reference or a
 single fitted model object is accepted too and wrapped for you; when
 \code{NULL}, \code{...} is passed to \code{\link[=tabfound_models]{tabfound_models()}}, so
-\code{tabfound_syn(data, model = "...")} works.}
+\code{tabfound_syn(data, model = "...")} works.
+
+Models the handle builds draw at \code{softmax_temperature = 1}, the
+untempered predictive distribution; see \code{\link[=tabfound_models]{tabfound_models()}}. A model
+object you built yourself keeps its own temperature, which for
+\code{\link[=tabular_classifier]{tabular_classifier()}} / \code{\link[=tabular_regressor]{tabular_regressor()}} defaults to 0.9 --
+pass \code{softmax_temperature = 1} there too if you build them by hand.}
 
 \item{k}{Rows per synthetic data set. Defaults to \code{nrow(data)}.
 Note that \code{k != nrow(data)} changes which variance estimator applies

@@ -1,9 +1,20 @@
 # tabfound (development version)
 
+* `tabfound_models()` now builds its models at `softmax_temperature = 1`,
+  so `tabfound_impute()`, `mice.impute.tabfound()` and `tabfound_syn()`
+  draw from the untempered predictive distribution. The constructors'
+  0.9 sharpens it: on TabPFN v2.5 the regressor's predictive variance was
+  about 8% too small and the classifier overconfident (recalibration
+  slope 0.89, 0.99 at 1). The temperature goes only to backends that
+  have one (TabPFN, the TabICL classifier, TabFM); `tabular_classifier()`
+  and `tabular_regressor()` keep 0.9 for prediction, and models passed
+  in already built keep theirs. On the MAR simulation the change moves
+  the binary coefficient from +0.011 to −0.015 and leaves the others
+  alone. `run-mi-sim.R` gains `--temperature` (#111).
 * Kumo Tabular `small` is now validated as a `tabfound_impute()` backend.
   On the 200-replication MAR simulation it is unbiased on the continuous
   covariate (−0.001, coverage 0.935) through `draw = "grid"`, but leaves a
-  residual bias of −0.025 on the binary one, 0.036 below TabPFN on the
+  residual bias of −0.025 on the binary one, 0.010 below TabPFN on the
   same data sets. `?tabfound_impute` gains a *Choosing a backend* section,
   and the vignette and `inst/simulation/README.md` report the numbers and
   paired tests. TabPFN remains the recommended imputer; Kumo `medium` and

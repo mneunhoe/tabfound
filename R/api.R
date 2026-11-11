@@ -220,17 +220,57 @@ tabular_classifier <- function(model, backend = NULL, device = "cpu",
                                transform_text = "auto", transform_dates = "auto",
                                min_cardinality_for_text = 30L,
                                text_n_components = 30L, ...) {
-  preprocess <- .preprocess_options(transform_text, transform_dates,
-                                    min_cardinality_for_text, text_n_components)
-  ctx <- load_backend_model(model, task = "classification",
-                            backend = backend, device = device)
-  if (is.null(ctx$backend$classifier)) {
-    cli::cli_abort("Backend {.val {ctx$backend$name}} does not provide a classifier.")
+  .tabular_model("classification", model, backend, device,
+                 categorical_features,
+                 .preprocess_options(transform_text, transform_dates,
+                                     min_cardinality_for_text,
+                                     text_n_components),
+                 list(...))
+}
+
+# The body of `tabular_classifier()` / `tabular_regressor()`.
+#
+# `defaults` are arguments applied only where the backend's constructor
+# declares them and the caller did not give them in `args`. That is how
+# `tabfound_models()` asks for `softmax_temperature = 1` without handing
+# an argument Kumo or Mitra have never heard of to their constructors --
+# which backend a reference resolves to is only known once it is loaded.
+# @keywords internal
+.tabular_model <- function(task, model, backend, device, categorical_features,
+                           preprocess, args, defaults = NULL) {
+  ctx <- load_backend_model(model, task = task, backend = backend,
+                            device = device)
+  is_clf <- identical(task, "classification")
+  fn <- if (is_clf) ctx$backend$classifier else ctx$backend$regressor
+  if (is.null(fn)) {
+    cli::cli_abort("Backend {.val {ctx$backend$name}} does not provide a \
+                    {if (is_clf) 'classifier' else 'regressor'}.")
   }
-  args <- .predictor_args(ctx$backend$classifier, ctx, categorical_features,
-                          .resolve_configs_dir(ctx$backend$classifier, list(...)))
-  .new_tabfound_model(ctx, do.call(ctx$backend$classifier, .ctor_args(args)),
-                      "classification", args[-1L], preprocess)
+  for (nm in names(defaults)) {
+    if (is.null(args[[nm]]) && nm %in% names(formals(fn))) {
+      args[[nm]] <- defaults[[nm]]
+    }
+  }
+  args <- .predictor_args(fn, ctx, categorical_features,
+                          .resolve_configs_dir(fn, args))
+  .new_tabfound_model(ctx, do.call(fn, .ctor_args(args)), task, args[-1L],
+                      preprocess)
+}
+
+# `tabular_classifier()` / `tabular_regressor()` with `defaults` applied as
+# `.tabular_model()` describes: same arguments, same everything else.
+# @keywords internal
+.tabular_ctor <- function(task, defaults = NULL) {
+  f <- if (identical(task, "classification")) tabular_classifier
+       else tabular_regressor
+  body(f) <- bquote(
+    .tabular_model(.(task), model, backend, device, categorical_features,
+                   .preprocess_options(transform_text, transform_dates,
+                                       min_cardinality_for_text,
+                                       text_n_components),
+                   list(...), defaults = .(defaults))
+  )
+  f
 }
 
 #' Load a tabular foundation model for regression
@@ -243,17 +283,12 @@ tabular_regressor <- function(model, backend = NULL, device = "cpu",
                               transform_text = "auto", transform_dates = "auto",
                               min_cardinality_for_text = 30L,
                               text_n_components = 30L, ...) {
-  preprocess <- .preprocess_options(transform_text, transform_dates,
-                                    min_cardinality_for_text, text_n_components)
-  ctx <- load_backend_model(model, task = "regression",
-                            backend = backend, device = device)
-  if (is.null(ctx$backend$regressor)) {
-    cli::cli_abort("Backend {.val {ctx$backend$name}} does not provide a regressor.")
-  }
-  args <- .predictor_args(ctx$backend$regressor, ctx, categorical_features,
-                          .resolve_configs_dir(ctx$backend$regressor, list(...)))
-  .new_tabfound_model(ctx, do.call(ctx$backend$regressor, .ctor_args(args)),
-                      "regression", args[-1L], preprocess)
+  .tabular_model("regression", model, backend, device,
+                 categorical_features,
+                 .preprocess_options(transform_text, transform_dates,
+                                     min_cardinality_for_text,
+                                     text_n_components),
+                 list(...))
 }
 
 

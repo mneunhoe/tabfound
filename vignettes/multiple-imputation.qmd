@@ -267,17 +267,24 @@ Over 200 replications at `n = 400` with ~42% of a covariate missing:
 | before deletion | −0.001 | 0.945 |
 | complete cases | −0.111 | 0.780 |
 | MI, correctly specified imputer | +0.003 | 0.935 |
-| MI, **TabPFN** | −0.008 | 0.965 |
+| MI, **TabPFN** | −0.010 | 0.970 |
 | MI, **TabICL** | −0.061 | 0.860 |
 | MI, **Kumo Tabular** (small) | −0.001 | 0.935 |
 | MI, `mice` PMM | +0.013 | 0.945 |
 
-TabPFN removes 93% of the bias and restores coverage, matching both a
+TabPFN removes 91% of the bias and restores coverage, matching both a
 correctly specified parametric imputer and `mice`'s PMM without having
 been told anything about the data-generating process. Its intervals run
 systematically narrower than PMM's, which on one coefficient tips into
-undercoverage (0.900 against 0.950) — so PMM remains the safer default
+undercoverage (0.905 against 0.950) — so PMM remains the safer default
 if you want intervals you need not think about.
+
+These are draws at `softmax_temperature = 1`, which `tabfound_models()`
+uses for the models it builds. The constructors default to 0.9, which
+sharpens the predictive distribution: good for a point prediction, too
+narrow for a draw. If you build models yourself with
+`tabular_classifier()` / `tabular_regressor()` and pass them in, set
+`softmax_temperature = 1` there.
 
 **TabICL does not do the job.** It removes 45% of the bias here, and on
 a binary covariate essentially none. Why it falls short is an open
@@ -286,7 +293,7 @@ question, but it is not the grid inversion:
 **Kumo Tabular (`small`) takes the same grid route and removes all of the
 bias on the continuous covariate.** On the binary covariate it leaves
 some behind: −0.025 against complete-case's −0.078, and its estimate sits
-0.036 below TabPFN's on the same data sets. It is usable, but second to
+0.010 below TabPFN's on the same data sets. It is usable, but second to
 TabPFN. Only the `small` checkpoints were run; `medium` and `large` are
 not validated for imputation.
 

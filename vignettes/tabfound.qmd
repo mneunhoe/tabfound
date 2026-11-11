@@ -612,7 +612,8 @@ mismatch is caught rather than silently mis-encoded.
 
 `softmax_temperature` defaults to `0.9`, matching the reference
 estimators. Pass `softmax_temperature = 1` for the untempered
-distribution.
+distribution. `tabfound_models()` — and so imputation and synthesis — uses 1:
+a draw should come from the distribution, not a sharpened one.
 
 ## Making prediction cheaper
 
@@ -709,7 +710,7 @@ summary(mice::pool(with(imp, lm(Ozone ~ Wind + Temp))))
 
 `as_mids()` hands the result to mice, `as_amelia()` to Amelia, and
 `mice(method = "tabfound")` runs the other direction. In a simulation
-where the truth is known by construction, TabPFN imputation removes 93%
+where the truth is known by construction, TabPFN imputation removes 91%
 of the bias a complete-case analysis carries and restores nominal
 coverage. See `vignette("multiple-imputation", "tabfound")`.
 

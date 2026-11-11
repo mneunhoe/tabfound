@@ -12,7 +12,7 @@ Rscript inst/simulation/run-mi-sim.R --backend=tabpfn --reps=200 --save
 ```
 
 Options: `--backend` (`lm`, `tabpfn`, `tabicl`, `kumo`), `--reps`, `--n`, `--m`,
-`--maxit`, `--proper`, `--seed`, `--save`. Real backends are located
+`--maxit`, `--proper`, `--seed`, `--temperature`, `--save`. Real backends are located
 through the same environment variables the parity harness uses
 (`TABFOUND_TABPFN_CLF_DIR`, `TABFOUND_TABPFN_REG_DIR`, and the `TABICL`
 and `KUMO` equivalents).
@@ -90,6 +90,11 @@ happens when that is turned on). All arms see the same data sets,
 replication for replication, so the columns are directly comparable.
 Monte Carlo error is about 0.006–0.010 on a bias and 0.02 on a coverage.
 
+TabPFN appears twice. `tabfound_models()` builds at
+`softmax_temperature = 1` since #111; the runs before that drew at the
+constructors' 0.9 (see *Temperature* below). The `tabicl` run and the
+*Properness* section predate the change and were made at 0.9.
+
 **`x1`** — continuous, ~42% missing, truth 2.0:
 
 | arm | bias | coverage | CI width |
@@ -97,7 +102,8 @@ Monte Carlo error is about 0.006–0.010 on a bias and 0.02 on a coverage.
 | FULL | −0.001 | 0.945 | 0.229 |
 | CC | **−0.111** | **0.780** | 0.355 |
 | MI, `lm` | +0.003 | 0.935 | 0.283 |
-| MI, `tabpfn` | −0.008 | 0.965 | 0.314 |
+| MI, `tabpfn` (temperature 1, default) | −0.010 | 0.970 | 0.316 |
+| MI, `tabpfn` (temperature 0.9) | −0.008 | 0.965 | 0.314 |
 | MI, `tabicl` | **−0.061** | **0.860** | 0.314 |
 | MI, `kumo` (small) | −0.001 | 0.935 | 0.300 |
 | MI, `mice` PMM | +0.013 | 0.945 | 0.311 |
@@ -109,22 +115,24 @@ Monte Carlo error is about 0.006–0.010 on a bias and 0.02 on a coverage.
 | FULL | +0.002 | 0.955 |
 | CC | **−0.078** | 0.930 |
 | MI, `lm` | +0.003 | 0.945 |
-| MI, `tabpfn` | +0.011 | 0.940 |
+| MI, `tabpfn` (temperature 1, default) | −0.015 | 0.925 |
+| MI, `tabpfn` (temperature 0.9) | +0.011 | 0.940 |
 | MI, `tabicl` | **−0.081** | 0.925 |
 | MI, `kumo` (small) | **−0.025** | 0.910 |
 | MI, `mice` PMM | +0.013 | 0.955 |
 
-FULL, CC and PMM are identical across the four runs by construction --
+FULL, CC and PMM are identical across the five runs by construction --
 they do not depend on which backend was loaded -- so the only row that
 moves is `MI`. That is the point of the pairing.
 
 Two conclusions, one of them unwelcome.
 
-**TabPFN works.** It removes 93% of the complete-case bias on `x1` and
-86% on `g`, landing within 0.011 of truth on every coefficient with
-coverage at or above nominal — indistinguishable from the correctly
-specified `lm` imputer, and from `mice`'s purpose-built PMM, despite
-being given nothing about the data-generating process.
+**TabPFN works.** At the default temperature it removes 91% of the
+complete-case bias on `x1` and 80% on `g`, landing within 0.015 of truth
+on every coefficient (93% and 86% at 0.9, within 0.011) —
+indistinguishable from the correctly specified `lm` imputer, and from
+`mice`'s purpose-built PMM, despite being given nothing about the
+data-generating process.
 
 **TabICL does not.** It removes only 45% of the bias on `x1` (−0.061,
 roughly 11 Monte Carlo standard errors from zero) and on `g` it removes
@@ -160,10 +168,10 @@ not that inverting a 999-level grid is a bad way to draw an imputation.
 That narrows TabICL's open question to TabICL's own predictive
 distributions.
 
-**`g` (the classifier): a residual bias.** −0.025 against complete-case's
-−0.078, so about two-thirds of the bias removed; roughly 2.3 Monte Carlo
-standard errors from zero on its own, but sharp in the paired tests.
-Coverage 0.910.
+**`g` (the classifier): a small residual bias.** −0.025 against
+complete-case's −0.078, so about two-thirds of the bias removed; roughly
+2.3 Monte Carlo standard errors from zero. Coverage 0.910. Kumo applies
+no temperature, so the change in #111 does not touch this run.
 
 Paired against PMM (`paired-compare.R results/mi-mar-kumo-reps.csv`):
 
@@ -173,28 +181,32 @@ Paired against PMM (`paired-compare.R results/mi-mar-kumo-reps.csv`):
 | x2 | 0.915 / 0.950 | 0.070 | −0.013 | <0.0001 | **−0.031** | **<0.0001** |
 | g  | 0.910 / 0.955 | 0.067 | **−0.038** | **<0.0001** | **−0.071** | **<0.0001** |
 
-And against TabPFN's MI arm from `mi-mar-tabpfn-reps.csv`. The two runs
-share the seed, and their FULL arms agree on all 600 estimates, so they
-saw the same data sets and pair across files (stack the two MI arms under
-different names and run `paired-compare.R` on the result):
+And against TabPFN's MI arm at the default temperature,
+`mi-mar-tabpfn-temp1-reps.csv`. The runs share the seed, and their FULL
+arms agree on all 600 estimates, so they saw the same data sets and pair
+across files (stack the two MI arms under different names and run
+`paired-compare.R` on the result):
 
 | coef | coverage (Kumo / TabPFN) | McNemar *p* | estimate difference | *p* | width difference | *p* |
 |---|---|---|---|---|---|---|
-| x1 | 0.935 / 0.965 | 0.077 | +0.007 | 0.002 | −0.014 | 0.036 |
-| x2 | 0.915 / 0.900 | 0.55 | −0.008 | <0.0001 | −0.008 | 0.15 |
-| g  | 0.910 / 0.940 | 0.15 | **−0.036** | **<0.0001** | +0.007 | 0.49 |
+| x1 | 0.935 / 0.970 | 0.046 | +0.009 | <0.0001 | −0.016 | 0.019 |
+| x2 | 0.915 / 0.905 | 0.77 | −0.009 | <0.0001 | −0.009 | 0.14 |
+| g  | 0.910 / 0.925 | 0.55 | −0.010 | 0.015 | −0.005 | 0.67 |
 
-No coverage difference survives Bonferroni (0.017) in either table. The
-estimate differences on `x1` and `x2` are real but under 0.015, which no
-analysis will notice. The one that matters is `g`: Kumo's estimate sits
-0.036 below TabPFN's and 0.038 below PMM's, in paired tests that leave
-no doubt. Its intervals are narrower than PMM's everywhere, like TabPFN's.
+No coverage difference survives Bonferroni (0.017) in either table, and
+every estimate difference against TabPFN is 0.010 or less. Against
+TabPFN at 0.9 the gap on `g` was 0.036; most of that was TabPFN's
+sharpened classifier pushing its own `g` estimate up (see *Temperature*),
+not Kumo pulling down. Against PMM, Kumo's `g` estimate still sits 0.038
+lower, and its intervals are narrower than PMM's everywhere, like
+TabPFN's.
 
 **Reading it.** Kumo small is a usable imputer — far better than TabICL,
-unbiased on the continuous variable — but TabPFN is still the better
-choice, because of the residual attenuation on the categorical. Only
-`small` was run: the `medium` and `large` checkpoints are not validated
-here, and nothing above says how they behave.
+unbiased on the continuous variable, and within 0.010 of TabPFN on every
+coefficient. TabPFN remains the default recommendation, on its smaller
+`g` bias and the depth of evidence behind it. Only `small` was run: the
+`medium` and `large` checkpoints are not validated here, and nothing
+above says how they behave.
 
 Reproduce with:
 
@@ -205,37 +217,99 @@ Rscript inst/simulation/paired-compare.R results/mi-mar-kumo-reps.csv
 
 The run took about 66 minutes on CPU.
 
+## Temperature
+
+TabPFN, the TabICL classifier and TabFM divide their logits by
+`softmax_temperature` before the softmax, and their constructors default
+to 0.9, as the reference implementations do. That sharpens the
+predictive distribution: right for point prediction, wrong for a draw.
+Since #111 `tabfound_models()` builds at 1 instead, which reaches
+`tabfound_impute()`, `mice.impute.tabfound()` and `tabfound_syn()`;
+`tabular_classifier()` / `tabular_regressor()` keep 0.9.
+
+**Calibration, on complete data from this design** (five-fold
+out-of-fold predictions, TabPFN v2.5, `n = 400`):
+
+- Regressor (from #111, 12 replications): mean predictive variance over
+  out-of-fold mean squared error is 0.93 at 0.9 and 1.04 at 1, and the
+  shortfall at 0.9 does not shrink with `n` (0.91–0.93 at `n = 1600`).
+- Classifier (12 replications, `g` given `y, x1, x2`): regressing the
+  outcome on the predicted logit gives a slope of 0.89 at 0.9 —
+  overconfident — and 0.99 at 1. Out-of-fold log loss is lower at 1
+  (0.4801 vs 0.4818, paired *p* < 1e-6).
+
+**On the MAR simulation**, paired on the same 200 data sets (MI arm at 1
+vs at 0.9):
+
+| coef | coverage (1 / 0.9) | McNemar *p* | estimate difference | *p* | width ratio | mean abs. error (1 / 0.9) |
+|---|---|---|---|---|---|---|
+| x1 | 0.970 / 0.965 | 1.00 | −0.002 | <0.0001 | 1.006 | 0.0608 / 0.0610 |
+| x2 | 0.905 / 0.900 | 1.00 | +0.001 | 0.0007 | 1.001 | 0.0664 / 0.0665 |
+| g  | 0.925 / 0.940 | 0.37 | **−0.026** | <0.0001 | 1.021 | 0.1204 / 0.1206 |
+
+The continuous imputations barely move: at this `n` the imputed `x1`'s
+spread is a small part of what drives its coefficient. The binary one
+does. Sharper category draws put the imputed `g` closer to the modal
+class than the data warrant, which pushed its coefficient *up* at 0.9
+(+0.011); untempered draws carry the honest misclassification and land
+at −0.015. Neither is distinguishable from zero on its own (Monte Carlo
+error ≈ 0.010), and the mean absolute error is the same to four digits.
+
+So the simulation does not choose between the two at `n = 400`. The
+default follows the calibration: draws should come from the predictive
+distribution, and 1 is where both heads are calibrated. The issue's
+argument that a fixed variance shortfall biases an imputed regressor by
+a fixed amount — growing in standard errors like `sqrt(n)` — applies to
+larger samples than this simulation runs.
+
+Reproduce with:
+
+```bash
+Rscript inst/simulation/run-mi-sim.R --backend=tabpfn --reps=200 --temperature=1 --save
+Rscript inst/simulation/paired-compare.R results/mi-mar-tabpfn-temp1-reps.csv
+```
+
+An explicit `--temperature` tags the output (`-temp1`); without it the
+script runs at the package default and writes the plain name. That run
+took about 17 minutes on CPU.
+
 ## TabPFN vs PMM, paired
 
 The two arms worth choosing between. Because they share a data set
 replication for replication, `mi-mar-<backend>-reps.csv` supports paired
 tests, which are far sharper than eyeballing the summary columns —
 McNemar on the coverage indicators, a paired *t* on the estimates and on
-the interval widths:
+the interval widths. At the default temperature
+(`mi-mar-tabpfn-temp1-reps.csv`):
 
-| coef | coverage (TabPFN / PMM) | McNemar *p* | width difference | *p* |
-|---|---|---|---|---|
-| x1 | 0.965 / 0.945 | 0.34 | +0.003 | 0.70 |
-| x2 | 0.900 / 0.950 | **0.021** | **−0.023** | **0.001** |
-| g  | 0.940 / 0.955 | 0.61 | **−0.078** | <0.0001 |
+| coef | coverage (TabPFN / PMM) | McNemar *p* | estimate difference | *p* | width difference | *p* |
+|---|---|---|---|---|---|---|
+| x1 | 0.970 / 0.945 | 0.18 | −0.023 | <0.0001 | +0.005 | 0.51 |
+| x2 | 0.905 / 0.950 | 0.039 | −0.004 | 0.097 | **−0.022** | **0.002** |
+| g  | 0.925 / 0.955 | 0.18 | **−0.028** | **<0.0001** | **−0.066** | **<0.0001** |
 
-**Bias: a tie in practice.** TabPFN's estimate sits 0.021 below PMM's on
-`x1` — a real paired difference (*p* < 0.001) that happens to favour
-TabPFN, since truth is 2 and the two biases are −0.008 and +0.013. On `g`
-they are indistinguishable. Both are unbiased at any scale a user cares
-about.
+At 0.9 (`mi-mar-tabpfn-reps.csv`) the picture was the same, with `x2`
+coverage at 0.900 (McNemar *p* = 0.021), `g` widths −0.078 and no
+estimate difference on `g`.
+
+**Bias: a tie in practice.** TabPFN's estimate sits 0.023 below PMM's on
+`x1` — a real paired difference that happens to favour TabPFN, since
+truth is 2 and the two biases are −0.010 and +0.013. On `g` it sits 0.028
+below, biases −0.015 and +0.013: the same distance from truth on
+opposite sides. Both are unbiased at any scale a user cares about.
 
 **Intervals: TabPFN's are systematically narrower**, significantly so on
-`x2` and `g`. Narrower is not automatically worse — on `g` it costs
-nothing, coverage stays at 0.940. On `x2` it does bite: 0.900 against
-PMM's 0.950.
+`x2` and `g`. Narrower is not automatically worse — on `g` coverage stays
+at 0.925. On `x2` it does bite: 0.905 against PMM's 0.950.
 
 Worth stating precisely, because it is close to the line: the `x2`
-coverage test is nominally significant at *p* = 0.021 but would not
-survive Bonferroni across the three coefficients (threshold 0.017). What
-makes it persuasive is not that test alone but that it agrees with the
-width result at the same coefficient (*p* = 0.001) and points the same
-way. Read it as good evidence, not proof.
+coverage test is nominally significant (*p* = 0.039 here, 0.021 at 0.9)
+but would not survive Bonferroni across the three coefficients
+(threshold 0.017). What makes it persuasive is not that test alone but
+that it agrees with the width result at the same coefficient
+(*p* = 0.002) and points the same way. Read it as good evidence, not
+proof. Temperature 1 did not fix it: its `x2` intervals are only 0.1%
+wider.
 
 `x2` is the *fully observed* covariate — its coefficient is disturbed
 only indirectly, through the imputation of `x1` and `g` — so this is
@@ -247,6 +321,7 @@ removal, they are interchangeable.
 ## Properness: the correction that makes things worse
 
 The undercoverage above has a textbook fix, and it does not work here.
+(Measured at temperature 0.9, before #111.)
 
 A PFN draws each query row independently given a fixed context, so the
 `m` chains of an imputation differ only in the noise of the draw. No
@@ -341,4 +416,5 @@ noise. Coverage carries about ±0.02.
 
 Results land in `inst/simulation/results/mi-mar-<backend>.csv` with
 `--save`, plus `-reps.csv` with the per-replication estimates. Runs in a
-non-default regime tag themselves: `-proper`, `-bayes`.
+non-default regime tag themselves: `-proper`, `-bayes`, and `-temp<value>`
+when `--temperature` is given.
