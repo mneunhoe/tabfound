@@ -82,9 +82,21 @@ test_that("the catalogue resolves ids and family + task", {
   kumo <- tabfound:::.model_catalog()[grep("^kumo-", m$id, value = TRUE)]
   expect_length(kumo, 6L)
   for (e in kumo) {
+    expect_identical(e$repo, "mneunhoe/Kumo-Tabular-safetensors")
     expect_identical(e$revision, "v1.0.1")
-    expect_identical(e$file, sprintf("%s/%s.pt", e$model_size, e$head))
+    expect_null(e$convert)
+    expect_identical(e$hub_dir, sprintf("%s/%s", e$model_size, e$head))
+    expect_identical(tabfound:::.hub_path(e, "config.json"),
+                     sprintf("%s/%s/config.json", e$model_size, e$head))
   }
+  expect_identical(
+    tabfound:::.hub_path(tabfound:::.model_catalog()[["tabfm-1.0.0-regressor"]],
+                         "config.json"),
+    "regression/config.json")
+  expect_identical(
+    tabfound:::.hub_path(tabfound:::.model_catalog()[["mitra-classifier"]],
+                         "config.json"),
+    "config.json")
   # Anything not ours passes through as NULL, which is what lets a plain
   # path or Hub repo id reach the old code path untouched.
   expect_null(tabfound:::.catalog_id("/some/local/dir", "classification"))
@@ -281,7 +293,11 @@ test_that("the Kumo converter derives the config and refuses a mislabel", {
   skip_if(is.null(py), "no Python with torch + safetensors")
 
   dest <- withr::local_tempdir()
-  entry <- tabfound:::.model_catalog()[["kumo-tabular-small-classifier"]]
+  # The catalogue fetches the Hub copy this converter made; convert the
+  # NVIDIA original the way that copy was produced.
+  entry <- utils::modifyList(
+    tabfound:::.model_catalog()[["kumo-tabular-small-classifier"]],
+    list(repo = "nvidia/Kumo-Tabular", convert = "kumo"))
   tabfound:::.convert_ckpt(entry, ckpt, dest, py, quiet = TRUE)
 
   cfg <- read_model_config(file.path(dest, "config.json"))

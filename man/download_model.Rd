@@ -50,9 +50,9 @@ TabPFN up to v3 and TabICL do, and that step needs a Python with
 \code{torch} and \code{safetensors} — the checkpoints are nested Python pickles
 that R's torch bindings cannot read. TabPFN v3.5 is published as
 safetensors, so its conversion only lifts the config out of the file's
-header and needs \code{safetensors} alone. NVIDIA Kumo Tabular ships bare
-PyTorch state dicts with no config; its converter derives the
-hyperparameters from the tensor shapes. Point
+header and needs \code{safetensors} alone. NVIDIA Kumo Tabular is fetched from
+\code{mneunhoe/Kumo-Tabular-safetensors}, a bit-identical safetensors copy of
+NVIDIA's PyTorch state dicts, so it needs no conversion either. Point
 \code{options(tabfound.python = )} or \code{TABFOUND_PYTHON} at a suitable
 interpreter if the default search does not find one.
 }

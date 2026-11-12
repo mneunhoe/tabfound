@@ -237,49 +237,53 @@
       size_mb = NA_real_, license = "Apache-2.0",
       description = "Mitra regressor"
     ),
-    # NVIDIA Kumo Tabular: one architecture in three sizes, one bare
-    # `torch.save` state dict per size and task, no config inside -- the
-    # converter derives the hyperparameters from the tensor shapes. The
-    # family name `"kumo-tabular"` means large, which is what the
-    # reference (`sdm.models.KumoTabular`) defaults to; small and medium
-    # have family names of their own, so `"kumo-tabular-small"` works
-    # with either task.
+    # NVIDIA Kumo Tabular: one architecture in three sizes, classifier and
+    # regressor each. NVIDIA publishes bare `torch.save` state dicts
+    # (`nvidia/Kumo-Tabular`, tag `v1.0.1`) that only Python can read;
+    # `mneunhoe/Kumo-Tabular-safetensors` holds the same tensors,
+    # bit-identical, converted by `inst/python/kumo_convert_ckpt.py`, so
+    # downloading needs no Python. `hub_dir` is the folder on the Hub
+    # whose `model.safetensors` + `config.json` land at the store root.
+    # Each `config.json` records the SHA-256 of the NVIDIA `.pt` it came
+    # from. The family name `"kumo-tabular"` means large, which is what
+    # the reference (`sdm.models.KumoTabular`) defaults to; small and
+    # medium have family names of their own, so `"kumo-tabular-small"`
+    # works with either task.
     #
-    # `revision` pins the tag the reference loads. `main` has moved on
-    # since (README and config edits only), and pinning keeps the bytes
-    # behind `source_sha256` the ones the parity fixtures were cut from.
+    # `revision` pins the tag, which matches the NVIDIA tag the weights
+    # were converted from.
     "kumo-tabular-small-classifier" = list(
       backend = "kumo", task = "classification", family = "kumo-tabular-small",
-      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
-      file = "small/classifier.pt",
-      convert = "kumo", head = "classifier", model_size = "small",
+      repo = "mneunhoe/Kumo-Tabular-safetensors", revision = "v1.0.1",
+      hub_dir = "small/classifier",
+      convert = NULL, head = "classifier", model_size = "small",
       size_mb = 109.9,
       license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
       description = "NVIDIA Kumo Tabular small classifier"
     ),
     "kumo-tabular-small-regressor" = list(
       backend = "kumo", task = "regression", family = "kumo-tabular-small",
-      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
-      file = "small/regressor.pt",
-      convert = "kumo", head = "regressor", model_size = "small",
+      repo = "mneunhoe/Kumo-Tabular-safetensors", revision = "v1.0.1",
+      hub_dir = "small/regressor",
+      convert = NULL, head = "regressor", model_size = "small",
       size_mb = 113.9,
       license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
       description = "NVIDIA Kumo Tabular small regressor"
     ),
     "kumo-tabular-medium-classifier" = list(
       backend = "kumo", task = "classification", family = "kumo-tabular-medium",
-      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
-      file = "medium/classifier.pt",
-      convert = "kumo", head = "classifier", model_size = "medium",
+      repo = "mneunhoe/Kumo-Tabular-safetensors", revision = "v1.0.1",
+      hub_dir = "medium/classifier",
+      convert = NULL, head = "classifier", model_size = "medium",
       size_mb = 246.0,
       license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
       description = "NVIDIA Kumo Tabular medium classifier"
     ),
     "kumo-tabular-medium-regressor" = list(
       backend = "kumo", task = "regression", family = "kumo-tabular-medium",
-      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
-      file = "medium/regressor.pt",
-      convert = "kumo", head = "regressor", model_size = "medium",
+      repo = "mneunhoe/Kumo-Tabular-safetensors", revision = "v1.0.1",
+      hub_dir = "medium/regressor",
+      convert = NULL, head = "regressor", model_size = "medium",
       size_mb = 250.0,
       license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
       description = "NVIDIA Kumo Tabular medium regressor"
@@ -287,9 +291,9 @@
     "kumo-tabular-large-classifier" = list(
       backend = "kumo", task = "classification",
       family = c("kumo-tabular", "kumo-tabular-large"),
-      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
-      file = "large/classifier.pt",
-      convert = "kumo", head = "classifier", model_size = "large",
+      repo = "mneunhoe/Kumo-Tabular-safetensors", revision = "v1.0.1",
+      hub_dir = "large/classifier",
+      convert = NULL, head = "classifier", model_size = "large",
       size_mb = 854.7,
       license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
       description = "NVIDIA Kumo Tabular large classifier"
@@ -297,9 +301,9 @@
     "kumo-tabular-large-regressor" = list(
       backend = "kumo", task = "regression",
       family = c("kumo-tabular", "kumo-tabular-large"),
-      repo = "nvidia/Kumo-Tabular", revision = "v1.0.1",
-      file = "large/regressor.pt",
-      convert = "kumo", head = "regressor", model_size = "large",
+      repo = "mneunhoe/Kumo-Tabular-safetensors", revision = "v1.0.1",
+      hub_dir = "large/regressor",
+      convert = NULL, head = "regressor", model_size = "large",
       size_mb = 862.8,
       license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
       description = "NVIDIA Kumo Tabular large regressor"
@@ -668,6 +672,14 @@ list_models <- function() {
 }
 
 
+# Where a ready-to-load file sits in the entry's Hub repo: under
+# `hub_dir` or `subfolder` if the entry has one, else at the top.
+# @keywords internal
+.hub_path <- function(entry, f) {
+  dir <- entry$hub_dir %||% entry$subfolder
+  if (is.null(dir)) f else paste(dir, f, sep = "/")
+}
+
 # Ask the Hub how big this really is. Best-effort: offline is normal.
 # @keywords internal
 .remote_size_mb <- function(entry) {
@@ -678,11 +690,8 @@ list_models <- function() {
     error = function(e) NULL
   ))
   if (is.null(info) || is.null(info$siblings)) return(NA_real_)
-  wanted <- if (!is.null(entry$file)) entry$file else {
-    rel <- function(f) if (is.null(entry$subfolder)) f else
-      paste(entry$subfolder, f, sep = "/")
-    c(rel("model.safetensors"), rel("config.json"))
-  }
+  wanted <- if (!is.null(entry$file)) entry$file else
+    .hub_path(entry, c("model.safetensors", "config.json"))
   sizes <- vapply(info$siblings, function(s) {
     if (!is.null(s$rfilename) && s$rfilename %in% wanted && !is.null(s$size)) {
       as.numeric(s$size)
@@ -705,9 +714,9 @@ list_models <- function() {
 #' `torch` and `safetensors` — the checkpoints are nested Python pickles
 #' that R's torch bindings cannot read. TabPFN v3.5 is published as
 #' safetensors, so its conversion only lifts the config out of the file's
-#' header and needs `safetensors` alone. NVIDIA Kumo Tabular ships bare
-#' PyTorch state dicts with no config; its converter derives the
-#' hyperparameters from the tensor shapes. Point
+#' header and needs `safetensors` alone. NVIDIA Kumo Tabular is fetched from
+#' `mneunhoe/Kumo-Tabular-safetensors`, a bit-identical safetensors copy of
+#' NVIDIA's PyTorch state dicts, so it needs no conversion either. Point
 #' `options(tabfound.python = )` or `TABFOUND_PYTHON` at a suitable
 #' interpreter if the default search does not find one.
 #'
@@ -767,10 +776,14 @@ download_model <- function(model, task = NULL, force = FALSE, python = NULL,
   dir.create(dest, recursive = TRUE, showWarnings = FALSE)
 
   if (is.null(entry$convert)) {
+    # `subfolder` keeps the Hub folder in the store too (TabFM's loader
+    # expects it); `hub_dir` is only where to fetch from, and the files
+    # land at the store root.
     rel <- function(f) if (is.null(entry$subfolder)) f else
       file.path(entry$subfolder, f)
     for (f in c("model.safetensors", "config.json")) {
-      got <- .hub_download(entry$repo, rel(f))
+      got <- .hub_download(entry$repo, .hub_path(entry, f),
+                           revision = entry$revision %||% "main")
       .place_file(got, file.path(dest, rel(f)))
     }
   } else {
@@ -787,6 +800,7 @@ download_model <- function(model, task = NULL, force = FALSE, python = NULL,
     jsonlite::toJSON(list(
       id = id, repo = entry$repo, file = entry$file %||% NA_character_,
       subfolder = entry$subfolder %||% NA_character_,
+      hub_dir = entry$hub_dir %||% NA_character_,
       revision = entry$revision %||% "main",
       converted = !is.null(entry$convert),
       tabfound_version = as.character(utils::packageVersion("tabfound")),

@@ -59,11 +59,11 @@ downloaded once. Then they load by name, offline. You can pass a family
 name (`"tabpfn-v2.5"`, `"tabicl"`, `"mitra"`) and the task decides which
 checkpoint is used. A local directory path works wherever a name does.
 
-**One-time Python step.** TabPFN, TabICL and Kumo Tabular publish their
+**One-time Python step.** TabPFN and TabICL publish their
 weights in a PyTorch format that R cannot read. `download_model()` converts them once,
 and for that step it needs a Python interpreter with `torch` and
 `safetensors` installed. Point `options(tabfound.python = )` at one if it
-is not found. TabFM and Mitra need no conversion. After this step, Python
+is not found. TabFM, Mitra and Kumo Tabular need no conversion. After this step, Python
 is never used again.
 
 > **Check the licence before you publish or deploy.** The package is MIT,
@@ -86,7 +86,7 @@ matter:
 | TabICL v2 | `"tabicl"` | ~110 MB per task | BSD-3-Clause | Regression returns a full quantile grid. **Not recommended for imputation.** Weights: [jingang/TabICL](https://huggingface.co/jingang/TabICL). |
 | TabFM 1.0 | `"tabfm-1.0.0"` | ~6.6 GB per task | non-commercial | Large (1.6 B parameters) and slow on CPU. Regression is point prediction only. Weights: [google/tabfm-1.0.0-pytorch](https://huggingface.co/google/tabfm-1.0.0-pytorch). |
 | Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | Permissive licence. 72 M parameters. Regression is point prediction only. Weights: [autogluon/mitra-classifier](https://huggingface.co/autogluon/mitra-classifier), [autogluon/mitra-regressor](https://huggingface.co/autogluon/mitra-regressor). |
-| Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | Permissive licence. NVIDIA's model in three sizes; `"kumo-tabular"` is large, which is slow on CPU. Handles `NA` natively. Regression returns a full quantile grid. 8-member ensemble by default. Weights: [nvidia/Kumo-Tabular](https://huggingface.co/nvidia/Kumo-Tabular) (`v1.0.1`). |
+| Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | Permissive licence. NVIDIA's model in three sizes; `"kumo-tabular"` is large, which is slow on CPU. Handles `NA` natively. Regression returns a full quantile grid. 8-member ensemble by default. Weights: [nvidia/Kumo-Tabular](https://huggingface.co/nvidia/Kumo-Tabular) (`v1.0.1`), fetched as a bit-identical safetensors copy from [mneunhoe/Kumo-Tabular-safetensors](https://huggingface.co/mneunhoe/Kumo-Tabular-safetensors). |
 
 All the models are inference-only. Each one reproduces its Python
 reference's own preprocessing and ensembling, and gets the same predictions

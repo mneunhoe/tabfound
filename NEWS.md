@@ -1,5 +1,14 @@
 # tabfound (development version)
 
+* `download_model()` now fetches NVIDIA Kumo Tabular (all three sizes, both
+  tasks) as safetensors from `mneunhoe/Kumo-Tabular-safetensors` (tag
+  `v1.0.1`), so it no longer needs Python. That repo is a bit-identical
+  copy of `nvidia/Kumo-Tabular` `v1.0.1`, converted by
+  `inst/python/kumo_convert_ckpt.py`. It carries NVIDIA's OpenMDW-1.1
+  licence, and every file records the SHA-256 of its source `.pt`. Stores
+  that were already converted stay valid. Catalogue entries gain an
+  optional `hub_dir`: a Hub folder to fetch from, whose files are placed at
+  the root of the local store.
 * `tabfound_models()` now builds its models at `softmax_temperature = 1`,
   so `tabfound_impute()`, `mice.impute.tabfound()` and `tabfound_syn()`
   draw from the untempered predictive distribution. The constructors'
