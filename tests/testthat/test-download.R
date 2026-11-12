@@ -415,3 +415,27 @@ test_that("an interrupted download does not count as downloaded", {
   writeLines("w", file.path(d, "model.safetensors"))
   expect_false(.model_is_downloaded(id))
 })
+
+
+test_that("the pre-download size is read at the pinned revision", {
+  skip_if_not_installed("hfhub")
+  seen <- NULL
+  local_mocked_bindings(
+    hub_repo_info = function(repo_id, ..., revision = NULL,
+                             files_metadata = FALSE) {
+      seen <<- revision
+      list(siblings = list(
+        list(rfilename = "small/classifier/model.safetensors", size = 2e6),
+        list(rfilename = "small/classifier/config.json", size = 5e5),
+        list(rfilename = "large/classifier/model.safetensors", size = 9e8)))
+    },
+    .package = "hfhub"
+  )
+  withr::local_options(tabfound.offline = FALSE)
+  withr::local_envvar(HF_HUB_OFFLINE = NA)
+  cat <- tabfound:::.model_catalog()
+  expect_equal(tabfound:::.remote_size_mb(cat[["kumo-tabular-small-classifier"]]), 2.5)
+  expect_identical(seen, "v1.0.1")
+  tabfound:::.remote_size_mb(cat[["mitra-classifier"]])
+  expect_identical(seen, "main")
+})

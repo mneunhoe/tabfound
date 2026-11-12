@@ -686,7 +686,10 @@ list_models <- function() {
   if (.hf_offline()) return(NA_real_)
   if (!requireNamespace("hfhub", quietly = TRUE)) return(NA_real_)
   info <- .with_hf_token(tryCatch(
-    hfhub::hub_repo_info(entry$repo, files_metadata = TRUE),
+    # The size of what `download_model()` will fetch, so read the pinned
+    # revision, not `main`, which may have moved on.
+    hfhub::hub_repo_info(entry$repo, revision = entry$revision %||% "main",
+                         files_metadata = TRUE),
     error = function(e) NULL
   ))
   if (is.null(info) || is.null(info$siblings)) return(NA_real_)

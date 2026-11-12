@@ -8,7 +8,8 @@
   licence, and every file records the SHA-256 of its source `.pt`. Stores
   that were already converted stay valid. Catalogue entries gain an
   optional `hub_dir`: a Hub folder to fetch from, whose files are placed at
-  the root of the local store.
+  the root of the local store. The size shown before downloading is now
+  read at the entry's pinned revision, not `main`.
 * `tabfound_models()` now builds its models at `softmax_temperature = 1`,
   so `tabfound_impute()`, `mice.impute.tabfound()` and `tabfound_syn()`
   draw from the untempered predictive distribution. The constructors'
