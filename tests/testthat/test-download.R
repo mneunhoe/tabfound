@@ -82,9 +82,21 @@ test_that("the catalogue resolves ids and family + task", {
   kumo <- tabfound:::.model_catalog()[grep("^kumo-", m$id, value = TRUE)]
   expect_length(kumo, 6L)
   for (e in kumo) {
+    expect_identical(e$repo, "mneunhoe/Kumo-Tabular-safetensors")
     expect_identical(e$revision, "v1.0.1")
-    expect_identical(e$file, sprintf("%s/%s.pt", e$model_size, e$head))
+    expect_null(e$convert)
+    expect_identical(e$hub_dir, sprintf("%s/%s", e$model_size, e$head))
+    expect_identical(tabfound:::.hub_path(e, "config.json"),
+                     sprintf("%s/%s/config.json", e$model_size, e$head))
   }
+  expect_identical(
+    tabfound:::.hub_path(tabfound:::.model_catalog()[["tabfm-1.0.0-regressor"]],
+                         "config.json"),
+    "regression/config.json")
+  expect_identical(
+    tabfound:::.hub_path(tabfound:::.model_catalog()[["mitra-classifier"]],
+                         "config.json"),
+    "config.json")
   # Anything not ours passes through as NULL, which is what lets a plain
   # path or Hub repo id reach the old code path untouched.
   expect_null(tabfound:::.catalog_id("/some/local/dir", "classification"))
@@ -281,7 +293,11 @@ test_that("the Kumo converter derives the config and refuses a mislabel", {
   skip_if(is.null(py), "no Python with torch + safetensors")
 
   dest <- withr::local_tempdir()
-  entry <- tabfound:::.model_catalog()[["kumo-tabular-small-classifier"]]
+  # The catalogue fetches the Hub copy this converter made; convert the
+  # NVIDIA original the way that copy was produced.
+  entry <- utils::modifyList(
+    tabfound:::.model_catalog()[["kumo-tabular-small-classifier"]],
+    list(repo = "nvidia/Kumo-Tabular", convert = "kumo"))
   tabfound:::.convert_ckpt(entry, ckpt, dest, py, quiet = TRUE)
 
   cfg <- read_model_config(file.path(dest, "config.json"))
@@ -398,4 +414,28 @@ test_that("an interrupted download does not count as downloaded", {
   # still there, still named right, and now short.
   writeLines("w", file.path(d, "model.safetensors"))
   expect_false(.model_is_downloaded(id))
+})
+
+
+test_that("the pre-download size is read at the pinned revision", {
+  skip_if_not_installed("hfhub")
+  seen <- NULL
+  local_mocked_bindings(
+    hub_repo_info = function(repo_id, ..., revision = NULL,
+                             files_metadata = FALSE) {
+      seen <<- revision
+      list(siblings = list(
+        list(rfilename = "small/classifier/model.safetensors", size = 2e6),
+        list(rfilename = "small/classifier/config.json", size = 5e5),
+        list(rfilename = "large/classifier/model.safetensors", size = 9e8)))
+    },
+    .package = "hfhub"
+  )
+  withr::local_options(tabfound.offline = FALSE)
+  withr::local_envvar(HF_HUB_OFFLINE = NA)
+  cat <- tabfound:::.model_catalog()
+  expect_equal(tabfound:::.remote_size_mb(cat[["kumo-tabular-small-classifier"]]), 2.5)
+  expect_identical(seen, "v1.0.1")
+  tabfound:::.remote_size_mb(cat[["mitra-classifier"]])
+  expect_identical(seen, "main")
 })

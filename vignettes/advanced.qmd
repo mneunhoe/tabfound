@@ -542,9 +542,12 @@ classifier and a regressor, all from `nvidia/Kumo-Tabular` pinned at
 | `"kumo-tabular-large"`, `"kumo-tabular"` | 214 M | 855 MB | the library's default; slow on CPU |
 
 The bare family name is the large model, as `size = "large"` is the
-default of `sdm`'s `KumoTabular()`; name a size to get another. The weights are bare PyTorch
-state dicts, so `download_model()` converts them once with Python, and
-the converter derives each size's config from the tensor shapes.
+default of `sdm`'s `KumoTabular()`; name a size to get another. NVIDIA publishes the weights as bare PyTorch
+state dicts. `download_model()` fetches a safetensors copy from
+`mneunhoe/Kumo-Tabular-safetensors` instead, so no Python is needed. That copy
+was made with `inst/python/kumo_convert_ckpt.py`, which derives each size's
+config from the tensor shapes. Every tensor is bit-identical to NVIDIA's, and
+each `config.json` records the SHA-256 of the `.pt` file it came from.
 
 ## Known limitations, per model
 
