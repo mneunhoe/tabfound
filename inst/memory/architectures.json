@@ -969,6 +969,40 @@
         "source_revision": "v1.0.1",
         "source_ckpt": "regressor.pt"
       }
+    },
+    "causilo-1.5-classifier": {
+      "backend": "causilo",
+      "task": "classification",
+      "weights_bytes": 1100151928,
+      "config": {
+        "architecture": "causilo-v1.5",
+        "format_version": 1,
+        "config_version": 1,
+        "task": "classification",
+        "model": {
+          "max_classes": 10,
+          "width": 256,
+          "column_depth": 8,
+          "prediction_depth": 24
+        }
+      }
+    },
+    "causilo-1.5-regressor": {
+      "backend": "causilo",
+      "task": "regression",
+      "weights_bytes": 1108211692,
+      "config": {
+        "architecture": "causilo-v1.5",
+        "format_version": 1,
+        "config_version": 1,
+        "task": "regression",
+        "model": {
+          "max_classes": 0,
+          "width": 256,
+          "column_depth": 8,
+          "prediction_depth": 24
+        }
+      }
     }
   }
 }

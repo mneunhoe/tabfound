@@ -307,6 +307,37 @@
       size_mb = 862.8,
       license = "OpenMDW-1.1 (weights, permissive); Apache-2.0 (reference code)",
       description = "NVIDIA Kumo Tabular large regressor"
+    ),
+    # Causilo 1.5 (Nums AI): one architecture, a classifier and a
+    # regressor. The publisher ships `model.safetensors` + `config.json`
+    # per task, so `hub_dir` fetches them as they are -- no conversion,
+    # no Python. `config.json` must stay byte-identical: each checkpoint's
+    # header records the SHA-256 of the config it was published with,
+    # which `verify` checks after the download. The Hub repo has no tags,
+    # so `revision` pins the commit the reference itself pins
+    # (`causilo/model_selection.py`). "Causilo 1.5 (Light)" is the same
+    # weights with one ensemble member (`n_estimators = 1`), not an id.
+    "causilo-1.5-classifier" = list(
+      backend = "causilo", task = "classification",
+      family = c("causilo", "causilo-1.5"),
+      repo = "nums-ai/causilo-1.5",
+      revision = "4ca2275bae85014a19422e8c18fcf8f24c5c14e1",
+      hub_dir = "classifier", convert = NULL,
+      verify = ".causilo_verify_artifacts",
+      size_mb = 1100.3,
+      license = "Nums AI Model License (weights): non-commercial research and evaluation; commercial, production or hosted use needs a separate licence (see the repo). Apache-2.0 (reference code)",
+      description = "Causilo 1.5 classifier"
+    ),
+    "causilo-1.5-regressor" = list(
+      backend = "causilo", task = "regression",
+      family = c("causilo", "causilo-1.5"),
+      repo = "nums-ai/causilo-1.5",
+      revision = "4ca2275bae85014a19422e8c18fcf8f24c5c14e1",
+      hub_dir = "regressor", convert = NULL,
+      verify = ".causilo_verify_artifacts",
+      size_mb = 1108.3,
+      license = "Nums AI Model License (weights): non-commercial research and evaluation; commercial, production or hosted use needs a separate licence (see the repo). Apache-2.0 (reference code)",
+      description = "Causilo 1.5 regressor"
     )
   )
 }
@@ -719,15 +750,17 @@ list_models <- function() {
 #' safetensors, so its conversion only lifts the config out of the file's
 #' header and needs `safetensors` alone. NVIDIA Kumo Tabular is fetched from
 #' `mneunhoe/Kumo-Tabular-safetensors`, a bit-identical safetensors copy of
-#' NVIDIA's PyTorch state dicts, so it needs no conversion either. Point
+#' NVIDIA's PyTorch state dicts, so it needs no conversion either; nor
+#' does Causilo 1.5, which Nums AI publishes as safetensors (its download
+#' is checked against the config hash in the weights' header). Point
 #' `options(tabfound.python = )` or `TABFOUND_PYTHON` at a suitable
 #' interpreter if the default search does not find one.
 #'
 #' @param model A catalogue id from [list_models()], or a family name
 #'   (`"tabpfn"`, `"tabpfn-v2.5"`, `"tabpfn-v2.6"`, `"tabpfn-v3"`,
 #'   `"tabpfn-v3.5"`, `"tabicl"`, `"tabfm-1.0.0"`, `"mitra"`,
-#'   `"kumo-tabular"`, `"kumo-tabular-small"`, `"kumo-tabular-medium"`)
-#'   together with `task`. `"kumo-tabular"` is the large model, the
+#'   `"kumo-tabular"`, `"kumo-tabular-small"`, `"kumo-tabular-medium"`,
+#'   `"causilo"`, `"causilo-1.5"`) together with `task`. `"kumo-tabular"` is the large model, the
 #'   reference default. `"tabpfn"` stays pinned to v2.5; ask for a later
 #'   generation by name. A family name resolves to that family's default
 #'   checkpoint; the specialised variants are catalogued too, but by exact
@@ -794,6 +827,20 @@ download_model <- function(model, task = NULL, force = FALSE, python = NULL,
                          revision = entry$revision %||% "main")
     py  <- .find_python(python)
     .convert_ckpt(entry, src, dest, py, quiet = quiet)
+  }
+  # A backend-specific check that the files placed belong together
+  # (Causilo: the weights' header names the config's SHA-256). A failure
+  # removes the store directory, so a bad pair is never taken for a
+  # finished download.
+  if (!is.null(entry$verify)) {
+    ok <- tryCatch({
+      get(entry$verify, envir = asNamespace("tabfound"), mode = "function")(dest)
+      TRUE
+    }, error = function(e) {
+      unlink(dest, recursive = TRUE)
+      cli::cli_abort(c("Downloaded {.val {id}} failed its integrity check.",
+                       x = conditionMessage(e)), parent = e)
+    })
   }
 
   # Provenance, so a store directory can say where it came from -- plus
