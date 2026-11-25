@@ -194,7 +194,8 @@ test_that("arch_viridis matches viridisLite to within a small colour difference"
 test_that("at most one stage collapses the table, and before the ICL stack", {
   expected <- list(tabicl = "row_tf", tabfm = "row2", tabpfn3 = "agg",
                    tabpfn35 = "agg", tabpfn = character(),
-                   tabpfn26 = character(), mitra = character())
+                   tabpfn26 = character(), mitra = character(),
+                   causilo = "row")
   for (nm in names(arch_test_variants())) {
     v <- arch_test_variants()[[nm]]
     arch <- arch_test_variant_arch(v)

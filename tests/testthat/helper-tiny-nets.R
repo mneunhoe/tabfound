@@ -77,3 +77,25 @@ tiny_kumo <- function(head = "classifier", kv = 2L) {
 fake_ctx <- function(net, config = NULL) {
   list(net = net, device = "cpu", config = config)
 }
+
+
+# A Causilo 1.5 config of the published shape, cut down. Width must split
+# into the 8 row heads.
+tiny_causilo_config <- function(task = "classification", width = 16L,
+                                column_depth = 2L, prediction_depth = 2L) {
+  list(architecture = "causilo-v1.5", format_version = 1L, config_version = 1L,
+       task = task,
+       model = list(max_classes = if (task == "classification") 10L else 0L,
+                    width = width, column_depth = column_depth,
+                    prediction_depth = prediction_depth))
+}
+
+# A randomly initialised tiny Causilo net, in eval mode. Every parameter
+# is drawn (the constructors leave the latents and frequencies at zero).
+tiny_causilo <- function(task = "classification", seed = 1L, ...) {
+  torch::torch_manual_seed(seed)
+  net <- suppressMessages(causilo_model(tiny_causilo_config(task, ...)))
+  torch::with_no_grad(for (p in net$parameters) p$copy_(torch::torch_randn_like(p) * 0.3))
+  net$eval()
+  net
+}

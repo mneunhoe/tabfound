@@ -619,6 +619,89 @@ parity_kumo <- function(reference_dir, fixture_dir, fixture, label = fixture,
 }
 
 
+# The Causilo network on a fixture, called as `causilo_reference.py`
+# calls the reference: the fixture's raw columns as one member, NaN kept;
+# 0-based class codes, or the target standardized with the population SD
+# in float64 and cast to float32.
+# @keywords internal
+.bare_causilo <- function(ctx, fx, meta) {
+  x <- rbind(as.matrix(fx$x_train), as.matrix(fx$x_test))
+  storage.mode(x) <- "double"
+  clf <- identical(meta$task, "classification")
+  y <- as.numeric(fx$y_train)
+  if (!clf) {
+    m <- mean(y); s <- sqrt(mean((y - m)^2))
+    if (s == 0) s <- 1
+    y <- (y - m) / s
+  }
+  out <- torch::with_no_grad(ctx$net(
+    as_float_tensor(x, device = ctx$device)$unsqueeze(1L),
+    torch::torch_tensor(matrix(y, nrow = 1L), dtype = torch::torch_float32(),
+                        device = ctx$device)))
+  test <- out[1, , ]
+  if (clf) {
+    n_cls <- as.integer(meta$n_classes)
+    as.matrix(torch::nnf_softmax(test[, 1:n_cls], dim = -1L)$cpu())
+  } else {
+    as.matrix(test$to(dtype = torch::torch_float64())$cpu()) * s + m
+  }
+}
+
+
+#' Run the Causilo 1.5 network against a stored Python reference
+#'
+#' @param reference_dir Directory written by `causilo_reference.py`.
+#' @param fixture_dir,fixture Parity fixture location and name.
+#' @param model_dir The published Causilo artifacts for the fixture's task.
+#' @keywords internal
+parity_causilo <- function(reference_dir, fixture_dir, fixture, label = fixture,
+                           model_dir,
+                           trace_dir = tempfile("tabfound-causilo-")) {
+  stopifnot(dir.exists(reference_dir))
+  meta <- jsonlite::fromJSON(file.path(reference_dir, "reference.json"))
+  fx   <- read_parity_fixture(fixture_dir, fixture)
+  dir.create(trace_dir, recursive = TRUE, showWarnings = FALSE)
+
+  rows <- list()
+  add <- function(stage, d, note = "") {
+    rows[[length(rows) + 1L]] <<- data.frame(
+      fixture = label, stage = stage, n = d$n,
+      max_abs = d$max_abs, max_rel = d$max_rel,
+      max_scaled = d$max_scaled %||% NA_real_,
+      note = note, stringsAsFactors = FALSE
+    )
+  }
+
+  old <- Sys.getenv("TABFOUND_DUMP_DIR", unset = NA)
+  Sys.setenv(TABFOUND_DUMP_DIR = trace_dir)
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("TABFOUND_DUMP_DIR")
+    else Sys.setenv(TABFOUND_DUMP_DIR = old)
+  }, add = TRUE)
+
+  ctx <- .bare_net(model_dir, "causilo", meta$task)
+  r_out <- .bare_causilo(ctx, fx, meta)
+  if (identical(meta$task, "classification")) {
+    py <- read_t(file.path(reference_dir, "final_probs.safetensors"))
+    add("net:probs", tensor_diff(r_out, py))
+  } else {
+    py <- read_t(file.path(reference_dir, "final_quantiles.safetensors"))
+    add("net:quantiles", tensor_diff(r_out, py))
+  }
+
+  for (nm in unlist(meta$stages)) {
+    r <- read_t(file.path(trace_dir, paste0(nm, ".safetensors")))
+    p <- read_t(file.path(reference_dir, paste0(nm, ".safetensors")))
+    if (is.null(r) || is.null(p)) next
+    d <- tensor_diff(r, p)
+    add(paste0("stage:", sub("^causilo_", "", nm)), d,
+        note = if (isTRUE(d$shape_ok)) "" else "SHAPE MISMATCH")
+  }
+
+  list(summary = do.call(rbind, rows), meta = meta, trace_dir = trace_dir)
+}
+
+
 #' Run the Mitra backend against a stored Python reference
 #'
 #' @param reference_dir Directory written by `mitra_reference.py`.
@@ -1100,7 +1183,15 @@ parity_tolerances <- function() {
               # v2/v2.5's cache, graded against the shift that changing
               # the test batch size already causes: exact, or no worse
               # than that. `tol_rel` here is a ratio, not an error.
-              "cache:vs-batching"),
+              "cache:vs-batching",
+              # Causilo 1.5 stages (`stage:col0` is shared with Kumo
+              # above): the last row layer's latents, the last prediction
+              # layer and the raw head. Activations, so the activation
+              # bounds. The largest gap is inside the prediction stack
+              # (layer 22: 1.7e-5 of scale on `clf_categorical`); the
+              # last layer only advances the query rows and comes back
+              # to ~2e-6.
+              "stage:row7", "stage:pred23", "stage:head"),
     tol_abs = c(1e-6, 1e-6, 1e-6, 1e-3, 1e-5, 1e-4, 1e-4,
                 1e-5, 1e-4, 1e-4,
                 1e-6, 1e-4, 1e-4, 1e-4, 1e-4, 1e-3,
@@ -1108,7 +1199,8 @@ parity_tolerances <- function() {
                 1e-4, 1e-4, 1e-4,
                 1e-6, 1e-6, 1e-4,
                 1e-6, 1e-5, 1e-5, 1e-4,
-                1e-3, 1e-3, 0, 0, 0, 0, 0, 1e-3, 0, 0, Inf, 0),
+                1e-3, 1e-3, 0, 0, 0, 0, 0, 1e-3, 0, 0, Inf, 0,
+                1e-4, 1e-4, 1e-4),
     tol_rel = c(1e-6, 1e-6, 1e-6, 1e-3, 1e-4, 1e-4, 1e-4,
                 1e-4, 1e-4, 1e-4,
                 1e-6, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3,
@@ -1116,7 +1208,8 @@ parity_tolerances <- function() {
                 1e-3, 1e-3, 1e-3,
                 1e-6, 1e-6, 1e-3,
                 1e-6, 1e-5, 1e-5, 1e-4,
-                1e-3, 1e-3, 0, 0, 2, 2, 0, 1e-3, 2, 0, Inf, 1.5),
+                1e-3, 1e-3, 0, 0, 2, 2, 0, 1e-3, 2, 0, Inf, 1.5,
+                1e-3, 1e-3, 1e-3),
     # Scale-relative bound, used only where a tensor's dynamic range
     # makes the other two meaningless. NA disables it.
     tol_scaled = c(NA, NA, NA, 1e-4, NA, NA, NA,
@@ -1126,7 +1219,8 @@ parity_tolerances <- function() {
                    1e-4, 1e-4, 1e-4,
                    NA, NA, 1e-4,
                    NA, 1e-5, 1e-5, NA,
-                   1e-4, 1e-4, NA, NA, 5e-5, 5e-5, 1e-4, 1e-4, 5e-5, NA, NA, NA),
+                   1e-4, 1e-4, NA, NA, 5e-5, 5e-5, 1e-4, 1e-4, 5e-5, NA, NA, NA,
+                   1e-4, 1e-4, 1e-4),
     stringsAsFactors = FALSE
   )
 }

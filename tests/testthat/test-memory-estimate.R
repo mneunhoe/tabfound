@@ -195,7 +195,8 @@ test_that("the estimate rises with every dimension, on every backend", {
                   tabpfn3 = mem_config_tabpfn3(),
                   tabicl = mem_config_tabicl(),
                   tabfm = mem_config_tabfm(),
-                  mitra = mem_config_mitra())
+                  mitra = mem_config_mitra(),
+                  causilo = mem_config_causilo())
   for (nm in names(configs)) {
     cfg <- configs[[nm]]
     base <- peak(cfg, 2000, 500, 50)$total_peak_bytes

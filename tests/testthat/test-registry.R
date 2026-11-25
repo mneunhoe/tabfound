@@ -375,7 +375,11 @@ test_that("every backend detects only its own config", {
                   n_heads = 4L, task = "CLASSIFICATION"),
     kumo   = list(arch = "kumo_tabular", head = "classifier",
                   cell_channels = 128L, icl_channels = 512L,
-                  num_frequencies = 32L, num_classes = 10L)
+                  num_frequencies = 32L, num_classes = 10L),
+    causilo = list(architecture = "causilo-v1.5", format_version = 1L,
+                   config_version = 1L, task = "regression",
+                   model = list(max_classes = 0L, width = 256L,
+                                column_depth = 8L, prediction_depth = 24L))
   )
   # Every config must be claimed by exactly one backend. Mitra's is the
   # thinnest of the four -- five fields, no architecture marker -- so it

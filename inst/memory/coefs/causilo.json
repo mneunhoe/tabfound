@@ -1,0 +1,25 @@
+{
+  "backend": "causilo",
+  "source": "borrowed",
+  "notes": "TabICL's measured constants, borrowed until Causilo is calibrated (Phase 5 of planning/causilo-port-plan.md). Uncalibrated: the estimate's shape follows causilo_peak_terms(), its scale does not.",
+  "devices": {
+    "cpu": {
+      "float32": {
+        "intercept_bytes": 1538699008,
+        "act_copies": 28.51410860037,
+        "att_copies": 0,
+        "res_copies": 57.1035490126356,
+        "prepass_copies": 33.9828506225749,
+        "icl_copies": 80,
+        "floor_bytes": 3951656960,
+        "prep_state_factor": 1,
+        "spmf_floor": 1.10690326690786,
+        "ensemble_log2_factor": 1.03389414039712,
+        "ensemble_cap": 5.2535722725872,
+        "ensemble_source": "borrowed",
+        "safety_factor": 1.30893011636315,
+        "weights_fallback_bytes": 1108211692
+      }
+    }
+  }
+}

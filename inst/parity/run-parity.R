@@ -36,6 +36,9 @@
 #   TABFOUND_KUMO_CLF_CKPT    raw small/classifier.pt, only needed with --regenerate
 #   TABFOUND_KUMO_REG_CKPT
 #   TABFOUND_REF_PYTHON_KUMO  venv with structured-data-models (default .venvs/sdm)
+#   TABFOUND_CAUSILO_CLF_DIR  Causilo 1.5 classifier (the published files,
+#   TABFOUND_CAUSILO_REG_DIR  e.g. download_model("causilo-1.5-classifier"))
+#   TABFOUND_REF_PYTHON_CAUSILO venv with causilo 1.5.0 (default .venvs/causilo)
 
 suppressMessages({
   library(torch)
@@ -72,6 +75,8 @@ py_for <- function(backend) {
   # own venv.
   sdm <- file.path(".venvs", "sdm", "bin", "python")
   if (identical(backend, "kumo") && file.exists(sdm)) return(sdm)
+  causilo <- file.path(".venvs", "causilo", "bin", "python")
+  if (identical(backend, "causilo") && file.exists(causilo)) return(causilo)
   PY
 }
 
@@ -737,6 +742,54 @@ run_kumo <- function() {
 }
 
 
+# ---------------------------------------------------------------------------
+# Causilo 1.5
+# ---------------------------------------------------------------------------
+
+run_causilo <- function() {
+  cat("\n=== backend: causilo ===\n")
+  clf_dir <- env_dir("TABFOUND_CAUSILO_CLF_DIR", "Causilo 1.5 classifier")
+  reg_dir <- env_dir("TABFOUND_CAUSILO_REG_DIR", "Causilo 1.5 regressor")
+  # The published files are the reference's own input, so regenerating
+  # needs only the model directories and `.venvs/causilo`.
+  fixtures <- list(clf_tiny = clf_dir, clf_binary_missing = clf_dir,
+                   clf_categorical = clf_dir, reg_tiny = reg_dir)
+
+  if (regenerate) {
+    py <- py_for("causilo")
+    for (fx in names(fixtures)) {
+      if (is.null(fixtures[[fx]])) next
+      out <- file.path(REF_ROOT, "causilo", fx)
+      unlink(out, recursive = TRUE)
+      cat(sprintf("  regenerating %s ...\n", fx))
+      st <- system2(py, c("-I", file.path(here, "causilo_reference.py"),
+                          "--fixture-dir", FIXTURE_DIR, "--fixture", fx,
+                          "--model-dir", fixtures[[fx]], "--out", out),
+                    stdout = TRUE, stderr = TRUE)
+      status <- attr(st, "status")
+      if (!is.null(status) && status != 0L) {
+        cat(paste(tail(st, 15), collapse = "\n"), "\n")
+        cat(sprintf("  FAILED to regenerate %s\n", fx))
+      }
+    }
+  }
+
+  all_rows <- list()
+  for (fx in names(fixtures)) {
+    ref <- file.path(REF_ROOT, "causilo", fx)
+    md <- fixtures[[fx]]
+    if (is.null(md) || !file.exists(file.path(ref, "reference.json"))) {
+      cat(sprintf("  SKIP %s (no reference dump or model dir)\n", fx)); next
+    }
+    res <- parity_causilo(ref, FIXTURE_DIR, fx, fx, md)
+    all_rows[[fx]] <- print_parity(res)
+  }
+  combined <- do.call(rbind, all_rows)
+  if (!is.null(combined)) combined$known <- FALSE
+  invisible(combined)
+}
+
+
 results <- list()
 for (b in backends) {
   results[[b]] <- switch(
@@ -750,6 +803,7 @@ for (b in backends) {
     tabicl = run_tabicl(),
     mitra  = run_mitra(),
     kumo   = run_kumo(),
+    causilo = run_causilo(),
     { cat(sprintf("No parity runner for backend '%s' yet.\n", b)); NULL }
   )
 }

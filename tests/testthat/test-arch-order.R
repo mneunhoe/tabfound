@@ -122,7 +122,9 @@ ARCH_EXPECTED_BLOCKS <- list(
                icl = "(nan)(nfn)"),
   mitra    = c(layers = "(na)(nf)(na)(nf)"),
   kumo     = c(col = "(nna)(nf)(nna)(nf)", row = "(nna)(nf)n",
-               icl = "(nna)(nf)n")
+               icl = "(nna)(nf)n"),
+  causilo  = c(col = "(na)(nf)(na)(nf)", row = "(na)(na)(nf)n",
+               icl = "(na)(nf)")
 )
 
 test_that("each block's residual connections are as its forward code adds them", {

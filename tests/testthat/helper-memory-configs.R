@@ -87,6 +87,14 @@ mem_config_kumo <- function(size = "small") {
     dims)
 }
 
+# Causilo 1.5 as published: everything but four numbers is a constant.
+mem_config_causilo <- function(task = "classification") {
+  list(architecture = "causilo-v1.5", format_version = 1L, config_version = 1L,
+       task = task,
+       model = list(max_classes = if (task == "classification") 10L else 0L,
+                    width = 256L, column_depth = 8L, prediction_depth = 24L))
+}
+
 mem_config_mitra <- function() {
   list(task = "CLASSIFICATION", dim = 512, dim_output = 10,
        n_layers = 12, n_heads = 4)
