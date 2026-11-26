@@ -48,7 +48,7 @@ arch_schematic_theme <- function(theme = c("light", "dark")) {
 ARCH_ACCENTS <- c(
   tabpfn = "#0b5fad", tabpfn26 = "#3f51b5", tabpfn3 = "#00796b",
   tabpfn35 = "#2e7d32", tabicl = "#ad1457", tabfm = "#c43e00",
-  mitra = "#6a1b9a", kumo = "#7a5c00"
+  mitra = "#6a1b9a", kumo = "#7a5c00", causilo = "#00838f"
 )
 
 # @keywords internal

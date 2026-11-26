@@ -1,0 +1,11 @@
+{
+  "clf_classes": 10,
+  "reg_classes": 0,
+  "n_ctx": 7,
+  "n_query": 4,
+  "width": 16,
+  "column_depth": 2,
+  "prediction_depth": 2,
+  "torch_version": "2.15.0",
+  "causilo_version": "1.5.0"
+}

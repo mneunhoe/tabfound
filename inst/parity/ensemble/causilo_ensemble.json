@@ -1,0 +1,863 @@
+{
+ "cases": {
+  "clf_tiny_e8": {
+   "task": "classification",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [],
+   "count": 8,
+   "views": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2
+   ],
+   "trim": 0,
+   "column_order": [
+    3,
+    1,
+    2,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "classes": [
+    "0",
+    "1",
+    "2"
+   ],
+   "target_limits": null
+  },
+  "clf_binary_missing_e1": {
+   "task": "classification",
+   "n_estimators": 1,
+   "seed": 42,
+   "categorical": [],
+   "count": 1,
+   "views": [
+    0
+   ],
+   "trim": 0,
+   "column_order": [
+    5,
+    1,
+    2,
+    4,
+    3,
+    6
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "classes": [
+    "0",
+    "1"
+   ],
+   "target_limits": null
+  },
+  "clf_binary_missing_e2": {
+   "task": "classification",
+   "n_estimators": 2,
+   "seed": 42,
+   "categorical": [],
+   "count": 2,
+   "views": [
+    0,
+    1
+   ],
+   "trim": 0,
+   "column_order": [
+    5,
+    1,
+    2,
+    4,
+    3,
+    6
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "classes": [
+    "0",
+    "1"
+   ],
+   "target_limits": null
+  },
+  "clf_binary_missing_e4": {
+   "task": "classification",
+   "n_estimators": 4,
+   "seed": 42,
+   "categorical": [],
+   "count": 4,
+   "views": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "trim": 0,
+   "column_order": [
+    5,
+    1,
+    2,
+    4,
+    3,
+    6
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "classes": [
+    "0",
+    "1"
+   ],
+   "target_limits": null
+  },
+  "clf_binary_missing_e5": {
+   "task": "classification",
+   "n_estimators": 5,
+   "seed": 42,
+   "categorical": [],
+   "count": 5,
+   "views": [
+    0,
+    0,
+    0,
+    1,
+    1
+   ],
+   "trim": 0,
+   "column_order": [
+    5,
+    1,
+    2,
+    4,
+    3,
+    6
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "classes": [
+    "0",
+    "1"
+   ],
+   "target_limits": null
+  },
+  "clf_binary_missing_e8": {
+   "task": "classification",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [],
+   "count": 8,
+   "views": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2
+   ],
+   "trim": 0,
+   "column_order": [
+    5,
+    1,
+    2,
+    4,
+    3,
+    6
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "classes": [
+    "0",
+    "1"
+   ],
+   "target_limits": null
+  },
+  "reg_tiny_e1": {
+   "task": "regression",
+   "n_estimators": 1,
+   "seed": 42,
+   "categorical": [],
+   "count": 1,
+   "views": [
+    0
+   ],
+   "trim": 0,
+   "column_order": [
+    3,
+    1,
+    2,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "classes": null,
+   "target_limits": null
+  },
+  "reg_tiny_e2": {
+   "task": "regression",
+   "n_estimators": 2,
+   "seed": 42,
+   "categorical": [],
+   "count": 2,
+   "views": [
+    0,
+    1
+   ],
+   "trim": 0,
+   "column_order": [
+    3,
+    1,
+    2,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "classes": null,
+   "target_limits": null
+  },
+  "reg_tiny_e4": {
+   "task": "regression",
+   "n_estimators": 4,
+   "seed": 42,
+   "categorical": [],
+   "count": 4,
+   "views": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "trim": 1,
+   "column_order": [
+    3,
+    1,
+    2,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "classes": null,
+   "target_limits": [
+    -3.2664952278137207,
+    3.016541004180908
+   ]
+  },
+  "reg_tiny_e5": {
+   "task": "regression",
+   "n_estimators": 5,
+   "seed": 42,
+   "categorical": [],
+   "count": 5,
+   "views": [
+    0,
+    0,
+    0,
+    1,
+    1
+   ],
+   "trim": 1,
+   "column_order": [
+    3,
+    1,
+    2,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "classes": null,
+   "target_limits": [
+    -3.2664952278137207,
+    3.016541004180908
+   ]
+  },
+  "reg_tiny_e8": {
+   "task": "regression",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [],
+   "count": 8,
+   "views": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2
+   ],
+   "trim": 2,
+   "column_order": [
+    3,
+    1,
+    2,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "classes": null,
+   "target_limits": [
+    -3.2664952278137207,
+    3.016541004180908
+   ]
+  },
+  "clf_categorical_e8": {
+   "task": "classification",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "count": 8,
+   "views": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2
+   ],
+   "trim": 0,
+   "column_order": [
+    1,
+    3,
+    2,
+    4,
+    5
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "classes": [
+    "0",
+    "1"
+   ],
+   "target_limits": null
+  },
+  "reg_categorical_e5": {
+   "task": "regression",
+   "n_estimators": 5,
+   "seed": 42,
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "count": 5,
+   "views": [
+    0,
+    0,
+    0,
+    1,
+    1
+   ],
+   "trim": 1,
+   "column_order": [
+    1,
+    3,
+    2,
+    4,
+    5
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "classes": null,
+   "target_limits": [
+    -2.4794740676879883,
+    3.541719436645508
+   ]
+  },
+  "edge_clf_e1": {
+   "task": "classification",
+   "n_estimators": 1,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 1,
+   "views": [
+    0
+   ],
+   "trim": 0,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "target_limits": null
+  },
+  "edge_reg_e1": {
+   "task": "regression",
+   "n_estimators": 1,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 1,
+   "views": [
+    0
+   ],
+   "trim": 0,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": null,
+   "target_limits": null
+  },
+  "edge_clf_e2": {
+   "task": "classification",
+   "n_estimators": 2,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 2,
+   "views": [
+    0,
+    1
+   ],
+   "trim": 0,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "target_limits": null
+  },
+  "edge_reg_e2": {
+   "task": "regression",
+   "n_estimators": 2,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 2,
+   "views": [
+    0,
+    1
+   ],
+   "trim": 0,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": null,
+   "target_limits": null
+  },
+  "edge_clf_e5": {
+   "task": "classification",
+   "n_estimators": 5,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 5,
+   "views": [
+    0,
+    0,
+    0,
+    1,
+    1
+   ],
+   "trim": 0,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "target_limits": null
+  },
+  "edge_reg_e5": {
+   "task": "regression",
+   "n_estimators": 5,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 5,
+   "views": [
+    0,
+    0,
+    0,
+    1,
+    1
+   ],
+   "trim": 1,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": null,
+   "target_limits": [
+    49235.62292281331,
+    50546.83234079562
+   ]
+  },
+  "edge_clf_e8": {
+   "task": "classification",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 8,
+   "views": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2
+   ],
+   "trim": 0,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "target_limits": null
+  },
+  "edge_reg_e8": {
+   "task": "regression",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 8,
+   "views": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2
+   ],
+   "trim": 2,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": null,
+   "target_limits": [
+    49235.62292281331,
+    50546.83234079562
+   ]
+  },
+  "edge_clf_seed0": {
+   "task": "classification",
+   "n_estimators": 8,
+   "seed": 0,
+   "categorical": [
+    8,
+    9
+   ],
+   "count": 8,
+   "views": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2
+   ],
+   "trim": 0,
+   "column_order": [
+    2,
+    8,
+    5,
+    1,
+    6,
+    3,
+    4
+   ],
+   "groups": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "classes": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "target_limits": null
+  },
+  "one_feature_e8": {
+   "task": "classification",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [],
+   "count": 4,
+   "views": [
+    0,
+    0,
+    1,
+    2
+   ],
+   "trim": 0,
+   "column_order": [
+    1
+   ],
+   "groups": [
+    1
+   ],
+   "classes": [
+    "0",
+    "1"
+   ],
+   "target_limits": null
+  },
+  "one_feature_reg_e8": {
+   "task": "regression",
+   "n_estimators": 8,
+   "seed": 42,
+   "categorical": [],
+   "count": 4,
+   "views": [
+    0,
+    0,
+    1,
+    2
+   ],
+   "trim": 1,
+   "column_order": [
+    1
+   ],
+   "groups": [
+    1
+   ],
+   "classes": null,
+   "target_limits": [
+    -1.2235344616058148,
+    2.705506369509455
+   ]
+  }
+ },
+ "causilo_version": "1.5.0",
+ "numpy_version": "2.5.5"
+}

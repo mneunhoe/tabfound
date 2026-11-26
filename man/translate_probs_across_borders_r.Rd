@@ -3,11 +3,25 @@
 \name{translate_probs_across_borders_r}
 \alias{translate_probs_across_borders_r}
 \title{Translate member-logits from \code{frm} borders onto \code{to} borders (matches
-Python \code{translate_probs_across_borders}).}
+Python \code{translate_probs_across_borders}, \code{tabpfn} 9.1 and later).}
 \usage{
 translate_probs_across_borders_r(logits, frm, to)
 }
 \description{
-Returns bucket probabilities (NOT logits) of shape \verb{(..., len(to)-1)}.
+Each destination bucket's mass is a sum of non-negative terms -- its
+overlap with each source bucket times that bucket's probability, plus a
+slice of each outer half-normal tail -- so no bucket is lost to
+rounding however narrow it is. Until \code{tabpfn} 9.1 the reference took
+differences of float32 CDF values and clamped them at zero, which gave
+neighbouring CDF values that rounded together a probability of exactly
+zero (PriorLabs/TabPFN#1288).
+}
+\details{
+A member whose grid is the destination grid comes back as its softmax:
+every destination bucket is then a source bucket, and reading the outer
+ones as tails only moves mass around inside them.
+
+Returns bucket probabilities (NOT logits) of shape \verb{(..., len(to)-1)},
+in the dtype of \code{logits}.
 }
 \keyword{internal}

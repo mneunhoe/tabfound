@@ -1,0 +1,330 @@
+{
+ "cases": {
+  "clf_tiny_e1": {
+   "fixture": "clf_tiny",
+   "task": "classification",
+   "n_estimators": 1,
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2
+   ],
+   "cached_vs_plain": {
+    "proba": 0.0,
+    "logits": 0.0
+   }
+  },
+  "clf_tiny_e2": {
+   "fixture": "clf_tiny",
+   "task": "classification",
+   "n_estimators": 2,
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2
+   ],
+   "cached_vs_plain": {
+    "proba": 2.384185791015625e-07,
+    "logits": 6.67572021484375e-06
+   }
+  },
+  "clf_tiny_e4": {
+   "fixture": "clf_tiny",
+   "task": "classification",
+   "n_estimators": 4,
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2
+   ],
+   "cached_vs_plain": {
+    "proba": 2.384185791015625e-07,
+    "logits": 2.86102294921875e-06
+   }
+  },
+  "clf_tiny_e5": {
+   "fixture": "clf_tiny",
+   "task": "classification",
+   "n_estimators": 5,
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2
+   ],
+   "cached_vs_plain": {
+    "proba": 2.980232238769531e-07,
+    "logits": 3.337860107421875e-06
+   }
+  },
+  "clf_tiny_e8": {
+   "fixture": "clf_tiny",
+   "task": "classification",
+   "n_estimators": 8,
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2
+   ],
+   "cached_vs_plain": {
+    "proba": 2.980232238769531e-07,
+    "logits": 1.9073486328125e-06
+   }
+  },
+  "clf_binary_missing_e1": {
+   "fixture": "clf_binary_missing",
+   "task": "classification",
+   "n_estimators": 1,
+   "categorical": [],
+   "classes": [
+    0,
+    1
+   ],
+   "cached_vs_plain": {
+    "proba": 1.3113021850585938e-06,
+    "logits": 7.62939453125e-06
+   }
+  },
+  "clf_binary_missing_e2": {
+   "fixture": "clf_binary_missing",
+   "task": "classification",
+   "n_estimators": 2,
+   "categorical": [],
+   "classes": [
+    0,
+    1
+   ],
+   "cached_vs_plain": {
+    "proba": 8.940696716308594e-07,
+    "logits": 3.814697265625e-06
+   }
+  },
+  "clf_binary_missing_e4": {
+   "fixture": "clf_binary_missing",
+   "task": "classification",
+   "n_estimators": 4,
+   "categorical": [],
+   "classes": [
+    0,
+    1
+   ],
+   "cached_vs_plain": {
+    "proba": 5.066394805908203e-07,
+    "logits": 2.86102294921875e-06
+   }
+  },
+  "clf_binary_missing_e5": {
+   "fixture": "clf_binary_missing",
+   "task": "classification",
+   "n_estimators": 5,
+   "categorical": [],
+   "classes": [
+    0,
+    1
+   ],
+   "cached_vs_plain": {
+    "proba": 5.364418029785156e-07,
+    "logits": 2.384185791015625e-06
+   }
+  },
+  "clf_binary_missing_e8": {
+   "fixture": "clf_binary_missing",
+   "task": "classification",
+   "n_estimators": 8,
+   "categorical": [],
+   "classes": [
+    0,
+    1
+   ],
+   "cached_vs_plain": {
+    "proba": 4.172325134277344e-07,
+    "logits": 2.86102294921875e-06
+   }
+  },
+  "reg_tiny_e1": {
+   "fixture": "reg_tiny",
+   "task": "regression",
+   "n_estimators": 1,
+   "categorical": [],
+   "classes": null,
+   "cached_vs_plain": {
+    "mean": 0.0,
+    "median": 0.0,
+    "q_sym": 0.0,
+    "q_asym": 0.0,
+    "raw": 0.0
+   }
+  },
+  "reg_tiny_e2": {
+   "fixture": "reg_tiny",
+   "task": "regression",
+   "n_estimators": 2,
+   "categorical": [],
+   "classes": null,
+   "cached_vs_plain": {
+    "mean": 9.994436014348906e-07,
+    "median": 9.559895316479938e-07,
+    "q_sym": 1.1515328449118734e-06,
+    "q_asym": 7.387191835572793e-06,
+    "raw": 5.735937190110008e-06
+   }
+  },
+  "reg_tiny_e4": {
+   "fixture": "reg_tiny",
+   "task": "regression",
+   "n_estimators": 4,
+   "categorical": [],
+   "classes": null,
+   "cached_vs_plain": {
+    "mean": 9.063458031796645e-07,
+    "median": 9.233989794465991e-07,
+    "q_sym": 2.085795341777441e-06,
+    "q_asym": 4.823401727804821e-06,
+    "raw": 3.9760473702354915e-06
+   }
+  },
+  "reg_tiny_e5": {
+   "fixture": "reg_tiny",
+   "task": "regression",
+   "n_estimators": 5,
+   "categorical": [],
+   "classes": null,
+   "cached_vs_plain": {
+    "mean": 6.861129795907028e-07,
+    "median": 5.504182152282766e-07,
+    "q_sym": 8.401120125678396e-07,
+    "q_asym": 2.954876734184708e-06,
+    "raw": 2.3754891391725153e-06
+   }
+  },
+  "reg_tiny_e8": {
+   "fixture": "reg_tiny",
+   "task": "regression",
+   "n_estimators": 8,
+   "categorical": [],
+   "classes": null,
+   "cached_vs_plain": {
+    "mean": 7.242207322732952e-07,
+    "median": 6.735380790878764e-07,
+    "q_sym": 9.559895319810607e-07,
+    "q_asym": 2.3030656897127244e-06,
+    "raw": 2.607244177887935e-06
+   }
+  },
+  "clf_categorical_e1": {
+   "fixture": "clf_categorical",
+   "task": "classification",
+   "n_estimators": 1,
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "classes": [
+    0,
+    1
+   ],
+   "cached_vs_plain": {
+    "proba": 2.86102294921875e-06,
+    "logits": 1.621246337890625e-05
+   }
+  },
+  "clf_categorical_e8": {
+   "fixture": "clf_categorical",
+   "task": "classification",
+   "n_estimators": 8,
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "classes": [
+    0,
+    1
+   ],
+   "cached_vs_plain": {
+    "proba": 9.238719940185547e-07,
+    "logits": 4.76837158203125e-06
+   }
+  },
+  "reg_categorical_e1": {
+   "fixture": "reg_categorical",
+   "task": "regression",
+   "n_estimators": 1,
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "classes": null,
+   "cached_vs_plain": {
+    "mean": 2.406891510098319e-06,
+    "median": 2.2610192973449017e-06,
+    "q_sym": 2.6986359356051537e-06,
+    "q_asym": 3.3550608928845094e-06,
+    "raw": 4.084421957095685e-06
+   }
+  },
+  "reg_categorical_e8": {
+   "fixture": "reg_categorical",
+   "task": "regression",
+   "n_estimators": 8,
+   "categorical": [
+    1,
+    3,
+    4
+   ],
+   "classes": null,
+   "cached_vs_plain": {
+    "mean": 9.622617527238475e-07,
+    "median": 1.0940415955396077e-06,
+    "q_sym": 1.4587221273121287e-06,
+    "q_asym": 4.667910807221176e-06,
+    "raw": 3.5009331056379267e-06
+   }
+  },
+  "clf_many_classes_e8": {
+   "fixture": "clf_many_classes",
+   "task": "classification",
+   "n_estimators": 8,
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+   ],
+   "cached_vs_plain": {
+    "proba": 0.0
+   }
+  }
+ },
+ "q_sym": [
+  0.1,
+  0.5,
+  0.9
+ ],
+ "q_asym": [
+  0.05,
+  0.25,
+  0.0005
+ ],
+ "seed": 42,
+ "torch_version": "2.15.0",
+ "causilo_version": "1.5.0"
+}

@@ -47,6 +47,18 @@ when it is gone: \code{.sdpa_fallback()} is the same operation written in
 public API, differing only in float rounding (~1e-7 relative on the
 package's fixtures, checked in the tests).
 }
+\section{Apple MPS}{
+
+On the \code{mps} device the fused kernel returns wrong values for
+non-contiguous inputs when the query is shorter than the keys and the
+head size is 64 or more -- off by whole units, not by rounding, while
+contiguous copies of the same tensors are right. Kumo Tabular medium
+and large hit it in their readout step (4 query tokens, head size 64;
+small's head size is 32), which moved their predictions far from the
+CPU ones. So on \code{mps} the inputs are made contiguous first; other
+devices are passed through untouched.
+}
+
 \section{Options}{
 
 \code{tabfound.sdpa} is \code{"auto"} (default: the fused kernel when torch has

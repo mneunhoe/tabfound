@@ -890,3 +890,92 @@ test_that("chunked regression returns one value per row on every backend path", 
   }
   expect_identical(dim(reg$predict(st, X_new, type = "grid")), c(25L, 9L))
 })
+
+
+# ---------------------------------------------------------------------------
+# Causilo 1.5
+# ---------------------------------------------------------------------------
+#
+# float32 rounding: the query rows go through without the context rows
+# beside them, and every stage the chunk sizes split sees other batch
+# shapes. A chunk at least as long as its axis splits nothing and is the
+# plain forward bit for bit.
+
+causilo_inputs <- function(B = 3L, n = 14L, q = 6L, p = 6L, clf = TRUE) {
+  torch::torch_manual_seed(5L)
+  x <- torch::torch_randn(c(B, n + q, p)); x[1, 3, 2] <- NaN
+  y <- if (clf) torch::torch_randint(0L, 3L, c(B, n))$to(dtype = torch::torch_float32())
+       else torch::torch_randn(c(B, n))
+  list(x = x, y = y, ctx = x[, 1:n, ], query = x[, (n + 1L):(n + q), ])
+}
+
+test_that("a Causilo cache reproduces the forward it was built from", {
+  expect_true(isTRUE(get_backend("causilo")$kv_cache_capable))
+  for (task in c("classification", "regression")) {
+    net <- tiny_causilo(task)
+    d <- causilo_inputs(clf = task == "classification")
+    plain <- torch::with_no_grad(net(d$x, d$y))
+    cache <- torch::with_no_grad(net$build_kv_cache(d$ctx, d$y))
+    expect_s3_class(cache, "causilo_kv_cache")
+    expect_length(cache$column, 2L)
+    expect_length(cache$prediction, 2L)
+    expect_identical(cache$n_train, 14L)
+    # 256 latents per column, 8 heads over the context rows.
+    expect_identical(as.integer(cache$column[[1]]$key$shape), c(3L, 6L, 4L, 256L, 4L))
+    expect_identical(as.integer(cache$prediction[[1]]$key$shape), c(3L, 8L, 14L, 8L))
+    cached <- torch::with_no_grad(net$forward_cached(d$query, cache))
+    expect_equal(as.array(cached), as.array(plain), tolerance = 1e-5)
+    head <- torch::with_no_grad(net$forward_cached(d$query[, 1:2, ], cache))
+    expect_equal(as.array(head), as.array(plain)[, 1:2, , drop = FALSE], tolerance = 1e-5)
+  }
+  expect_error(net$forward_cached(torch::torch_randn(c(3L, 2L, 5L)), cache), "6 features")
+})
+
+test_that("Causilo's row and column chunks move only rounding", {
+  net <- tiny_causilo("classification")
+  d <- causilo_inputs()
+  plain <- torch::with_no_grad(net(d$x, d$y))
+  net$chunks <- list(row = 4L, col = 2L)
+  chunked <- torch::with_no_grad(net(d$x, d$y))
+  cache <- torch::with_no_grad(net$build_kv_cache(d$ctx, d$y))
+  cq <- torch::with_no_grad(net$forward_cached(d$query, cache))
+  net$chunks <- list(row = 1000L, col = 1000L)
+  whole <- torch::with_no_grad(net(d$x, d$y))
+  net$chunks <- list()
+  expect_equal(as.array(chunked), as.array(plain), tolerance = 1e-5)
+  expect_equal(as.array(cq), as.array(plain), tolerance = 1e-5)
+  expect_true(as.logical(torch::torch_equal(whole, plain)))
+})
+
+test_that("the Causilo predictors give the same answer cached and chunked", {
+  X <- cache_test_matrix(); y <- factor(rep(c("a", "b", "c"), length.out = 30L))
+  X_new <- cache_test_matrix(n = 22L, seed = 46L)
+  clf <- function(...) causilo_classifier(fake_ctx(tiny_causilo("classification")),
+                                          n_estimators = 3L, predict_chunk_size = CHUNK, ...)
+  plain <- clf()
+  st <- plain$fit(X, y)
+  a <- plain$predict(st, X_new, type = "prob")
+  for (args in list(list(kv_cache = TRUE), list(row_chunk_size = 5L, col_chunk_size = 2L),
+                    list(kv_cache = TRUE, member_batch_size = 2L, row_chunk_size = 7L))) {
+    m <- do.call(clf, args)
+    expect_equal(m$predict(m$fit(X, y), X_new, type = "prob"), a, tolerance = 1e-5)
+  }
+  caches <- plain$build_cache(st)
+  expect_s3_class(caches, "causilo_member_caches")
+  expect_s3_class(caches[[1]], "causilo_kv_cache")
+  st$kv_caches <- caches
+  expect_equal(plain$predict(st, X_new, type = "prob"), a, tolerance = 1e-5)
+  dir <- withr::local_tempdir()
+  w <- .kv_write(caches, dir)
+  back <- .kv_read(w$skeleton, file.path(dir, w$file))
+  expect_identical(attr(back, "groups"), attr(caches, "groups"))
+  st$kv_caches <- back
+  expect_equal(plain$predict(st, X_new, type = "prob"), a, tolerance = 1e-5)
+
+  yr <- as.numeric(X[, 1] * 2 + stats::rnorm(30L, sd = 0.1))
+  reg <- function(...) causilo_regressor(fake_ctx(tiny_causilo("regression")),
+                                         n_estimators = 4L, predict_chunk_size = CHUNK, ...)
+  r0 <- reg(); rs <- r0$fit(X, yr)
+  r1 <- reg(kv_cache = TRUE, row_chunk_size = 3L)
+  expect_equal(r1$predict(r1$fit(X, yr), X_new), r0$predict(rs, X_new), tolerance = 1e-5)
+})

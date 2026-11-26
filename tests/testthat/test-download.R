@@ -14,7 +14,7 @@ test_that("the catalogue resolves ids and family + task", {
   expect_true(all(m$task %in% c("classification", "regression", "both")))
   expect_setequal(unique(m$backend),
                   c("tabpfn", "tabpfn26", "tabpfn3", "tabpfn35",
-                    "tabicl", "tabfm", "mitra", "kumo"))
+                    "tabicl", "tabfm", "mitra", "kumo", "causilo"))
 
   # An exact id resolves without a task.
   expect_identical(tabfound:::.catalog_id("tabpfn-v2.5-classifier"),
@@ -89,6 +89,27 @@ test_that("the catalogue resolves ids and family + task", {
     expect_identical(tabfound:::.hub_path(e, "config.json"),
                      sprintf("%s/%s/config.json", e$model_size, e$head))
   }
+  # Causilo 1.5: one family name for both tasks, the publisher's own
+  # safetensors fetched as they are, pinned to the commit the reference
+  # pins (the Hub repo has no tags), and checked after the download.
+  for (fam in c("causilo", "causilo-1.5")) {
+    expect_identical(tabfound:::.catalog_id(fam, "classification"),
+                     "causilo-1.5-classifier")
+    expect_identical(tabfound:::.catalog_id(fam, "regression"),
+                     "causilo-1.5-regressor")
+  }
+  causilo <- tabfound:::.model_catalog()[grep("^causilo-", m$id, value = TRUE)]
+  expect_length(causilo, 2L)
+  for (e in causilo) {
+    expect_identical(e$repo, "nums-ai/causilo-1.5")
+    expect_identical(e$revision, "4ca2275bae85014a19422e8c18fcf8f24c5c14e1")
+    expect_null(e$convert)
+    expect_identical(e$verify, ".causilo_verify_artifacts")
+    expect_match(e$license, "Nums AI Model License")
+  }
+  expect_identical(
+    tabfound:::.hub_path(causilo[["causilo-1.5-regressor"]], "model.safetensors"),
+    "regressor/model.safetensors")
   expect_identical(
     tabfound:::.hub_path(tabfound:::.model_catalog()[["tabfm-1.0.0-regressor"]],
                          "config.json"),
@@ -438,4 +459,60 @@ test_that("the pre-download size is read at the pinned revision", {
   expect_identical(seen, "v1.0.1")
   tabfound:::.remote_size_mb(cat[["mitra-classifier"]])
   expect_identical(seen, "main")
+})
+
+
+# A minimal safetensors file: one float32 scalar plus a `__metadata__`.
+write_tiny_safetensors <- function(path, metadata) {
+  hdr <- jsonlite::toJSON(list(
+    `__metadata__` = metadata,
+    x = list(dtype = "F32", shape = list(), data_offsets = c(0L, 4L))
+  ), auto_unbox = TRUE)
+  hdr <- charToRaw(as.character(hdr))
+  pad <- (8L - length(hdr) %% 8L) %% 8L
+  hdr <- c(hdr, rep(charToRaw(" "), pad))
+  con <- file(path, "wb")
+  on.exit(close(con))
+  writeBin(c(as.integer(length(hdr)), 0L), con, size = 4L, endian = "little")
+  writeBin(hdr, con)
+  writeBin(0, con, size = 4L)
+}
+
+test_that("Causilo artifacts are checked against the weights' header", {
+  skip_if_not_installed("digest")
+  d <- withr::local_tempdir()
+  cfg <- file.path(d, "config.json")
+  writeLines('{"architecture": "causilo-v1.5", "format_version": 1, "config_version": 1, "task": "regression", "model": {"max_classes": 0, "width": 16, "column_depth": 2, "prediction_depth": 2}}', cfg)
+  sha <- tabfound:::.file_sha256(cfg)
+  meta <- list(task = "regression", config_sha256 = sha, format_version = "1",
+               architecture = "causilo-v1.5")
+  write_tiny_safetensors(file.path(d, "model.safetensors"), meta)
+  expect_identical(tabfound:::.safetensors_metadata(file.path(d, "model.safetensors")),
+                   meta)
+  expect_true(tabfound:::.causilo_verify_artifacts(d))
+
+  # A rewritten config -- even an equivalent one -- no longer matches.
+  writeLines(gsub(" ", "", readLines(cfg)), cfg)
+  expect_error(tabfound:::.causilo_verify_artifacts(d), "published with")
+  # A classifier header beside a regressor config.
+  writeLines('{"architecture": "causilo-v1.5", "format_version": 1, "config_version": 1, "task": "regression", "model": {"max_classes": 0, "width": 16, "column_depth": 2, "prediction_depth": 2}}', cfg)
+  meta$task <- "classification"
+  write_tiny_safetensors(file.path(d, "model.safetensors"), meta)
+  expect_error(tabfound:::.causilo_verify_artifacts(d), "classification")
+})
+
+test_that("a real Causilo download is byte-identical and verifies", {
+  # Run against the store copies when they are here (download_model()
+  # once on this machine); nothing is fetched by the test.
+  for (id in c("causilo-1.5-classifier", "causilo-1.5-regressor")) {
+    if (!tabfound:::.model_is_downloaded(id)) next
+    d <- tabfound:::.model_dir(id)
+    expect_true(tabfound:::.causilo_verify_artifacts(d))
+    src <- jsonlite::fromJSON(file.path(d, "SOURCE.json"))
+    expect_identical(src$revision, "4ca2275bae85014a19422e8c18fcf8f24c5c14e1")
+    expect_identical(src$hub_dir, sub("^causilo-1.5-", "", id))
+  }
+  skip_if_not(any(vapply(c("causilo-1.5-classifier", "causilo-1.5-regressor"),
+                         tabfound:::.model_is_downloaded, logical(1))),
+              "no Causilo artifacts in the store")
 })

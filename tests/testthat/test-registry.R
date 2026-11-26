@@ -375,7 +375,11 @@ test_that("every backend detects only its own config", {
                   n_heads = 4L, task = "CLASSIFICATION"),
     kumo   = list(arch = "kumo_tabular", head = "classifier",
                   cell_channels = 128L, icl_channels = 512L,
-                  num_frequencies = 32L, num_classes = 10L)
+                  num_frequencies = 32L, num_classes = 10L),
+    causilo = list(architecture = "causilo-v1.5", format_version = 1L,
+                   config_version = 1L, task = "regression",
+                   model = list(max_classes = 0L, width = 256L,
+                                column_depth = 8L, prediction_depth = 24L))
   )
   # Every config must be claimed by exactly one backend. Mitra's is the
   # thinnest of the four -- five fields, no architecture marker -- so it
@@ -437,4 +441,34 @@ test_that("a checkpoint in another dtype is cast, loudly", {
   expect_equal(as.array(net$parameters$weight),
                as.array(w16$weight$to(dtype = torch::torch_float())),
                tolerance = 1e-3)
+})
+
+
+test_that("the Causilo config is read as published and checked", {
+  # The published config: the hyperparameters sit under `model`, and the
+  # only marker is `architecture`.
+  cfg <- list(architecture = "causilo-v1.5", format_version = 1L,
+              config_version = 1L, task = "classification",
+              model = list(max_classes = 10L, width = 256L,
+                           column_depth = 8L, prediction_depth = 24L))
+  expect_true(causilo_detect(cfg))
+  others <- setdiff(list_backends()$name, "causilo")
+  for (nm in others) {
+    expect_false(isTRUE(get_backend(nm)$detect(cfg)), label = paste(nm, "claims Causilo"))
+  }
+  expect_identical(causilo_task_of(cfg), "classification")
+  reg <- utils::modifyList(cfg, list(task = "regression",
+                                     model = list(max_classes = 0L)))
+  expect_identical(causilo_task_of(reg), "regression")
+  # A task that disagrees with `max_classes` is refused, as the reference
+  # refuses it, rather than building the wrong head.
+  bad <- utils::modifyList(cfg, list(task = "regression"))
+  expect_null(causilo_task_of(bad))
+  expect_error(tabfound:::.causilo_model_config(bad), "does not match")
+  expect_error(tabfound:::.causilo_model_config(
+    utils::modifyList(cfg, list(model = list(width = 20L)))), "divisible")
+  extra <- cfg; extra$model$heads <- 8L
+  expect_error(tabfound:::.causilo_model_config(extra), "exactly")
+  expect_error(tabfound:::.causilo_model_config(
+    utils::modifyList(cfg, list(format_version = 2L))), "Unsupported")
 })

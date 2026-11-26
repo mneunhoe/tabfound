@@ -34,7 +34,6 @@ bit-identical to an uncached one instead.
 \keyword{,}
 \keyword{0}
 \keyword{1,}
-\keyword{—}
 \keyword{=}
 \keyword{Attention.}
 \keyword{K/V}
@@ -90,3 +89,4 @@ bit-identical to an uncached one instead.
 \keyword{with}
 \keyword{work.}
 \keyword{x`.}
+\keyword{—}

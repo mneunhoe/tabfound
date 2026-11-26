@@ -93,6 +93,31 @@
   out
 }
 
+# For each factor column whose levels are not already in code-point
+# order, the code each 0-based level code becomes when the levels are
+# sorted by code point (`sort(method = "radix")`). NULL when nothing moves.
+# @keywords internal
+.radix_level_remap <- function(predictors) {
+  out <- list()
+  for (j in which(vapply(predictors, is.factor, logical(1)))) {
+    lv <- levels(predictors[[j]])
+    new <- match(lv, sort(lv, method = "radix")) - 1L
+    if (!identical(new, seq_along(lv) - 1L)) out[[as.character(j)]] <- new
+  }
+  if (length(out)) out else NULL
+}
+
+# @keywords internal
+.apply_level_remap <- function(x, remap) {
+  for (j in names(remap)) {
+    col <- x[, as.integer(j)]
+    ok <- !is.na(col)
+    col[ok] <- remap[[j]][col[ok] + 1L]
+    x[, as.integer(j)] <- col
+  }
+  x
+}
+
 # Which encoded columns came from a factor.
 #
 # This is the one thing the Python wrappers have to guess at: they sniff
@@ -474,6 +499,13 @@ tabfound.default <- function(x, ...) {
     obj <- do.call(tabular_regressor, ctor_args)
   }
 
+  # Causilo codes categories in the order its reference's
+  # `OrdinalEncoder` sorts their labels -- by code point -- so a factor's
+  # level codes are remapped to that order; the same map is applied at
+  # predict time. Every other backend gets level order.
+  level_remap <- if (identical(obj$backend, "causilo")) .radix_level_remap(predictors)
+  x <- .apply_level_remap(x, level_remap)
+
   na_action <- .resolve_na_action(na_action, obj$backend, x)
   if (identical(na_action, "fail") && anyNA(x)) {
     cli::cli_abort("Missing values in predictors and {.code na_action = \"fail\"}.")
@@ -490,6 +522,7 @@ tabfound.default <- function(x, ...) {
     na_action = na_action,
     imputer   = imputer,
     expansion = expansion,
+    level_remap = level_remap,
     # What the model reads, in the caller's order. The blueprint's ptype
     # holds every column the formula referenced, `y ~ . - k`'s `k` included.
     predictor_names = predictor_order,
@@ -534,7 +567,7 @@ predict.tabfound_fit <- function(object, new_data, type = NULL, ...) {
     attr(predictors, "restored") <- NULL
     predictors <- transform_frame_expansion(predictors, exp_state)
   }
-  x <- .encode_predictors(predictors)
+  x <- .apply_level_remap(.encode_predictors(predictors), object$level_remap)
   if (identical(object$na_action, "impute") && !is.null(object$imputer)) {
     x <- .apply_imputer(x, object$imputer)
   }

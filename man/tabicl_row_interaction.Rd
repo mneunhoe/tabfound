@@ -8,8 +8,8 @@ tabicl_row_interaction(config)
 }
 \description{
 Each row is a sequence over its columns, with RoPE supplying column
-position. The reserved leading columns are overwritten with learned
-CLS tokens; all blocks but the last run as self-attention, and the
+position. Learned CLS tokens are prepended as leading columns; all
+blocks but the last run as self-attention, and the
 last attends \emph{from} the CLS columns only, so the output is a fixed
 \code{num_cls * embed_dim} vector per row regardless of table width.
 }

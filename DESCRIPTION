@@ -7,7 +7,7 @@ Authors@R:
            role  = c("aut", "cre"))
 Description: Inference-only R implementations of open-weight tabular
     foundation models (TabPFN v2.5 to v3.5, TabICL, TabFM, Mitra, Kumo
-    Tabular) on top of the 'torch' package, with no Python runtime at fit or predict time. A
+    Tabular, Causilo 1.5) on top of the 'torch' package, with no Python runtime at fit or predict time. A
     formula interface handles factors, dates, text and missing values, and
     returns tidy predictions, including predictive quantiles. The models'
     predictive distributions also drive multiple imputation (interoperating

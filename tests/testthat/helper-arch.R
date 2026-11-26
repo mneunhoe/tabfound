@@ -95,6 +95,11 @@ arch_test_configs <- function() {
     mitra = list(
       config = list(dim = 8L, dim_output = 6L, n_heads = 2L, n_layers = 2L,
                     task = "CLASSIFICATION"),
+      task = "classification"),
+    # The published config shape; the 256 column latents and 999 quantiles
+    # are architecture constants, so even this net carries them.
+    causilo = list(
+      config = tiny_causilo_config("classification"),
       task = "classification")
   )
 }
@@ -113,7 +118,8 @@ arch_test_variants <- function() {
     tabicl   = list(head = "regressor", max_classes = 0L),
     tabfm    = list(is_classifier = FALSE),
     kumo     = list(head = "regressor", num_classes = 0L, num_quantiles = 9L),
-    mitra    = list(task = "REGRESSION", dim_output = 1L)
+    mitra    = list(task = "REGRESSION", dim_output = 1L),
+    causilo  = list(task = "regression", model = list(max_classes = 0L))
   )
   other <- c(classification = "regression", regression = "classification")
   out <- list()
@@ -247,6 +253,7 @@ arch_test_forward <- function(v, net) {
       y <- if (clf) torch::torch_randint(0L, 3L, c(1L, n_tr), dtype = torch::torch_long())
            else torch::torch_randn(c(1L, n_tr))
       net(x, y, c(TRUE, rep(FALSE, p - 1L)))
-    }
+    },
+    causilo = function() net(x, y_of(n_tr))
   )
 }

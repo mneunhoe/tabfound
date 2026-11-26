@@ -1,5 +1,25 @@
 # tabfound (development version)
 
+* New backend: Causilo 1.5 (Nums AI), classifier and regressor
+  (`"causilo"`, `"causilo-1.5"`; catalogue ids `causilo-1.5-classifier` /
+  `-regressor`, 1.1 GB each). `download_model()` fetches the publisher's own
+  safetensors from `nums-ai/causilo-1.5` at the commit the reference pins,
+  with no conversion, and checks the weights' header against the config it
+  was published with (a new catalogue field, `verify`). The port covers the
+  network, the reference's preprocessing and 8-member ensemble (`light = TRUE`
+  for "Causilo 1.5 (Light)", one member), regression's 999 quantiles and the
+  reference's two definitions of the mean, more than 10 classes through
+  error-correcting output codes (with tabfound's own codebook draw), a KV cache
+  for `tabfound_cache()`, row and column chunking, and a calibrated memory
+  preflight. Verified against `causilo` 1.5.0 on the CPU: network stages within
+  7e-6 of scale, end-to-end probabilities within 2.2e-6 and regression outputs
+  within 1.8e-5 of sd(y) for 1, 2, 4, 5 and 8 members. The weights are under the
+  Nums AI Model License: non-commercial research, testing, evaluation and
+  benchmarking only. Commercial or production use of the model or its
+  outputs, and any hosted or API service (paid or free), need a separate
+  licence from Nums AI.
+  `tabfound()` sorts a factor's categories by code point for this backend, as
+  the reference's encoder does. Imputation use is not validated.
 * `download_model()` now fetches NVIDIA Kumo Tabular (all three sizes, both
   tasks) as safetensors from `mneunhoe/Kumo-Tabular-safetensors` (tag
   `v1.0.1`), so it no longer needs Python. That repo is a bit-identical

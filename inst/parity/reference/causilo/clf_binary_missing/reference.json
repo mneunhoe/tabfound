@@ -1,0 +1,15 @@
+{
+  "fixture": "clf_binary_missing",
+  "task": "classification",
+  "torch_version": "2.15.0",
+  "causilo_version": "1.5.0",
+  "n_train": 80,
+  "n_test": 40,
+  "stages": [
+    "causilo_col0",
+    "causilo_head",
+    "causilo_pred23",
+    "causilo_row7"
+  ],
+  "n_classes": 2
+}

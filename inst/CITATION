@@ -15,7 +15,7 @@ bibentry(
 )
 
 citFooter(
-  "Please also cite the model you use. For TabPFN, TabICL and Kumo Tabular",
+  "Please also cite the model you use. For TabPFN, TabICL, Kumo Tabular and Causilo",
   "see below; for TabFM and Mitra, see the model card on the Hugging Face",
   "repository listed by list_models()."
 )
@@ -58,4 +58,18 @@ bibentry(
   howpublished = "Hugging Face blog",
   url     = "https://huggingface.co/blog/nvidia/kumo-tabular",
   note    = "Weights: https://huggingface.co/nvidia/Kumo-Tabular"
+)
+
+bibentry(
+  bibtype = "Misc",
+  title   = "Causilo Technical Report",
+  author  = c(person("Minyong", "Cho"), person("Minho", "Jeong"),
+              person("Dooho", "Lee"), person("Jinmo", "Lee"),
+              person("Jaemin", "Yoo")),
+  year    = "2026",
+  eprint  = "2609.22866",
+  archivePrefix = "arXiv",
+  primaryClass  = "cs.LG",
+  url     = "https://arxiv.org/abs/2609.22866",
+  note    = "Weights: https://huggingface.co/nums-ai/causilo-1.5"
 )
