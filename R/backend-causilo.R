@@ -428,9 +428,16 @@ causilo_model <- torch::nn_module(
                                                  COLLECT_MIN_BYTES) * 16) {
     return(invisible(FALSE))
   }
-  gc(full = TRUE)
+  # A full pass costs tens of milliseconds in a busy session, times ~50
+  # steps per forward; below `CAUSILO_FULL_COLLECT_BYTES` of transient a
+  # young-generation pass is the better trade. Measured (one member, 500
+  # query rows, Rscript): 800 x 8 columns 5.5 -> 3.8 s at 3.3 -> 3.5 GB;
+  # 6,400 x 8 11.2 -> 10.3 s, 6.7 -> 6.6 GB; 1,600 x 32 7.4 -> 6.5 s,
+  # 6.1 -> 6.3 GB.
+  gc(full = bytes * ratio >= CAUSILO_FULL_COLLECT_BYTES)
   invisible(TRUE)
 }
+CAUSILO_FULL_COLLECT_BYTES <- 536870912
 
 # Apply `f(part, idx)` to slices of `x` along `axis` (`size` at a time, or
 # all at once when `size` is NULL or not smaller than the axis), where `f`
