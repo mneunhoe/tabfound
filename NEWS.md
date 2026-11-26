@@ -14,8 +14,10 @@
   preflight. Verified against `causilo` 1.5.0 on the CPU: network stages within
   7e-6 of scale, end-to-end probabilities within 2.2e-6 and regression outputs
   within 1.8e-5 of sd(y) for 1, 2, 4, 5 and 8 members. The weights are under the
-  Nums AI Model License: non-commercial research and evaluation only;
-  commercial, production and hosted use need a separate licence.
+  Nums AI Model License: non-commercial research, testing, evaluation and
+  benchmarking only. Commercial or production use of the model or its
+  outputs, and any hosted or API service (paid or free), need a separate
+  licence from Nums AI.
   `tabfound()` sorts a factor's categories by code point for this backend, as
   the reference's encoder does. Imputation use is not validated.
 * `download_model()` now fetches NVIDIA Kumo Tabular (all three sizes, both

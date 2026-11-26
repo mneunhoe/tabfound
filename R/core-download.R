@@ -325,7 +325,7 @@
       hub_dir = "classifier", convert = NULL,
       verify = ".causilo_verify_artifacts",
       size_mb = 1100.3,
-      license = "Nums AI Model License (weights): non-commercial research and evaluation; commercial, production or hosted use needs a separate licence (see the repo). Apache-2.0 (reference code)",
+      license = "Nums AI Model License (weights): non-commercial research, testing, evaluation and benchmarking only; commercial or production use of the model or its outputs, and any hosted or API service (paid or free), need a separate licence from Nums AI (see the repo). Apache-2.0 (reference code)",
       description = "Causilo 1.5 classifier"
     ),
     "causilo-1.5-regressor" = list(
@@ -336,7 +336,7 @@
       hub_dir = "regressor", convert = NULL,
       verify = ".causilo_verify_artifacts",
       size_mb = 1108.3,
-      license = "Nums AI Model License (weights): non-commercial research and evaluation; commercial, production or hosted use needs a separate licence (see the repo). Apache-2.0 (reference code)",
+      license = "Nums AI Model License (weights): non-commercial research, testing, evaluation and benchmarking only; commercial or production use of the model or its outputs, and any hosted or API service (paid or free), need a separate licence from Nums AI (see the repo). Apache-2.0 (reference code)",
       description = "Causilo 1.5 regressor"
     )
   )

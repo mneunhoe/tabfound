@@ -2,7 +2,7 @@
 #
 # A port of the Causilo 1.5 runtime in Nums AI's `causilo` 1.5.0
 # (Apache-2.0); weights from `nums-ai/causilo-1.5` (Nums AI Model License:
-# non-commercial research and evaluation). One architecture, two
+# non-commercial research, testing, evaluation and benchmarking). One architecture, two
 # checkpoints (classifier, regressor), published as `model.safetensors` +
 # `config.json`, so nothing is converted:
 #

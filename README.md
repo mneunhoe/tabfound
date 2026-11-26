@@ -54,41 +54,111 @@ list_models()                         # what exists, its size and licence, and w
 download_model("tabpfn-v2.5-classifier")
 ```
 
-Weights are stored in `tabfound_home()`, outside your R library, and are
-downloaded once. Then they load by name, offline. You can pass a family
-name (`"tabpfn-v2.5"`, `"tabicl"`, `"mitra"`) and the task decides which
-checkpoint is used. A local directory path works wherever a name does.
+Weights are downloaded once and stored in `tabfound_home()`, outside your R
+library. After that they load by name, offline.
 
-**One-time Python step.** TabPFN and TabICL publish their
-weights in a PyTorch format that R cannot read. `download_model()` converts them once,
-and for that step it needs a Python interpreter with `torch` and
-`safetensors` installed. Point `options(tabfound.python = )` at one if it
-is not found. TabFM, Mitra, Kumo Tabular and Causilo need no conversion. After this step, Python
-is never used again.
+Wherever a model is asked for, you can pass:
 
-> **Check the licence before you publish or deploy.** The package is MIT,
-> but the model weights are not. TabPFN (v2.5, v2.6, v3 and v3.5),
-> TabFM and Causilo are licensed for **research and evaluation only**, not
-> commercial or production use (Causilo's licence also excludes hosted or
-> API services, paid or free). `list_models()` shows each licence, and the download
-> prompt repeats it.
+- a **family name** such as `"tabpfn-v2.5"`, `"tabicl"` or `"mitra"`. The
+  task (classification or regression) decides which checkpoint is used.
+- a **catalogue id** such as `"tabpfn-v2.5-classifier"`, from
+  `list_models()`.
+- a **path** to a local directory that holds the weights.
+
+**TabPFN and TabICL need Python once.** Their weights are published in a
+PyTorch format that R cannot read, so `download_model()` converts them. For
+that one step it needs a Python interpreter with `torch` and `safetensors`
+installed. Point `options(tabfound.python = )` at one if it is not found.
+Python is never used again afterwards. TabFM, Mitra, Kumo Tabular and
+Causilo need no conversion and no Python at all.
+
+### Licences
+
+The package is MIT, but each model's weights have their own licence. Check
+it before you publish or deploy:
+
+- **Permissive:** TabICL (BSD-3-Clause), Mitra (Apache-2.0) and Kumo
+  Tabular (OpenMDW-1.1).
+- **Research and evaluation only:** TabPFN (v2.5, v2.6, v3 and v3.5), TabFM
+  and Causilo. Commercial or production use needs a separate licence from
+  the publisher.
+
+Causilo's licence, the Nums AI Model License, is the most specific of
+these. It permits non-commercial research, testing, evaluation and
+benchmarking, and publishing the results. A separate licence from Nums AI
+is needed for commercial or production use of the model *or of its
+predictions*, and for offering the model as a hosted or API service,
+whether paid or free.
+
+These are summaries, not legal advice, and the full licence text in each
+model's repository is what counts. `list_models()` shows each licence, and
+the download prompt repeats it.
 
 ## Which model?
 
-No single model is best. Here is how they differ in the ways that usually
-matter:
+No single model is best. If you are not sure where to start:
 
-| model | name | size | licence | notes |
-|---|---|---|---|---|
-| TabPFN v2.5 | `"tabpfn-v2.5"` | ~40 MB per task | non-commercial | Small and fast. The best-tested option for imputation (see below). Weights: [Prior-Labs/tabpfn_2_5](https://huggingface.co/Prior-Labs/tabpfn_2_5). |
-| TabPFN v2.6 | `"tabpfn-v2.6"` | ~50 MB per task | non-commercial | Successor to v2.5 at about the same size, with its preprocessing moved inside the network. Weights: [Prior-Labs/tabpfn_2_6](https://huggingface.co/Prior-Labs/tabpfn_2_6). |
-| TabPFN v3 | `"tabpfn-v3"` | ~200 MB per task | non-commercial | Row and column chunking for larger tables. Six specialised variants (binary, multiclass, OOD, medium data, time series). Weights: [Prior-Labs/tabpfn_3](https://huggingface.co/Prior-Labs/tabpfn_3). |
-| TabPFN v3.5 | `"tabpfn-v3.5"` | 876 MB, both tasks | non-commercial | Newest. One checkpoint for both tasks. Handles free-text and date columns natively. Also a 334 MB `"tabpfn-v3.5-fast"` and a multiclass variant. Weights: [Prior-Labs/tabpfn_3_5](https://huggingface.co/Prior-Labs/tabpfn_3_5). |
-| TabICL v2 | `"tabicl"` | ~110 MB per task | BSD-3-Clause | Regression returns a full quantile grid. **Not recommended for imputation.** Weights: [jingang/TabICL](https://huggingface.co/jingang/TabICL). |
-| TabFM 1.0 | `"tabfm-1.0.0"` | ~6.6 GB per task | non-commercial | Large (1.6 B parameters) and slow on CPU. Regression is point prediction only. Weights: [google/tabfm-1.0.0-pytorch](https://huggingface.co/google/tabfm-1.0.0-pytorch). |
-| Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | Permissive licence. 72 M parameters. Regression is point prediction only. Weights: [autogluon/mitra-classifier](https://huggingface.co/autogluon/mitra-classifier), [autogluon/mitra-regressor](https://huggingface.co/autogluon/mitra-regressor). |
-| Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | Permissive licence. NVIDIA's model in three sizes; `"kumo-tabular"` is large, which is slow on CPU. Handles `NA` natively. Regression returns a full quantile grid. 8-member ensemble by default. Weights: [nvidia/Kumo-Tabular](https://huggingface.co/nvidia/Kumo-Tabular) (`v1.0.1`), fetched as a bit-identical safetensors copy from [mneunhoe/Kumo-Tabular-safetensors](https://huggingface.co/mneunhoe/Kumo-Tabular-safetensors). |
-| Causilo 1.5 | `"causilo"` | 1.1 GB per task | Nums AI Model License (non-commercial) | 275 M parameters, slow on CPU: eight members by default, `light = TRUE` for one ("Causilo 1.5 (Light)"). Handles `NA` natively. Regression returns a full quantile grid. More than 10 classes through error-correcting codes (tabfound draws its own codebook, so above 10 classes it does not reproduce the reference's numbers). Imputation use not validated. Weights: [nums-ai/causilo-1.5](https://huggingface.co/nums-ai/causilo-1.5). |
+| if you want | use |
+|---|---|
+| a small, fast default | `"tabpfn-v2.5"` |
+| multiple imputation | `"tabpfn-v2.5"`, the best-tested option (see [below](#multiple-imputation)) |
+| a permissive licence | `"kumo-tabular-small"`, `"mitra"` or `"tabicl"` |
+| a larger table | `"tabpfn-v3"`, which chunks rows and columns (see [Large tables](#large-tables)) |
+| free-text and date columns handled for you | `"tabpfn-v3.5"` |
+
+### All models
+
+| model | name | download | licence | missing values | regression output |
+|---|---|---|---|---|---|
+| TabPFN v2.5 | `"tabpfn-v2.5"` | ~40 MB per task | non-commercial | native | distribution |
+| TabPFN v2.6 | `"tabpfn-v2.6"` | ~50 MB per task | non-commercial | native | distribution |
+| TabPFN v3 | `"tabpfn-v3"` | ~200 MB per task | non-commercial | native | distribution |
+| TabPFN v3.5 | `"tabpfn-v3.5"` | 876 MB, both tasks | non-commercial | native | distribution |
+| TabICL v2 | `"tabicl"` | ~110 MB per task | BSD-3-Clause | mean-imputed | distribution |
+| TabFM 1.0 | `"tabfm-1.0.0"` | ~6.6 GB per task | non-commercial | mean-imputed | point only |
+| Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | mean-imputed | point only |
+| Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | native | distribution |
+| Causilo 1.5 | `"causilo"` | 1.1 GB per task | Nums AI Model License (non-commercial) | native | distribution |
+
+"Distribution" means `predict()` can return quantiles and intervals as well
+as the mean. "Point only" means it returns the mean alone.
+
+### Notes on each model
+
+- **TabPFN v2.5.** Small and fast. Weights:
+  [Prior-Labs/tabpfn_2_5](https://huggingface.co/Prior-Labs/tabpfn_2_5).
+- **TabPFN v2.6.** The successor to v2.5 at about the same size, with its
+  preprocessing moved inside the network. Weights:
+  [Prior-Labs/tabpfn_2_6](https://huggingface.co/Prior-Labs/tabpfn_2_6).
+- **TabPFN v3.** Six specialised variants: binary, multiclass, OOD, medium
+  data and time series. Weights:
+  [Prior-Labs/tabpfn_3](https://huggingface.co/Prior-Labs/tabpfn_3).
+- **TabPFN v3.5.** The newest TabPFN, with one checkpoint for both tasks.
+  There is also a 334 MB `"tabpfn-v3.5-fast"` and a multiclass variant.
+  Weights:
+  [Prior-Labs/tabpfn_3_5](https://huggingface.co/Prior-Labs/tabpfn_3_5).
+- **TabICL v2.** **Not recommended for imputation** (see
+  [below](#multiple-imputation)). Weights:
+  [jingang/TabICL](https://huggingface.co/jingang/TabICL).
+- **TabFM 1.0.** Large (1.6 B parameters) and slow on CPU. Weights:
+  [google/tabfm-1.0.0-pytorch](https://huggingface.co/google/tabfm-1.0.0-pytorch).
+- **Mitra.** 72 M parameters. Weights:
+  [autogluon/mitra-classifier](https://huggingface.co/autogluon/mitra-classifier),
+  [autogluon/mitra-regressor](https://huggingface.co/autogluon/mitra-regressor).
+- **Kumo Tabular.** NVIDIA's model in three sizes. `"kumo-tabular"` means
+  large, which is slow on CPU. It averages an ensemble of 8 members by
+  default. Weights:
+  [nvidia/Kumo-Tabular](https://huggingface.co/nvidia/Kumo-Tabular)
+  (`v1.0.1`), fetched as a bit-identical safetensors copy from
+  [mneunhoe/Kumo-Tabular-safetensors](https://huggingface.co/mneunhoe/Kumo-Tabular-safetensors).
+- **Causilo 1.5.** 275 M parameters and slow on CPU. It averages an
+  ensemble of 8 members by default; `light = TRUE` uses one, which is the
+  published "Causilo 1.5 (Light)". Two limits to know about:
+  - Above 10 classes it uses error-correcting codes with tabfound's own
+    codebook, so its numbers there differ from the Python reference's.
+  - It has not been validated for imputation.
+
+  Weights: [nums-ai/causilo-1.5](https://huggingface.co/nums-ai/causilo-1.5).
 
 All the models are inference-only. Each one reproduces its Python
 reference's own preprocessing and ensembling, and gets the same predictions
@@ -285,4 +355,4 @@ on Hugging Face.
 ## License
 
 MIT for the package. The model weights have their own licences (see
-[Getting a model](#getting-a-model)).
+[Licences](#licences)).
