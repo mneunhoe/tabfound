@@ -52,11 +52,23 @@ for (nm in names(meta$cases)) {
         spec <- causilo_classifier(ctx_clf, n_estimators = cs$n_estimators,
                                    categorical_features = cats)
         st <- spec$fit(X_train, factor(y))
+        book <- ref[[paste0(p, "codebook")]]
+        if (!is.null(book)) {
+          # Above 10 classes the reference draws its codebook with NumPy's
+          # PCG64, which tabfound does not replay: grade everything else on
+          # the reference's own codebook.
+          expect_identical(dim(st$recipe$codebook), as.integer(book$shape))
+          st$recipe$codebook <- matrix(as.integer(as.array(book)), nrow = book$size(1L))
+        }
         got <- spec$predict(st, X_test, type = "prob")
         want <- g("plain.proba")
         expect_lt(max(abs(got - want)), TOL_PROBA)
-        lg <- spec$predict(st, X_test, type = "logits")
-        expect_lt(max(abs(lg - g("plain.logits"))), TOL_LOGITS)
+        if (is.null(book)) {
+          lg <- spec$predict(st, X_test, type = "logits")
+          expect_lt(max(abs(lg - g("plain.logits"))), TOL_LOGITS)
+        } else {
+          expect_error(spec$predict(st, X_test, type = "logits"), "no logits")
+        }
       } else {
         spec <- causilo_regressor(ctx_reg, n_estimators = cs$n_estimators,
                                   categorical_features = cats)
@@ -137,7 +149,7 @@ VARIANTS <- list(
                  member_batch_size = 3L)
 )
 for (nm in c("clf_binary_missing_e8", "clf_categorical_e8", "reg_tiny_e5",
-             "reg_categorical_e8")) {
+             "reg_categorical_e8", "clf_many_classes_e8")) {
   for (vn in names(VARIANTS)) {
     local({
       name <- nm; variant <- VARIANTS[[vn]]; label <- vn
@@ -151,7 +163,12 @@ for (nm in c("clf_binary_missing_e8", "clf_categorical_e8", "reg_tiny_e5",
                        categorical_features = unlist(cs$categorical)), variant)
         if (identical(cs$task, "classification")) {
           spec <- do.call(causilo_classifier, c(list(ctx_clf), args))
-          got <- spec$predict(spec$fit(X_train, factor(y)), X_test, type = "prob")
+          st <- spec$fit(X_train, factor(y))
+          book <- ref[[paste0(p, "codebook")]]
+          if (!is.null(book)) {
+            st$recipe$codebook <- matrix(as.integer(as.array(book)), nrow = book$size(1L))
+          }
+          got <- spec$predict(st, X_test, type = "prob")
           expect_lt(max(abs(got - g("plain.proba"))), TOL_PROBA)
         } else {
           spec <- do.call(causilo_regressor, c(list(ctx_reg), args))
@@ -181,4 +198,26 @@ test_that("a Causilo cache from tabfound_cache() survives a bundle", {
   back <- suppressMessages(tabfound_load(bundle))
   expect_true(has_cache(back))
   expect_identical(predict(back, g("x_test"), type = "prob"), p1)
+})
+
+test_that("Causilo's own codebook gives a sound many-class model", {
+  name <- "clf_many_classes_e8"
+  skip_if(is.null(meta$cases[[name]]), "no many-class case")
+  g <- function(k) as_mat(ref[[paste0(name, ".", k)]])
+  y <- factor(as.numeric(g("y_train")), levels = 0:15)
+  spec <- causilo_classifier(ctx_clf)
+  st <- spec$fit(g("x_train"), y)
+  expect_identical(dim(st$recipe$codebook), c(8L, 15L))
+  p <- spec$predict(st, g("x_test"), type = "prob")
+  expect_identical(ncol(p), 16L)
+  expect_equal(unname(rowSums(p)), rep(1, nrow(p)), tolerance = 1e-9)
+  # The level absent from the training rows comes back at zero.
+  absent <- setdiff(levels(y), as.character(unique(y)))
+  expect_true(all(p[, absent] == 0))
+  # Not the reference's codebook, so not its numbers; but the same model
+  # class, so the same picture: the two agree on most argmaxes.
+  want <- g("plain.proba")
+  agree <- mean(max.col(p[, colnames(p) %in% unlist(meta$cases[[name]]$classes)]) ==
+                  max.col(want))
+  expect_gt(agree, 0.6)
 })

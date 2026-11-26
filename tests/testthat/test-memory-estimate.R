@@ -914,3 +914,13 @@ test_that("Causilo's terms scale with members per pass and with the chunks", {
   expect_equal(kept$persistent, 4 * kv$persistent)
   expect_gt(kv$persistent, 2 * 2 * 24 * 5000 * 1024)
 })
+
+test_that("Causilo past 10 classes pays for every code row", {
+  ten <- causilo_terms(n_classes = 10)
+  many <- causilo_terms(n_classes = 15)
+  expect_identical(ten$n_estimators, 8)
+  expect_identical(many$n_estimators, 8)          # 8 code rows for 15 classes
+  expect_identical(causilo_terms(n_classes = 40)$n_estimators, 8)     # `_row_budget` caps at 4 x digits
+  expect_identical(causilo_terms(n_classes = 200)$n_estimators, 23)
+  expect_identical(causilo_terms(n_classes = 250)$n_estimators, 28)
+})

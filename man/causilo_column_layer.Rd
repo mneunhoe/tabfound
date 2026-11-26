@@ -4,11 +4,7 @@
 \alias{causilo_column_layer}
 \title{Column layer: latents gather each column's context, rows read them back}
 \usage{
-causilo_column_layer(
-  width,
-  heads = CAUSILO_COLUMN_HEADS,
-  latents = CAUSILO_COLUMN_LATENTS
-)
+causilo_column_layer(width, heads = 4L, latents = 256L)
 }
 \arguments{
 \item{width}{Model width.}

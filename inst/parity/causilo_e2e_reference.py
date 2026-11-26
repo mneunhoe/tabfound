@@ -8,7 +8,9 @@ float32 with `random_state = 42`, from the published checkpoints, for
 and regression trimming starts at 4). Categorical columns are handed over
 as strings whose sorted order is the order of their integer codes (see
 `causilo_ensemble_reference.py`), so the R side, given the codes, sees the
-same categories. Classifiers record `predict_proba` and `predict_logits`,
+same categories. Classifiers record `predict_proba` and `predict_logits`
+(above 10 classes, where the reference has no logits, the ECOC codebook
+it drew instead),
 regressors the mean, median, two sets of quantiles (one symmetric, one
 not) and the raw combined grid. Each case is also fitted with
 `use_kv_cache=True`, and that output stored beside the plain one (all
@@ -85,7 +87,14 @@ def run(name, fx_name, n_est):
                                   checkpoint_path=args.clf_dir, use_kv_cache=cached)
             m.fit(frame(xtr, cat), ytr.astype(np.int64))
             res[f"{key}.proba"] = m.predict_proba(frame(xte, cat))
-            res[f"{key}.logits"] = m.predict_logits(frame(xte, cat))
+            codec = m._engine.state.dataset.codec
+            if codec is None:
+                res[f"{key}.logits"] = m.predict_logits(frame(xte, cat))
+            else:
+                # Above 10 classes the codebook is drawn with NumPy's PCG64,
+                # which tabfound does not replay; keep the one used so the
+                # R decoder can be graded on it.
+                out[f"{name}.codebook"] = torch.from_numpy(codec.codebook.astype(np.int64)).clone()
             classes = [int(c) for c in m.classes_]
         else:
             m = CausiloRegressor(n_estimators=n_est, random_state=42, device="cpu",
@@ -120,6 +129,9 @@ for fx_name in ("clf_tiny", "clf_binary_missing", "reg_tiny"):
 for fx_name in ("clf_categorical", "reg_categorical"):
     for n_est in (1, 8):
         run(f"{fx_name}_e{n_est}", fx_name, n_est)
+# 15 observed classes: error-correcting output codes, one member per code
+# row whatever n_estimators says.
+run("clf_many_classes_e8", "clf_many_classes", 8)
 
 save_file({k: v.contiguous() for k, v in out.items()}, str(OUT / "e2e.safetensors"))
 meta = {"cases": cases, "q_sym": Q_SYM.tolist(), "q_asym": Q_ASYM.tolist(),

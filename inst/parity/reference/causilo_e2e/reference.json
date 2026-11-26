@@ -286,6 +286,32 @@
     "q_asym": 4.667910807221176e-06,
     "raw": 3.5009331056379267e-06
    }
+  },
+  "clf_many_classes_e8": {
+   "fixture": "clf_many_classes",
+   "task": "classification",
+   "n_estimators": 8,
+   "categorical": [],
+   "classes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+   ],
+   "cached_vs_plain": {
+    "proba": 0.0
+   }
   }
  },
  "q_sym": [

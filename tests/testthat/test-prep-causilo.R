@@ -80,3 +80,45 @@ test_that("fsum is exactly rounded", {
   expect_identical(tabfound:::.causilo_fsum(rep(0.1, 10)), 1)
   expect_identical(tabfound:::.causilo_fsum(numeric()), 0)
 })
+# ---------------------------------------------------------------------------
+# More than 10 classes (ECOC)
+# ---------------------------------------------------------------------------
+
+test_that("Causilo's codebooks have the reference's construction", {
+  for (K in c(11L, 15L, 40L, 200L)) {
+    cb <- causilo_ecoc_codebook(K, 10L, 42L)
+    expect_identical(nrow(cb), tabfound:::.causilo_ecoc_rows(K, 10L), info = K)
+    expect_identical(ncol(cb), K)
+    # Nine active classes per row, each with its own symbol.
+    for (r in seq_len(nrow(cb))) {
+      act <- cb[r, cb[r, ] != 9L]
+      expect_length(act, 9L)
+      expect_setequal(act, 0:8)
+    }
+    # Every class is active somewhere, and no two classes share a code.
+    expect_true(all(colSums(cb != 9L) > 0L))
+    expect_false(anyDuplicated(apply(cb, 2L, paste, collapse = ",")) > 0L)
+  }
+  # The same seed, the same codebook; another seed, another.
+  expect_identical(causilo_ecoc_codebook(15L, 10L, 42L), causilo_ecoc_codebook(15L, 10L, 42L))
+  expect_false(identical(causilo_ecoc_codebook(15L, 10L, 1L), causilo_ecoc_codebook(15L, 10L, 42L)))
+  # Above 200 classes: a partition; every class once, plus the padding of
+  # the last row, which repeats earlier classes with a new symbol.
+  cb <- causilo_ecoc_codebook(250L, 10L, 42L)
+  expect_identical(nrow(cb), 28L)
+  app <- colSums(cb != 9L)
+  expect_identical(sum(app == 2L), 28L * 9L - 250L)
+  expect_true(all(app %in% 1:2))
+  twice <- which(app == 2L)
+  for (k in twice) expect_false(anyDuplicated(cb[cb[, k] != 9L, k]) > 0L)
+})
+
+test_that("the ECOC decoder scores classes by their mean log-probability", {
+  cb <- rbind(c(0L, 1L, 9L), c(9L, 0L, 1L))
+  p1 <- matrix(c(0.7, 0.2, rep(0.1 / 8, 8)), 1L)
+  p2 <- matrix(c(0.3, 0.6, rep(0.1 / 8, 8)), 1L)
+  got <- causilo_ecoc_decode(list(p1, p2), cb)
+  s <- c(log(0.7), (log(0.2) + log(0.3)) / 2, log(0.6))
+  want <- exp(s - max(s)); want <- want / sum(want)
+  expect_equal(as.numeric(got), want, tolerance = 1e-12)
+})

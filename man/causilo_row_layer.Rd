@@ -4,7 +4,7 @@
 \alias{causilo_row_layer}
 \title{Row layer: latent tokens gather a row's cells and broadcast back}
 \usage{
-causilo_row_layer(width, heads = CAUSILO_ROW_HEADS, final = FALSE)
+causilo_row_layer(width, heads = 8L, final = FALSE)
 }
 \arguments{
 \item{width}{Model width.}

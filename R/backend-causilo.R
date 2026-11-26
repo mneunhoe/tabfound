@@ -602,6 +602,13 @@ print.causilo_kv_cache <- function(x, ...) {
   lapply(seq_len(groups), function(g) (ends[g] - sizes[g] + 1L):ends[g])
 }
 
+# Forward passes a prediction needs: the ensemble's members, or above 10
+# classes the ECOC code rows (one member each).
+# @keywords internal
+.causilo_items <- function(rec) {
+  if (!is.null(rec$codebook)) nrow(rec$codebook) else rec$plan$count
+}
+
 # One group's context cache, built from its members' context rows.
 # @keywords internal
 .causilo_group_cache <- function(ctx, rec, members) {
@@ -614,7 +621,7 @@ print.causilo_kv_cache <- function(x, ...) {
 # @keywords internal
 .causilo_build_caches <- function(ctx, rec, batch, chunks) {
   .causilo_with_chunks(ctx$net, chunks, {
-    groups <- .causilo_member_groups(rec$plan$count, batch)
+    groups <- .causilo_member_groups(.causilo_items(rec), batch)
     caches <- lapply(groups, function(g) .causilo_group_cache(ctx, rec, g))
   })
   structure(caches, groups = groups, class = "causilo_member_caches")
@@ -639,7 +646,7 @@ print.causilo_kv_cache <- function(x, ...) {
                                     caches = NULL, kv_cache = FALSE,
                                     chunks = list()) {
   q <- nrow(qviews[[1]])
-  groups <- attr(caches, "groups") %||% .causilo_member_groups(rec$plan$count, batch)
+  groups <- attr(caches, "groups") %||% .causilo_member_groups(.causilo_items(rec), batch)
   chunk <- if (is.null(chunk)) max(q, 1L) else as.integer(chunk)
   row_sets <- lapply(seq.int(1L, max(q, 1L), by = chunk), function(r0) {
     if (q) r0:min(q, r0 + chunk - 1L) else integer(0)
@@ -846,6 +853,22 @@ causilo_classifier <- function(ctx, n_estimators = NULL, light = FALSE, seed = 4
     rec <- state$recipe
     K <- length(rec$target$classes)
     qv <- causilo_recipe_apply(rec, X)
+    if (!is.null(rec$codebook)) {
+      # One code row per pass item: softmax over the 10 symbols (float32),
+      # then the codebook decoder. Its log-scores stand in for logits.
+      out <- .causilo_member_outputs(ctx, rec, qv, batch, predict_chunk_size,
+                                     CAUSILO_NATIVE_CLASSES, caches = state$kv_caches,
+                                     kv_cache = kv_cache, chunks = chunks)
+      probs <- lapply(seq_len(out$size(1L)), function(r) {
+        as.matrix(torch::nnf_softmax(out[r, , , drop = FALSE]$squeeze(1L), dim = -1L)$
+                    to(dtype = torch::torch_float64()))
+      })
+      p <- causilo_ecoc_decode(probs, rec$codebook)
+      full <- matrix(-Inf, nrow(X), length(state$class_levels))
+      full[, match(rec$target$classes, as.character(state$class_levels))] <- log(p)
+      colnames(full) <- as.character(state$class_levels)
+      return(structure(full, ecoc = TRUE))
+    }
     out <- .causilo_member_outputs(ctx, rec, qv, batch, predict_chunk_size, K,
                                    caches = state$kv_caches, kv_cache = kv_cache,
                                    chunks = chunks)
@@ -859,6 +882,16 @@ causilo_classifier <- function(ctx, n_estimators = NULL, light = FALSE, seed = 4
   predict_fn <- function(state, newdata, type = "class", ...) {
     X <- .causilo_check_matrix(newdata, state$recipe$encoder$width)
     lg <- .logits(state, X)
+    if (isTRUE(attr(lg, "ecoc"))) {
+      if (type == "logits") {
+        cli::cli_abort("Causilo has no logits above {CAUSILO_NATIVE_CLASSES} \\
+                        classes (error-correcting output codes); use \\
+                        {.code type = \"prob\"}.")
+      }
+      probs <- exp(lg); attr(probs, "ecoc") <- NULL
+      if (type == "prob") return(probs)
+      return(state$class_levels[max.col(probs, ties.method = "first")])
+    }
     if (type == "logits") return(lg)
     # Softmax in float32, as the reference.
     probs <- as.matrix(torch::nnf_softmax(torch::torch_tensor(lg, dtype = torch::torch_float32()),
@@ -1123,7 +1156,8 @@ causilo_describe <- function(config, task) {
 #' prediction layer's keys and values of the context rows, every column
 #' layer's broadcast keys and values of the 256 latents and the sorted
 #' context values: one group's for `kv_cache = TRUE`, every member's when
-#' kept by [tabfound_cache()].
+#' kept by [tabfound_cache()]. Past 10 classes (`opts$n_classes`) the
+#' members are the error-correcting code rows, one pass item each.
 #'
 #' @inheritParams tabicl_peak_terms
 #' @keywords internal
@@ -1136,6 +1170,12 @@ causilo_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   n_ctx <- as.numeric(n_context)
   n_est <- max(1, as.numeric(opts$n_estimators %||% 8))
   if (isTRUE(opts$light)) n_est <- 1
+  # Above 10 classes every ECOC code row is one member's pass.
+  n_cls <- as.numeric(opts$n_classes %||% 0)
+  if (n_cls > CAUSILO_NATIVE_CLASSES) {
+    n_est <- if (n_cls > 200) ceiling(n_cls / (CAUSILO_NATIVE_CLASSES - 1))
+             else .causilo_ecoc_rows(n_cls, CAUSILO_NATIVE_CLASSES)
+  }
   G <- max(1, min(n_est, as.numeric(opts$member_batch_size %||% 8)))
   # One pass holds the context and one chunk of query rows; a cached pass
   # holds whichever is larger, the context (while the cache is built) or

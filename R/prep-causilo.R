@@ -554,19 +554,20 @@ causilo_recipe_fit <- function(X, y, classification, categorical,
   cols <- .causilo_columns_fit(encoded)
   train <- .causilo_columns_apply(cols, encoded)
   K <- if (classification) length(tgt$classes) else NULL
+  codebook <- NULL
   if (!is.null(K) && K > CAUSILO_NATIVE_CLASSES) {
-    cli::cli_abort(c(
-      "Causilo 1.5 predicts at most {CAUSILO_NATIVE_CLASSES} classes natively; \\
-       these training rows have {K}.",
-      i = "Error-correcting output codes for more classes are not ported yet."
-    ))
+    # Error-correcting output codes: one Base-view member per code row,
+    # whatever `n_estimators` says, as the reference does.
+    codebook <- causilo_ecoc_codebook(K, CAUSILO_NATIVE_CLASSES, seed)
+    K <- CAUSILO_NATIVE_CLASSES
+    n_estimators <- 1L
   }
   plan <- causilo_ensemble_plan(cols$n_groups, K, n_estimators, seed)
   plan$signs <- plan$signs[, cols$groups, drop = FALSE]
   fv <- .causilo_views_fit(train, max(plan$views) + 1L)
   list(classification = classification, target = tgt, encoder = enc,
        columns = cols, plan = plan, views = fv$state, train_views = fv$views,
-       n_train = nrow(X))
+       n_train = nrow(X), codebook = codebook)
 }
 
 # The fitted float64 views of query rows.
@@ -581,10 +582,13 @@ causilo_recipe_apply <- function(rec, X) {
 # first) and the member targets `[B, n]`.
 # @keywords internal
 # `context = FALSE` leaves the context rows out (for a cached pass).
+# With an ECOC codebook, `members` are code rows: each the plan's single
+# member, with that row's symbols as its targets.
 causilo_member_inputs <- function(rec, query_views, members, context = TRUE) {
   n <- rec$n_train
+  ecoc <- !is.null(rec$codebook)
   views <- lapply(members, function(m) {
-    v <- rec$plan$views[[m]] + 1L
+    v <- if (ecoc) rec$plan$views[[1]] + 1L else rec$plan$views[[m]] + 1L
     rbind(if (context) rec$train_views[[v]],
           if (!is.null(query_views)) query_views[[v]])
   })
@@ -592,10 +596,14 @@ causilo_member_inputs <- function(rec, query_views, members, context = TRUE) {
   d <- dim(views[[1]])
   x <- torch::torch_tensor(array(unlist(views), c(d, length(views))),
                            dtype = torch::torch_float32())$permute(c(3L, 1L, 2L))
-  s <- torch::torch_tensor(rec$plan$signs[members, , drop = FALSE],
+  sign_rows <- if (ecoc) rep(1L, length(members)) else members
+  s <- torch::torch_tensor(rec$plan$signs[sign_rows, , drop = FALSE],
                            dtype = torch::torch_float32())$unsqueeze(2L)
   x <- x * s
-  y <- if (rec$classification) {
+  y <- if (ecoc) {
+    t(vapply(members, function(r) as.numeric(rec$codebook[r, rec$target$codes + 1L]),
+             numeric(n)))
+  } else if (rec$classification) {
     K <- length(rec$target$classes)
     t(vapply(members, function(m) {
       as.numeric((rec$target$codes - rec$plan$shifts[[m]]) %% K)
@@ -625,4 +633,152 @@ causilo_member_inputs <- function(rec, query_views, members, context = TRUE) {
   if (!nrow(X) && is.null(width)) cli::cli_abort("No training rows.")
   if (!ncol(X)) cli::cli_abort("Causilo needs at least one feature column.")
   X
+}
+
+# ---------------------------------------------------------------------------
+# More than 10 classes: error-correcting output codes
+# ---------------------------------------------------------------------------
+#
+# Causilo 1.0's codec (`v1_0/ecoc.py`), which 1.5 reuses. Each code row
+# splits the classes into `symbols - 1` active ones (each with its own
+# output symbol) and the rest (the last symbol); the network runs once per
+# code row, as a single Base-view member with no sign flips, and the
+# classes are scored by their mean log-probability over the rows that
+# make them active.
+#
+# The reference draws the codebook with NumPy's PCG64 `default_rng`, which
+# tabfound does not have. This draws it with the same construction over
+# CPython's generator (`py_random()`, seeded with `seed`): a valid codebook
+# of the same shape and quality, not the reference's. The decoder is the
+# reference's, and is graded against it on the reference's own codebook.
+
+# Code rows of the search path (`_row_budget`).
+# @keywords internal
+.causilo_ecoc_rows <- function(classes, symbols) {
+  coverage <- (classes + symbols - 2L) %/% (symbols - 1L)
+  digits <- 0L; representable <- 1
+  while (representable < classes) {
+    digits <- digits + 1L
+    representable <- representable * symbols
+  }
+  minimum <- max(digits, coverage)
+  min(4L * minimum, max(minimum, 4L * digits))
+}
+
+# Minimum and mean pairwise Hamming distance of an active-set schedule
+# (`_separation`); `active` is logical `[rows, classes]`.
+# @keywords internal
+.causilo_ecoc_separation <- function(active) {
+  a <- active * 1
+  app <- colSums(a)
+  both <- crossprod(a)
+  d <- outer(app, app, `+`) - both
+  pairs <- d[upper.tri(d)]
+  c(min(pairs), mean(pairs))
+}
+
+# The search path (`_search_codes`): 50 balanced schedules, the
+# best-separated one kept, its active slots labelled at random.
+# @keywords internal
+.causilo_ecoc_search <- function(classes, symbols, rng) {
+  rows <- .causilo_ecoc_rows(classes, symbols)
+  width <- symbols - 1L
+  best <- NULL; best_score <- c(-Inf, -Inf)
+  for (trial in seq_len(50L)) {
+    active <- matrix(FALSE, rows, classes)
+    uses <- integer(classes)
+    for (r in seq_len(rows)) {
+      shuffled <- rng$shuffle(seq_len(classes))
+      # A stable sort by usage keeps the shuffled order within ties.
+      pick <- shuffled[order(uses[shuffled], method = "radix")[seq_len(width)]]
+      active[r, pick] <- TRUE
+      uses[pick] <- uses[pick] + 1L
+    }
+    sc <- .causilo_ecoc_separation(active)
+    if (sc[1] > best_score[1] || (sc[1] == best_score[1] && sc[2] > best_score[2])) {
+      best <- active; best_score <- sc
+    }
+  }
+  codes <- matrix(width, rows, classes)
+  for (r in seq_len(rows)) {
+    codes[r, which(best[r, ])] <- rng$shuffle(seq_len(width) - 1L)
+  }
+  storage.mode(codes) <- "integer"
+  codes
+}
+
+# The partition path (`_partition_codes`, above 200 classes): one shuffled
+# class order cut into groups of `symbols - 1`, the last group padded with
+# classes from earlier groups, each given a symbol it did not have before.
+# @keywords internal
+.causilo_ecoc_partition <- function(classes, symbols, rng) {
+  width <- symbols - 1L
+  full <- classes %/% width; remainder <- classes %% width
+  codes <- matrix(width, full + (remainder > 0L), classes)
+  order_ <- rng$shuffle(seq_len(classes))
+  blocks <- matrix(order_[seq_len(full * width)], full, width, byrow = TRUE)
+  for (r in seq_len(full)) codes[r, blocks[r, ]] <- rng$shuffle(seq_len(width) - 1L)
+  if (remainder) {
+    padding <- width - remainder
+    group_order <- rng$shuffle(seq_len(full))
+    slots <- seq_len(padding) - 1L
+    g <- group_order[slots %% full + 1L]
+    donors <- blocks[cbind(g, slots %/% full + 1L)]
+    members <- c(order_[(full * width + 1L):classes], donors)
+    assigned <- rng$shuffle(seq_len(width) - 1L)
+    previous <- codes[cbind(g, donors)]
+    for (shift in rng$shuffle(seq_len(width) - 1L)) {
+      shifted <- (assigned + shift) %% width
+      if (all(shifted[(remainder + 1L):width] != previous)) {
+        codes[full + 1L, members] <- shifted
+        break
+      }
+    }
+  }
+  storage.mode(codes) <- "integer"
+  codes
+}
+
+#' Draw a Causilo ECOC codebook
+#'
+#' @param classes Number of classes (more than `symbols`).
+#' @param symbols Output symbols of the network (10).
+#' @param seed Seed for [py_random()].
+#' @return Integer matrix `[code rows, classes]` of 0-based symbols; the
+#'   last symbol (`symbols - 1`) marks the classes a row leaves at rest.
+#' @keywords internal
+causilo_ecoc_codebook <- function(classes, symbols = CAUSILO_NATIVE_CLASSES, seed = 42L) {
+  rng <- py_random(seed)
+  if (classes > 200L) .causilo_ecoc_partition(classes, symbols, rng)
+  else .causilo_ecoc_search(classes, symbols, rng)
+}
+
+#' Decode ECOC row probabilities into class probabilities
+#'
+#' `ECOCAccumulator` of `v1_0/ecoc.py`: per code row, the active classes
+#' gain `log(max(p, 1e-12))` of their symbol's probability; each class's
+#' total is divided by its number of active rows, then softmaxed.
+#'
+#' @param probs List over code rows of `[q, symbols]` probabilities.
+#' @param codebook From [causilo_ecoc_codebook()].
+#' @return `[q, classes]`.
+#' @keywords internal
+causilo_ecoc_decode <- function(probs, codebook) {
+  rest <- ncol(probs[[1]]) - 1L
+  K <- ncol(codebook)
+  scores <- matrix(0, nrow(probs[[1]]), K)
+  appearances <- integer(K)
+  for (r in seq_along(probs)) {
+    p <- probs[[r]]
+    p <- p / apply(p, 1L, max)
+    p <- p / rowSums(p)
+    cls <- which(codebook[r, ] != rest)
+    sym <- codebook[r, cls] + 1L
+    scores[, cls] <- scores[, cls] + log(pmax(p[, sym, drop = FALSE], 1e-12))
+    appearances[cls] <- appearances[cls] + 1L
+  }
+  scores <- sweep(scores, 2L, appearances, "/")
+  scores <- scores - apply(scores, 1L, max)
+  e <- exp(scores)
+  e / rowSums(e)
 }

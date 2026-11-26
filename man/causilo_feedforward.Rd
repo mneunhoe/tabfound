@@ -4,7 +4,7 @@
 \alias{causilo_feedforward}
 \title{SwiGLU feedforward}
 \usage{
-causilo_feedforward(width, expansion = CAUSILO_EXPANSION)
+causilo_feedforward(width, expansion = 2L)
 }
 \arguments{
 \item{width}{Input and output width.}

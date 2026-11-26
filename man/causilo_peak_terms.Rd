@@ -22,14 +22,21 @@ them unchanged:
 \details{
 \itemize{
 \item column embedding: every cell at width \code{W}, plus each column's 256
-latents (\verb{C x 256 x W});
+latents (\verb{C x 256 x W}); \code{col_chunk_size} bounds the columns a pass
+holds;
 \item row interaction: a row's \code{4 + C} tokens at width \code{W};
 \item in-context learning: every row at the prediction width \verb{4W}.
 }
 
-One forward pass holds \code{opts$member_batch_size} members (default one).
-A KV cache holds, per member, every prediction layer's keys and values
-of the context rows and every column layer's broadcast keys and values
-of the 256 latents.
+\code{row_chunk_size} bounds the rows of the last two; chunked, the cell grid,
+the row tokens and the pooled rows of the whole pass stay resident
+(\code{res}). One pass holds \code{member_batch_size} members (default 8, capped
+at the members run) and the context plus one chunk of query rows; with
+a cache, the larger of the two. A cache holds, per member, every
+prediction layer's keys and values of the context rows, every column
+layer's broadcast keys and values of the 256 latents and the sorted
+context values: one group's for \code{kv_cache = TRUE}, every member's when
+kept by \code{\link[=tabfound_cache]{tabfound_cache()}}. Past 10 classes (\code{opts$n_classes}) the
+members are the error-correcting code rows, one pass item each.
 }
 \keyword{internal}
