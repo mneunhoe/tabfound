@@ -25,6 +25,10 @@ layers_reference.py      pins the shared transformer layers (no weights needed)
 kumo_layers_reference.py pins the Kumo blocks and two tiny Kumo networks (no weights)
 kumo_ensemble_reference.py pins the Kumo recipe's members and output reduction (no weights)
 kumo_e2e_reference.py    runs `sdm.models.KumoTabular` end to end (small checkpoints)
+causilo_reference.py     runs `causilo`'s bare 1.5 network, dumps per-stage outputs
+causilo_layers_reference.py pins tiny random Causilo networks and their pieces (no weights)
+causilo_ensemble_reference.py pins the Causilo recipe's member inputs (no weights)
+causilo_e2e_reference.py runs `CausiloClassifier` / `CausiloRegressor` end to end
 layers/                  its output -- also ships with the package
 compare.R                staged comparison + tolerances
 run-parity.R             driver
@@ -70,6 +74,8 @@ checkout:
 | `TABFOUND_KUMO_CLF_DIR` / `_REG_DIR` | converted Kumo Tabular **small** artifacts |
 | `TABFOUND_KUMO_CLF_CKPT` / `_REG_CKPT` | raw `small/{classifier,regressor}.pt`, only for `--regenerate` |
 | `TABFOUND_REF_PYTHON_KUMO` | python with `structured-data-models` (default `.venvs/sdm/bin/python`) |
+| `TABFOUND_CAUSILO_CLF_DIR` / `_REG_DIR` | the published Causilo 1.5 artifacts (`download_model("causilo-1.5-classifier")`); also all `--regenerate` needs |
+| `TABFOUND_REF_PYTHON_CAUSILO` | python with `causilo` 1.5.0 (default `.venvs/causilo/bin/python`) |
 | `TABFOUND_REF_PYTHON` | python with the reference packages (default `.venvs/ref/bin/python`) |
 | `TABFOUND_REF_PYTHON_ESTIMATOR` | python with `tabpfn` 9.2.0, for the full-estimator TabPFN references (default `.venvs/ref92/bin/python`) |
 
@@ -615,6 +621,45 @@ R torch's float32 would measure the dtype, not the port.
   `predict()` path differs from its one-shot forward by at most 2.4e-6,
   recorded in `reference.json`.
 
+### Causilo 1.5 vs `causilo` 1.5.0 / torch 2.15.0
+
+```
+20/20 checks within tolerance
+```
+
+- All 1024 tensors of each published checkpoint map onto the R module
+  tree by **identity**; nothing is converted. The model has no
+  `forward()`, so `causilo_reference.py` drives
+  `ModelRunner._predict_direct()` on the CPU in float32 under
+  `inference_mode`, with forward hooks on the stages; the fixture's raw
+  columns go in as one member.
+- `net:probs` within 2.4e-6, regression quantiles 3.7e-5 abs (7.0e-6 of
+  scale); every stored stage (`col0`, the last row layer, the last
+  prediction layer, the head) within 7e-6 of scale. With every stage
+  dumped (not stored), the largest gap is prediction layer 22 (1.7e-5 of
+  scale); the first is the cell embedding's `sin`/`cos` (9e-8). Not
+  bit-exact.
+- **Recipe** (`causilo_ensemble_reference.py` -> `ensemble/causilo_ensemble.*`,
+  129 KB, `test-prep-causilo.R`, no weights): `PreparedDataset` on 24
+  cases (fixtures with 1/2/4/5/8 members, an edge table with duplicate,
+  constant, all-missing, first-row-missing, 60-category and unseen-category
+  columns, another seed, and a one-feature table whose 8 requested members
+  fit 4). Plan, views, trimming, canonical column order and groups are
+  identical -- the plan's CPython `random.Random` draws replay exactly --
+  and every member's float32 input agrees within 1e-6.
+- **End to end** (`causilo_e2e_reference.py` -> `reference/causilo_e2e/`,
+  1.1 MB, `test-parity-causilo-e2e.R`): `CausiloClassifier` /
+  `CausiloRegressor` with `random_state = 42` against the predictors, for
+  1, 2, 4, 5 and 8 members: probabilities within 2.2e-6, logits 1.0e-5,
+  mean / median within 1.6e-6 of `sd(y)`, quantiles 1.8e-5, the raw grid
+  1.5e-5. The cached and the row/column-chunked paths stay inside the same
+  bounds; the reference's own cached-vs-plain gap (1.3e-6 / 7.4e-6) is
+  recorded in `reference.json`. `clf_many_classes` (15 classes) runs on
+  the reference's own ECOC codebook (drawn with NumPy PCG64, which
+  tabfound does not replay): 2.1e-7.
+- Set up the venv with
+  `python3.12 -m venv .venvs/causilo && .venvs/causilo/bin/pip install causilo==1.5.0 safetensors huggingface_hub`.
+
 ### Mitra vs `autogluon` Tab2D
 
 ```
@@ -747,7 +792,8 @@ per-stage activations at 11 MB. It is
 rather not track it in git, delete it and regenerate with
 `--regenerate`. Kumo's are small by comparison: `reference/kumo/` keeps
 only the first column and row block per fixture (`--stages minimal`,
-6 MB) and `reference/kumo_e2e/` is 0.7 MB. The small `transforms/`
+6 MB) and `reference/kumo_e2e/` is 0.7 MB; Causilo's `reference/causilo/`
+(`--stages minimal`) is 5.4 MB and `reference/causilo_e2e/` 1.1 MB. The small `transforms/`
 (24 KB), `ensemble/` (2.2 MB, 1.8 MB of it Kumo's eight members on ten
 tables) and `layers/` (0.7 MB) references are worth keeping either way — they ship
 with the package and are what let `test-prep-transforms.R`,

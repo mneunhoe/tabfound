@@ -11,7 +11,7 @@ models are often competitive with a tuned gradient-boosted tree, with no
 tuning at all.
 
 `tabfound` runs several published models (TabPFN, TabICL, TabFM, Mitra,
-Kumo Tabular)
+Kumo Tabular, Causilo)
 behind one interface: a formula, a data frame, and `predict()`. Everything
 runs in R on [`torch`](https://torch.mlverse.org/), and Python is never
 needed to fit or predict. Beyond prediction, the package uses the models'
@@ -63,13 +63,14 @@ checkpoint is used. A local directory path works wherever a name does.
 weights in a PyTorch format that R cannot read. `download_model()` converts them once,
 and for that step it needs a Python interpreter with `torch` and
 `safetensors` installed. Point `options(tabfound.python = )` at one if it
-is not found. TabFM, Mitra and Kumo Tabular need no conversion. After this step, Python
+is not found. TabFM, Mitra, Kumo Tabular and Causilo need no conversion. After this step, Python
 is never used again.
 
 > **Check the licence before you publish or deploy.** The package is MIT,
-> but the model weights are not. TabPFN (v2.5, v2.6, v3 and v3.5) and
-> TabFM are licensed for **research and evaluation only**, not commercial
-> or production use. `list_models()` shows each licence, and the download
+> but the model weights are not. TabPFN (v2.5, v2.6, v3 and v3.5),
+> TabFM and Causilo are licensed for **research and evaluation only**, not
+> commercial or production use (Causilo's licence also excludes hosted or
+> API services, paid or free). `list_models()` shows each licence, and the download
 > prompt repeats it.
 
 ## Which model?
@@ -87,6 +88,7 @@ matter:
 | TabFM 1.0 | `"tabfm-1.0.0"` | ~6.6 GB per task | non-commercial | Large (1.6 B parameters) and slow on CPU. Regression is point prediction only. Weights: [google/tabfm-1.0.0-pytorch](https://huggingface.co/google/tabfm-1.0.0-pytorch). |
 | Mitra | `"mitra"` | ~300 MB per task | Apache-2.0 | Permissive licence. 72 M parameters. Regression is point prediction only. Weights: [autogluon/mitra-classifier](https://huggingface.co/autogluon/mitra-classifier), [autogluon/mitra-regressor](https://huggingface.co/autogluon/mitra-regressor). |
 | Kumo Tabular | `"kumo-tabular-small"`, `-medium`, `-large` | 110 / 246 / 855 MB per task | OpenMDW-1.1 | Permissive licence. NVIDIA's model in three sizes; `"kumo-tabular"` is large, which is slow on CPU. Handles `NA` natively. Regression returns a full quantile grid. 8-member ensemble by default. Weights: [nvidia/Kumo-Tabular](https://huggingface.co/nvidia/Kumo-Tabular) (`v1.0.1`), fetched as a bit-identical safetensors copy from [mneunhoe/Kumo-Tabular-safetensors](https://huggingface.co/mneunhoe/Kumo-Tabular-safetensors). |
+| Causilo 1.5 | `"causilo"` | 1.1 GB per task | Nums AI Model License (non-commercial) | 275 M parameters, slow on CPU: eight members by default, `light = TRUE` for one ("Causilo 1.5 (Light)"). Handles `NA` natively. Regression returns a full quantile grid. More than 10 classes through error-correcting codes (tabfound draws its own codebook, so above 10 classes it does not reproduce the reference's numbers). Imputation use not validated. Weights: [nums-ai/causilo-1.5](https://huggingface.co/nums-ai/causilo-1.5). |
 
 All the models are inference-only. Each one reproduces its Python
 reference's own preprocessing and ensembling, and gets the same predictions
@@ -102,7 +104,7 @@ you:
   *told* which columns are categorical. A five-level factor is not treated
   as the numbers 1 to 5.
 - **Missing values (`NA`)** are fine in predictors. Each model handles them
-  the way its reference does: TabPFN and Kumo Tabular model missingness
+  the way its reference does: TabPFN, Kumo Tabular and Causilo model missingness
   explicitly, while the others mean-impute first. `Inf` is an error. Recode it to `NA` or to
   a finite value.
 - **Dates and free text.** On TabPFN v3.5, dates are expanded into calendar
@@ -219,7 +221,7 @@ or `...` in `tabfound()`:
   wherever it leaves the answer unchanged; `chunk_cache = FALSE` turns
   that off.
 - `row_chunk_size`, `col_chunk_size` (TabPFN v3/v3.5, TabICL, TabFM,
-  Kumo Tabular) and
+  Kumo Tabular, Causilo) and
   `save_peak_memory_factor` (most models) trade speed for lower peak
   memory.
 - `device = "cuda"` or `"mps"` runs on a GPU.
@@ -276,9 +278,9 @@ citation("tabfound")
 ```
 
 Please also cite the model you use. `citation("tabfound")` includes the
-references for TabPFN and TabICL, and NVIDIA's announcement of Kumo Tabular
-(there is no paper yet). For TabFM and Mitra, see the model card on Hugging
-Face.
+references for TabPFN, TabICL and Causilo, and NVIDIA's announcement of
+Kumo Tabular (there is no paper yet). For TabFM and Mitra, see the model card
+on Hugging Face.
 
 ## License
 
