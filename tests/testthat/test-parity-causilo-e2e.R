@@ -126,3 +126,59 @@ test_that("tabfound() sorts factor levels by code point for Causilo", {
   got <- as.matrix(predict(fit, test, type = "prob"))
   expect_lt(max(abs(got - g("plain.proba"))), TOL_PROBA)
 })
+
+# The cache and the chunk sizes change batch shapes, never which rows see
+# which: graded against the reference's plain predictions, they clear the
+# same bounds. (The reference's own cached-vs-plain gap is recorded in
+# `reference.json`: up to 1.3e-6 in probability, 7.4e-6 in quantiles.)
+VARIANTS <- list(
+  cached  = list(kv_cache = TRUE, predict_chunk_size = 5L),
+  chunked = list(row_chunk_size = 16L, col_chunk_size = 2L, predict_chunk_size = 7L,
+                 member_batch_size = 3L)
+)
+for (nm in c("clf_binary_missing_e8", "clf_categorical_e8", "reg_tiny_e5",
+             "reg_categorical_e8")) {
+  for (vn in names(VARIANTS)) {
+    local({
+      name <- nm; variant <- VARIANTS[[vn]]; label <- vn
+      cs <- meta$cases[[name]]
+      test_that(sprintf("the %s Causilo path matches causilo on %s", label, name), {
+        p <- paste0(name, ".")
+        g <- function(k) as_mat(ref[[paste0(p, k)]])
+        X_train <- g("x_train"); X_test <- g("x_test")
+        y <- as.numeric(g("y_train"))
+        args <- c(list(n_estimators = cs$n_estimators,
+                       categorical_features = unlist(cs$categorical)), variant)
+        if (identical(cs$task, "classification")) {
+          spec <- do.call(causilo_classifier, c(list(ctx_clf), args))
+          got <- spec$predict(spec$fit(X_train, factor(y)), X_test, type = "prob")
+          expect_lt(max(abs(got - g("plain.proba"))), TOL_PROBA)
+        } else {
+          spec <- do.call(causilo_regressor, c(list(ctx_reg), args))
+          st <- spec$fit(X_train, y)
+          expect_lt(max(abs(spec$predict(st, X_test, type = "grid") - g("plain.raw"))) / sd(y),
+                    TOL_REG)
+          expect_lt(max(abs(spec$predict(st, X_test) - as.numeric(g("plain.mean")))) / sd(y),
+                    TOL_REG)
+        }
+      })
+    })
+  }
+}
+
+test_that("a Causilo cache from tabfound_cache() survives a bundle", {
+  name <- "clf_binary_missing_e2"
+  g <- function(k) as_mat(ref[[paste0(name, ".", k)]])
+  m <- suppressMessages(tabular_classifier(clf_dir, backend = "causilo", n_estimators = 2L))
+  m <- fit(m, g("x_train"), factor(as.numeric(g("y_train"))))
+  plain <- predict(m, g("x_test"), type = "prob")
+  cached <- tabfound_cache(m)
+  expect_true(has_cache(cached))
+  p1 <- predict(cached, g("x_test"), type = "prob")
+  expect_lt(max(abs(p1 - g("plain.proba"))), TOL_PROBA)
+  bundle <- file.path(withr::local_tempdir(), "causilo-bundle")
+  tabfound_save(cached, bundle)
+  back <- suppressMessages(tabfound_load(bundle))
+  expect_true(has_cache(back))
+  expect_identical(predict(back, g("x_test"), type = "prob"), p1)
+})

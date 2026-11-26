@@ -260,6 +260,7 @@ causilo_model <- torch::nn_module(
     self$columns <- causilo_column_block(m)
     self$row <- causilo_row_block(m)
     self$prediction <- causilo_prediction_block(m)
+    self$chunks <- list()
   },
 
   # Cells, columns leading: `[B, R, C]` -> `[B, C, R, 1]`.
@@ -267,13 +268,18 @@ causilo_model <- torch::nn_module(
     table$to(dtype = torch::torch_float32())$transpose(2L, 3L)$unsqueeze(-1L)
   },
 
+  # Chunk sizes for the stages whose work is independent along an axis:
+  # columns in the column layers, rows in the row layers and in the
+  # prediction layers (whose keys are the context rows, fixed per layer).
+  # `NULL` runs a stage in one pass. `self$chunks`, set by the predictors.
+
   # Feature embedding, the paired column/row layers and the pooled latents:
   # `[B, R, C]` -> `[B, R, 4W]`.
   #
   # @param targets `[B, n]`, or `NULL` when every row is a query row and
-  #   `cache` holds the context.
-  # @param cache A `causilo_kv_cache` to read (query rows only) or, with
-  #   `record = TRUE`, a list to fill with the column layers' K/V.
+  #   `ecdf` / `column_kv` hold the context (a [causilo_kv_cache()]).
+  # @param record Also return the column layers' broadcast K/V and the
+  #   sorted context: the column half of a cache.
   encode_rows = function(table, targets, ecdf = NULL, column_kv = NULL,
                          record = FALSE) {
     feats <- self$column_features(table)
@@ -284,30 +290,38 @@ causilo_model <- torch::nn_module(
       targets$to(dtype = torch::torch_float32())$unsqueeze(2L)$expand(c(-1L, C, -1L))
     }
     emb <- self$feature_embedding(feats, ecdf, col_targets)
+    rm(feats, col_targets)
     dump_if_enabled("causilo_embed", emb)
     features <- emb$transpose(2L, 3L)
+    rm(emb)
     shp <- features$shape
     latents <- self$row$latents$expand(c(shp[1:2], self$row$latents$shape))
     kv <- if (isTRUE(record)) vector("list", length(self$columns$layers))
     for (i in seq_along(self$columns$layers)) {
       rows <- features$transpose(2L, 3L)
       layer <- self$columns$layers[[i]]
-      rows <- if (!is.null(column_kv)) {
-        layer$query(rows, column_kv[[i]])
-      } else if (isTRUE(record)) {
-        r <- layer(rows, n, return_kv = TRUE)
-        kv[[i]] <- r$kv
-        r$rows
-      } else {
-        layer(rows, n)
-      }
+      res <- .causilo_split_apply(rows, 2L, self$chunks$col, function(part, idx) {
+        if (!is.null(column_kv)) {
+          list(rows = layer$query(part, .causilo_kv_slice(column_kv[[i]], 2L, idx)))
+        } else if (isTRUE(record)) {
+          layer(part, n, return_kv = TRUE)
+        } else {
+          list(rows = layer(part, n))
+        }
+      })
+      rows <- res$rows
+      if (isTRUE(record)) kv[[i]] <- res$kv
+      rm(res)
       dump_if_enabled(sprintf("causilo_col%d", i - 1L), rows)
       features <- rows$transpose(2L, 3L)
-      r <- self$row$layers[[i]](latents, features)
+      rm(rows)
+      rl <- self$row$layers[[i]]
+      r <- .causilo_split_apply2(latents, features, 2L, self$chunks$row,
+                                 function(l, f) rl(l, f))
       latents <- r$latents$contiguous()
       features <- r$features
       dump_if_enabled(sprintf("causilo_row%d", i - 1L),
-                      if (self$row$layers[[i]]$final) latents
+                      if (rl$final) latents
                       else torch::torch_cat(list(latents, features), dim = -2L))
     }
     pooled <- self$row$pool(latents)
@@ -315,29 +329,159 @@ causilo_model <- torch::nn_module(
     if (isTRUE(record)) list(rows = pooled, column_kv = kv, ecdf = ecdf) else pooled
   },
 
+  # One prediction layer over `x` against `kv` (the context's K/V), the
+  # rows a chunk at a time.
+  .advance = function(layer, x, kv) {
+    .causilo_split_apply(x, 2L, self$chunks$row, function(part, idx) {
+      list(rows = layer$query(part, kv))
+    })$rows
+  },
+
   # Prediction layers over the target-conditioned rows: `[B, R, P]` ->
-  # head output for the query rows.
-  predict_rows = function(rows, targets) {
+  # head output for the query rows. With `record`, also the context's
+  # K/V at every layer (the prediction half of a cache).
+  predict_rows = function(rows, targets, record = FALSE) {
     n <- targets$size(2L)
     R <- rows$size(2L)
     x <- self$prediction$add_context_targets(rows, targets)
     layers <- self$prediction$layers
     L <- length(layers)
+    kv <- if (isTRUE(record)) vector("list", L)
+    # A chunk as long as the rows splits nothing: run the plain path.
+    plain <- !isTRUE(record) && (is.null(self$chunks$row) || self$chunks$row >= R)
     for (j in seq_len(L - 1L)) {
-      x <- layers[[j]](x, context_rows = n)
+      layer <- layers[[j]]
+      if (plain) {
+        x <- layer(x, context_rows = n)
+      } else {
+        # The keys of every chunk are the context rows of this layer's
+        # input, normalized: fix them first, then advance the rows.
+        k <- layer$prepare(x$narrow(2L, 1L, n))
+        if (isTRUE(record)) kv[[j]] <- k
+        x <- self$.advance(layer, x, k)
+      }
       dump_if_enabled(sprintf("causilo_pred%d", j - 1L), x)
     }
-    q <- layers[[L]](x$narrow(2L, n + 1L, R - n), x$narrow(2L, 1L, n))
+    if (isTRUE(record)) kv[[L]] <- layers[[L]]$prepare(x$narrow(2L, 1L, n))
+    q <- if (plain) {
+      layers[[L]](x$narrow(2L, n + 1L, R - n), x$narrow(2L, 1L, n))
+    } else {
+      self$.advance(layers[[L]], x$narrow(2L, n + 1L, R - n),
+                    kv[[L]] %||% layers[[L]]$prepare(x$narrow(2L, 1L, n)))
+    }
     dump_if_enabled(sprintf("causilo_pred%d", L - 1L), q)
     out <- self$prediction$head(q)
     dump_if_enabled("causilo_head", out)
-    out
+    if (isTRUE(record)) list(out = out, kv = kv) else out
   },
 
   forward = function(table, targets) {
     self$predict_rows(self$encode_rows(table, targets), targets)
+  },
+
+  # Encode the context rows `[B, n, C]` once: the sorted context values,
+  # every column layer's broadcast K/V and every prediction layer's
+  # context K/V. See [causilo_kv_cache()].
+  build_kv_cache = function(table, targets) {
+    enc <- self$encode_rows(table, targets, record = TRUE)
+    pr <- self$predict_rows(enc$rows, targets, record = TRUE)
+    causilo_kv_cache(enc$ecdf, enc$column_kv, pr$kv,
+                     n_train = targets$size(2L), n_features = table$size(3L))
+  },
+
+  # Query rows `[B, q, C]` against a cache built for the same members.
+  forward_cached = function(table, cache) {
+    if (table$size(3L) != cache$n_features) {
+      cli::cli_abort("This Causilo cache was built for {cache$n_features} \\
+                      feature{?s}, not {table$size(3L)}.")
+    }
+    x <- self$encode_rows(table, NULL, ecdf = cache$ecdf, column_kv = cache$column)
+    layers <- self$prediction$layers
+    for (j in seq_along(layers)) x <- self$.advance(layers[[j]], x, cache$prediction[[j]])
+    self$prediction$head(x)
   }
 )
+
+# Apply `f(part, idx)` to slices of `x` along `axis` (`size` at a time, or
+# all at once when `size` is NULL or not smaller than the axis), where `f`
+# returns a list of tensors (`rows`, and optionally `kv = list(key,
+# value)` with the same axis); concatenate each piece.
+# @keywords internal
+.causilo_split_apply <- function(x, axis, size, f) {
+  len <- x$size(axis)
+  if (is.null(size) || size >= len || len == 0L) return(f(x, NULL))
+  starts <- seq.int(1L, len, by = size)
+  parts <- lapply(starts, function(s) {
+    m <- min(size, len - s + 1L)
+    f(x$narrow(axis, s, m), c(s, m))
+  })
+  out <- list(rows = torch::torch_cat(lapply(parts, `[[`, "rows"), dim = axis))
+  if (!is.null(parts[[1]]$kv)) {
+    out$kv <- list(
+      key = torch::torch_cat(lapply(parts, function(p) p$kv$key), dim = axis),
+      value = torch::torch_cat(lapply(parts, function(p) p$kv$value), dim = axis))
+  }
+  out
+}
+
+# Two tensors sliced together along `axis` (latents and features of the
+# row layers).
+# @keywords internal
+.causilo_split_apply2 <- function(a, b, axis, size, f) {
+  len <- a$size(axis)
+  if (is.null(size) || size >= len || len == 0L) return(f(a, b))
+  parts <- lapply(seq.int(1L, len, by = size), function(s) {
+    m <- min(size, len - s + 1L)
+    f(a$narrow(axis, s, m), b$narrow(axis, s, m))
+  })
+  list(latents = torch::torch_cat(lapply(parts, `[[`, "latents"), dim = axis),
+       features = torch::torch_cat(lapply(parts, `[[`, "features"), dim = axis))
+}
+
+# @keywords internal
+.causilo_kv_slice <- function(kv, axis, idx) {
+  if (is.null(idx)) return(kv)
+  list(key = kv$key$narrow(axis, idx[[1]], idx[[2]]),
+       value = kv$value$narrow(axis, idx[[1]], idx[[2]]))
+}
+
+
+#' A Causilo 1.5 context cache
+#'
+#' What the query rows read from the context, per member (the leading
+#' axis): the context values of every column, sorted (`ecdf`, `[B, C, n,
+#' 1]`, for the cell mid-ranks); each column layer's broadcast keys and
+#' values of its 256 gathered latents (`column`, `[B, C, 4, 256, W/4]`
+#' each); and each prediction layer's keys and values of the context rows
+#' (`prediction`, `[B, 8, n, 4W/8]` each). The row layers mix only within
+#' a row and cache nothing. Query rows read only this, so a cached
+#' prediction is the plain one up to float32 rounding.
+#'
+#' At the published size one member's prediction half is about 197 KB per
+#' context row (1.97 GB at 10,000 rows), and the column half 4.2 MB per
+#' column.
+#'
+#' @param ecdf,column,prediction The three parts.
+#' @param n_train,n_features Context shape.
+#' @keywords internal
+causilo_kv_cache <- function(ecdf, column, prediction, n_train, n_features) {
+  structure(list(ecdf = ecdf, column = column, prediction = prediction,
+                 n_train = as.integer(n_train), n_features = as.integer(n_features)),
+            class = "causilo_kv_cache")
+}
+
+#' @export
+#' @keywords internal
+print.causilo_kv_cache <- function(x, ...) {
+  bytes <- function(l) sum(vapply(l, function(p) {
+    if (inherits(p, "torch_tensor")) return(p$numel() * p$element_size())
+    sum(vapply(p, function(t) t$numel() * t$element_size(), numeric(1)))
+  }, numeric(1)))
+  b <- bytes(list(x$ecdf)) + bytes(x$column) + bytes(x$prediction)
+  cat(sprintf("<causilo_kv_cache> %d member(s), %d context rows x %d columns, %.1f MB\n",
+              as.integer(x$ecdf$size(1L)), x$n_train, x$n_features, b / 1e6))
+  invisible(x)
+}
 
 
 # ---------------------------------------------------------------------------
@@ -418,31 +562,90 @@ causilo_model <- torch::nn_module(
   seed
 }
 
-# Every member's network output for the query rows `[M, q, out]` (CPU,
-# float32), the members run `batch` at a time in balanced groups and the
-# query rows `chunk` at a time; the context rows go with every chunk.
+# The members, `batch` at a time in balanced groups (as the reference's
+# `EnsembleRunner` splits them): a list of member index vectors.
 # @keywords internal
-.causilo_member_outputs <- function(ctx, rec, qviews, batch, chunk, n_out) {
-  M <- rec$plan$count
-  q <- nrow(qviews[[1]])
+.causilo_member_groups <- function(M, batch) {
   groups <- ceiling(M / batch)
   sizes <- M %/% groups + (seq_len(groups) <= M %% groups)
   ends <- cumsum(sizes)
-  starts <- ends - sizes + 1L
+  lapply(seq_len(groups), function(g) (ends[g] - sizes[g] + 1L):ends[g])
+}
+
+# One group's context cache, built from its members' context rows.
+# @keywords internal
+.causilo_group_cache <- function(ctx, rec, members) {
+  inp <- causilo_member_inputs(rec, NULL, members)
+  torch::with_no_grad(ctx$net$build_kv_cache(inp$x$to(device = ctx$device),
+                                             inp$y$to(device = ctx$device)))
+}
+
+# Every member's caches, group by group: what `tabfound_cache()` keeps.
+# @keywords internal
+.causilo_build_caches <- function(ctx, rec, batch, chunks) {
+  .causilo_with_chunks(ctx$net, chunks, {
+    groups <- .causilo_member_groups(rec$plan$count, batch)
+    caches <- lapply(groups, function(g) .causilo_group_cache(ctx, rec, g))
+  })
+  structure(caches, groups = groups, class = "causilo_member_caches")
+}
+
+# @keywords internal
+.causilo_with_chunks <- function(net, chunks, expr) {
+  old <- net$chunks
+  net$chunks <- chunks
+  on.exit(net$chunks <- old, add = TRUE)
+  force(expr)
+}
+
+# Every member's network output for the query rows `[M, q, out]` (CPU,
+# float32). Members run in groups, the query rows `chunk` at a time.
+# Uncached, each chunk carries the whole context. With `caches` (one per
+# group, from `tabfound_cache()`), or with `kv_cache = TRUE` (a group's
+# cache built for this call and dropped after its chunks), each chunk
+# reads the context from the cache instead.
+# @keywords internal
+.causilo_member_outputs <- function(ctx, rec, qviews, batch, chunk, n_out,
+                                    caches = NULL, kv_cache = FALSE,
+                                    chunks = list()) {
+  q <- nrow(qviews[[1]])
+  groups <- attr(caches, "groups") %||% .causilo_member_groups(rec$plan$count, batch)
   chunk <- if (is.null(chunk)) max(q, 1L) else as.integer(chunk)
-  row_starts <- seq.int(1L, max(q, 1L), by = chunk)
-  per_chunk <- lapply(row_starts, function(r0) {
-    rows <- if (q) r0:min(q, r0 + chunk - 1L) else integer(0)
-    qv <- lapply(qviews, function(v) v[rows, , drop = FALSE])
-    outs <- lapply(seq_len(groups), function(g) {
-      inp <- causilo_member_inputs(rec, qv, starts[g]:ends[g])
-      out <- torch::with_no_grad(ctx$net(inp$x$to(device = ctx$device),
-                                         inp$y$to(device = ctx$device)))
+  row_sets <- lapply(seq.int(1L, max(q, 1L), by = chunk), function(r0) {
+    if (q) r0:min(q, r0 + chunk - 1L) else integer(0)
+  })
+  cached <- !is.null(caches) || isTRUE(kv_cache)
+  per_group <- .causilo_with_chunks(ctx$net, chunks, lapply(seq_along(groups), function(g) {
+    members <- groups[[g]]
+    cache <- if (!is.null(caches)) caches[[g]]
+             else if (cached) .causilo_group_cache(ctx, rec, members)
+    outs <- lapply(row_sets, function(rows) {
+      qv <- lapply(qviews, function(v) v[rows, , drop = FALSE])
+      inp <- causilo_member_inputs(rec, qv, members, context = !cached)
+      x <- inp$x$to(device = ctx$device)
+      out <- torch::with_no_grad(
+        if (cached) ctx$net$forward_cached(x, cache)
+        else ctx$net(x, inp$y$to(device = ctx$device)))
       out$narrow(-1L, 1L, n_out)$cpu()
     })
-    torch::torch_cat(outs, dim = 1L)
-  })
-  if (length(per_chunk) == 1L) per_chunk[[1]] else torch::torch_cat(per_chunk, dim = 2L)
+    rm(cache)
+    if (length(outs) == 1L) outs[[1]] else torch::torch_cat(outs, dim = 2L)
+  }))
+  torch::torch_cat(per_group, dim = 1L)
+}
+
+# Chunking options as the network reads them.
+# @keywords internal
+.causilo_chunks <- function(row_chunk_size, col_chunk_size) {
+  chk <- function(v, nm) {
+    if (is.null(v)) return(NULL)
+    if (!is.numeric(v) || length(v) != 1L || is.na(v) || v < 1) {
+      cli::cli_abort("{.arg {nm}} must be a positive whole number or {.code NULL}.")
+    }
+    as.integer(v)
+  }
+  Filter(Negate(is.null), list(row = chk(row_chunk_size, "row_chunk_size"),
+                               col = chk(col_chunk_size, "col_chunk_size")))
 }
 
 # Classification: undo each member's class shift and average the logits
@@ -574,11 +777,25 @@ CAUSILO_MEAN_WEIGHTS <- (CAUSILO_MEAN_MASS[-length(CAUSILO_MEAN_MASS)] +
 #'   rounding; the context is re-encoded with every chunk.
 #' @param member_batch_size Members per forward pass (the reference runs
 #'   at most 8 together).
+#' @param kv_cache Encode each group of members' context once per
+#'   `predict()` call and run every query chunk against it, instead of
+#'   re-encoding the context with every chunk (see [causilo_kv_cache()]).
+#'   [tabfound_cache()] keeps the caches across calls and sessions. The
+#'   answer moves only by float32 rounding. A cache is large -- about
+#'   197 KB per context row per member -- so with many context rows keep
+#'   `n_estimators` (or `member_batch_size`) small when caching.
+#' @param row_chunk_size Rows per pass through the row layers and the
+#'   prediction layers (whose keys, the context rows, are fixed per layer
+#'   first). Bounds the activations those stages hold; float32 rounding
+#'   only.
+#' @param col_chunk_size Columns per pass through the column layers.
 #' @param categorical_features 1-based indices of categorical columns.
 #' @keywords internal
 causilo_classifier <- function(ctx, n_estimators = NULL, light = FALSE, seed = 42L,
                                predict_chunk_size = 1024L, member_batch_size = 8L,
-                               categorical_features = NULL) {
+                               kv_cache = FALSE, row_chunk_size = NULL,
+                               col_chunk_size = NULL, categorical_features = NULL) {
+  chunks <- .causilo_chunks(row_chunk_size, col_chunk_size)
   n_est <- .causilo_n_estimators(n_estimators, light)
   seed <- .causilo_check_seed(seed)
   batch <- max(1L, as.integer(member_batch_size))
@@ -599,7 +816,9 @@ causilo_classifier <- function(ctx, n_estimators = NULL, light = FALSE, seed = 4
     rec <- state$recipe
     K <- length(rec$target$classes)
     qv <- causilo_recipe_apply(rec, X)
-    out <- .causilo_member_outputs(ctx, rec, qv, batch, predict_chunk_size, K)
+    out <- .causilo_member_outputs(ctx, rec, qv, batch, predict_chunk_size, K,
+                                   caches = state$kv_caches, kv_cache = kv_cache,
+                                   chunks = chunks)
     logits <- as.matrix(.causilo_mean_logits(rec, out))
     full <- matrix(-Inf, nrow(X), length(state$class_levels))
     full[, match(rec$target$classes, as.character(state$class_levels))] <- logits
@@ -619,7 +838,8 @@ causilo_classifier <- function(ctx, n_estimators = NULL, light = FALSE, seed = 4
     state$class_levels[max.col(probs, ties.method = "first")]
   }
 
-  list(fit = fit_fn, predict = predict_fn)
+  list(fit = fit_fn, predict = predict_fn,
+       build_cache = function(state) .causilo_build_caches(ctx, state$recipe, batch, chunks))
 }
 
 #' Build the Causilo 1.5 regressor predictor
@@ -641,7 +861,9 @@ causilo_classifier <- function(ctx, n_estimators = NULL, light = FALSE, seed = 4
 #' @keywords internal
 causilo_regressor <- function(ctx, n_estimators = NULL, light = FALSE, seed = 42L,
                               predict_chunk_size = 1024L, member_batch_size = 8L,
-                              categorical_features = NULL) {
+                              kv_cache = FALSE, row_chunk_size = NULL,
+                              col_chunk_size = NULL, categorical_features = NULL) {
+  chunks <- .causilo_chunks(row_chunk_size, col_chunk_size)
   n_est <- .causilo_n_estimators(n_estimators, light)
   seed <- .causilo_check_seed(seed)
   batch <- max(1L, as.integer(member_batch_size))
@@ -664,13 +886,15 @@ causilo_regressor <- function(ctx, n_estimators = NULL, light = FALSE, seed = 42
     X <- .causilo_check_matrix(newdata, rec$encoder$width)
     qv <- causilo_recipe_apply(rec, X)
     out <- .causilo_member_outputs(ctx, rec, qv, batch, predict_chunk_size,
-                                   CAUSILO_NUM_QUANTILES)
+                                   CAUSILO_NUM_QUANTILES, caches = state$kv_caches,
+                                   kv_cache = kv_cache, chunks = chunks)
     res <- .causilo_regression(rec, out, type, if (type == "quantiles") quantiles)
     if (type == "quantiles") colnames(res) <- .quantile_colnames(quantiles)
     res
   }
 
   list(fit = fit_fn, predict = predict_fn,
+       build_cache = function(state) .causilo_build_caches(ctx, state$recipe, batch, chunks),
        types = c("mean", "median", "quantiles", "grid"),
        quantile_levels = levels_)
 }
@@ -922,7 +1146,7 @@ register_causilo_backend <- function() {
     peak_terms    = causilo_peak_terms,
     # The network embeds missing cells itself: a learned vector, with the
     # value and rank waves zeroed.
-    kv_cache_capable   = FALSE,
+    kv_cache_capable   = TRUE,
     handles_missing    = TRUE,
     imputes_internally = FALSE,
     description   = "Causilo 1.5 (Nums AI) column/row latent transformer with a prediction stack",

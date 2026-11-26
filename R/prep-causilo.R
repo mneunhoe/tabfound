@@ -580,11 +580,13 @@ causilo_recipe_apply <- function(rec, X) {
 # Member inputs: `[B, n + q, C]` float32 (view times sign, context rows
 # first) and the member targets `[B, n]`.
 # @keywords internal
-causilo_member_inputs <- function(rec, query_views, members) {
+# `context = FALSE` leaves the context rows out (for a cached pass).
+causilo_member_inputs <- function(rec, query_views, members, context = TRUE) {
   n <- rec$n_train
   views <- lapply(members, function(m) {
     v <- rec$plan$views[[m]] + 1L
-    rbind(rec$train_views[[v]], if (!is.null(query_views)) query_views[[v]])
+    rbind(if (context) rec$train_views[[v]],
+          if (!is.null(query_views)) query_views[[v]])
   })
   # The reference multiplies the float32 views by float32 signs.
   d <- dim(views[[1]])

@@ -2,7 +2,7 @@
 % Please edit documentation in R/core-utils.R
 \name{chunk_apply}
 \alias{chunk_apply}
-\title{Apply a function to row-chunks of a matrix and rbind the results}
+\title{Apply a function to row-chunks of a matrix and stack the results}
 \usage{
 chunk_apply(X, chunk_size, fn)
 }
@@ -12,11 +12,18 @@ chunk_apply(X, chunk_size, fn)
 \item{chunk_size}{Max rows per call.}
 
 \item{fn}{Function taking a row-subset matrix and returning a matrix
-with one row per input row.}
+with one row per input row, or a vector with one element per row.}
 }
 \description{
 In-context models re-encode the whole training context for every
 forward pass, so test rows are processed in bounded batches rather
 than all at once.
+}
+\details{
+Matrices are stacked by row; vectors (a regressor's mean or median) are
+concatenated. \code{rbind()} on vectors would lay each chunk out as a \emph{row}
+and recycle the short last one to the full chunk width -- 3,000 rows in
+chunks of 1,024 came back as 3,072 numbers -- so the result is checked
+to have exactly one entry per input row.
 }
 \keyword{internal}

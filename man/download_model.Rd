@@ -10,8 +10,8 @@ download_model(model, task = NULL, force = FALSE, python = NULL, quiet = FALSE)
 \item{model}{A catalogue id from \code{\link[=list_models]{list_models()}}, or a family name
 (\code{"tabpfn"}, \code{"tabpfn-v2.5"}, \code{"tabpfn-v2.6"}, \code{"tabpfn-v3"},
 \code{"tabpfn-v3.5"}, \code{"tabicl"}, \code{"tabfm-1.0.0"}, \code{"mitra"},
-\code{"kumo-tabular"}, \code{"kumo-tabular-small"}, \code{"kumo-tabular-medium"})
-together with \code{task}. \code{"kumo-tabular"} is the large model, the
+\code{"kumo-tabular"}, \code{"kumo-tabular-small"}, \code{"kumo-tabular-medium"},
+\code{"causilo"}, \code{"causilo-1.5"}) together with \code{task}. \code{"kumo-tabular"} is the large model, the
 reference default. \code{"tabpfn"} stays pinned to v2.5; ask for a later
 generation by name. A family name resolves to that family's default
 checkpoint; the specialised variants are catalogued too, but by exact
@@ -52,7 +52,9 @@ that R's torch bindings cannot read. TabPFN v3.5 is published as
 safetensors, so its conversion only lifts the config out of the file's
 header and needs \code{safetensors} alone. NVIDIA Kumo Tabular is fetched from
 \code{mneunhoe/Kumo-Tabular-safetensors}, a bit-identical safetensors copy of
-NVIDIA's PyTorch state dicts, so it needs no conversion either. Point
+NVIDIA's PyTorch state dicts, so it needs no conversion either; nor
+does Causilo 1.5, which Nums AI publishes as safetensors (its download
+is checked against the config hash in the weights' header). Point
 \code{options(tabfound.python = )} or \code{TABFOUND_PYTHON} at a suitable
 interpreter if the default search does not find one.
 }

@@ -8,7 +8,9 @@ tabicl_skippable_linear(in_features, out_features, skip_value = -100)
 }
 \description{
 Rows whose entire input equals \code{-100} keep that value on the output
-instead of being projected. The reserved CLS-token columns are filled
-with the sentinel, and this is what stops them being treated as data.
+instead of being projected. In the reference that is what keeps the
+reserved CLS-token columns, filled with the sentinel, from being
+treated as data; this port never builds those columns (see
+\code{group_cells()}), but a cell can still carry the sentinel.
 }
 \keyword{internal}
