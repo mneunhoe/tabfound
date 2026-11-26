@@ -329,7 +329,7 @@ mi_draw_numeric <- function(reg, X_obs, y_obs, X_mis, draw = "auto",
        to draw from.",
       x = "It supports only {.val {types}}.",
       i = "Use a backend that samples ({.val tabpfn}) or predicts a quantile \\
-           grid ({.val tabicl}, {.val kumo}), or pass {.code draw = \"residual\"} to draw \\
+           grid ({.val tabicl}, {.val kumo}, {.val causilo}), or pass {.code draw = \"residual\"} to draw \\
            around the point prediction instead."
     ))
   }

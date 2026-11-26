@@ -341,6 +341,342 @@ causilo_model <- torch::nn_module(
 
 
 # ---------------------------------------------------------------------------
+# Predictors
+# ---------------------------------------------------------------------------
+
+# `causilo/v1_5/execution/quantiles.py::interpolate_quantiles`: read the
+# sorted native quantiles `[..., Q]` (at levels `k / (Q + 1)`) at
+# `levels`; linear between native levels, log-linear in `p` / `1 - p`
+# beyond them. In float32, as the reference does it.
+# @keywords internal
+.causilo_interp_quantiles <- function(q, levels) {
+  tol <- 1e-6
+  count <- q$size(-1L)
+  f32 <- torch::torch_float32()
+  grid <- torch::torch_linspace(0, 1, count + 2L, dtype = f32)$narrow(1L, 2L, count)
+  req <- torch::torch_tensor(levels, dtype = f32)
+  interior <- all(as.numeric(grid[1]) <= as.numeric(req) &
+                    as.numeric(req) <= as.numeric(grid[count]))
+  lower <- (torch::torch_searchsorted(grid$narrow(1L, 1L, count - 1L), req,
+                                      right = TRUE) - 1L)$clamp(0L, count - 2L)
+  upper <- lower + 1L
+  g_lo <- grid$index_select(1L, lower + 1L)
+  g_hi <- grid$index_select(1L, upper + 1L)
+  fraction <- (req - g_lo) / (g_hi - g_lo)$clamp(min = tol)
+  low <- q$index_select(-1L, lower + 1L)
+  high <- q$index_select(-1L, upper + 1L)
+  middle <- low + fraction$clamp(0, 1) * (high - low)
+  left <- q$narrow(-1L, 1L, 1L)
+  right <- q$narrow(-1L, count, 1L)
+  middle <- torch::torch_where(req >= grid[count], right, middle)
+  if (interior) return(middle)
+  log_left <- grid$narrow(1L, 1L, 2L)$clamp(min = tol)$log()
+  log_right <- (1 - grid$narrow(1L, count - 1L, 2L))$clamp(min = tol)$log()
+  left_scale <- (q$narrow(-1L, 2L, 1L) - left) / (log_left[2] - log_left[1])$clamp(min = tol)
+  right_scale <- (right - q$narrow(-1L, count - 1L, 1L)) /
+    (log_right[1] - log_right[2])$clamp(min = tol)
+  left_gap <- req$clamp(min = tol)$log() - log_left[1]
+  right_gap <- (1 - req)$clamp(min = tol)$log() - log_right[2]
+  left_tail <- left + left_scale * left_gap
+  right_tail <- right - right_scale * right_gap
+  torch::torch_where(req < grid[1], left_tail,
+                     torch::torch_where(req > grid[count], right_tail, middle))
+}
+
+# Members to fit. `light = TRUE` is "Causilo 1.5 (Light)", one member;
+# giving it with `n_estimators` is refused, as the reference refuses
+# `mode` with `n_estimators`. (The reference's argument is `mode =
+# "light"`; here `mode` would be taken for `model` by R's partial
+# matching in `tabular_classifier()`, and `tabfound()` already has a
+# `mode`, the task.)
+# @keywords internal
+.causilo_n_estimators <- function(n_estimators, light) {
+  if (!is.logical(light) || length(light) != 1L || is.na(light)) {
+    cli::cli_abort("{.arg light} must be {.code TRUE} or {.code FALSE}.")
+  }
+  if (light) {
+    if (!is.null(n_estimators)) {
+      cli::cli_abort("Give either {.code light = TRUE} or {.arg n_estimators}, not both.")
+    }
+    return(1L)
+  }
+  if (is.null(n_estimators)) return(8L)
+  if (!is.numeric(n_estimators) || length(n_estimators) != 1L ||
+      is.na(n_estimators) || n_estimators < 1 || n_estimators != round(n_estimators)) {
+    cli::cli_abort("{.arg n_estimators} must be a positive whole number.")
+  }
+  as.integer(n_estimators)
+}
+
+# @keywords internal
+.causilo_check_seed <- function(seed) {
+  if (is.null(seed)) return(NULL)
+  if (!is.numeric(seed) || length(seed) != 1L || is.na(seed) || seed < 0 ||
+      seed != round(seed)) {
+    cli::cli_abort("{.arg seed} must be a non-negative whole number or {.code NULL}.")
+  }
+  seed
+}
+
+# Every member's network output for the query rows `[M, q, out]` (CPU,
+# float32), the members run `batch` at a time in balanced groups and the
+# query rows `chunk` at a time; the context rows go with every chunk.
+# @keywords internal
+.causilo_member_outputs <- function(ctx, rec, qviews, batch, chunk, n_out) {
+  M <- rec$plan$count
+  q <- nrow(qviews[[1]])
+  groups <- ceiling(M / batch)
+  sizes <- M %/% groups + (seq_len(groups) <= M %% groups)
+  ends <- cumsum(sizes)
+  starts <- ends - sizes + 1L
+  chunk <- if (is.null(chunk)) max(q, 1L) else as.integer(chunk)
+  row_starts <- seq.int(1L, max(q, 1L), by = chunk)
+  per_chunk <- lapply(row_starts, function(r0) {
+    rows <- if (q) r0:min(q, r0 + chunk - 1L) else integer(0)
+    qv <- lapply(qviews, function(v) v[rows, , drop = FALSE])
+    outs <- lapply(seq_len(groups), function(g) {
+      inp <- causilo_member_inputs(rec, qv, starts[g]:ends[g])
+      out <- torch::with_no_grad(ctx$net(inp$x$to(device = ctx$device),
+                                         inp$y$to(device = ctx$device)))
+      out$narrow(-1L, 1L, n_out)$cpu()
+    })
+    torch::torch_cat(outs, dim = 1L)
+  })
+  if (length(per_chunk) == 1L) per_chunk[[1]] else torch::torch_cat(per_chunk, dim = 2L)
+}
+
+# Classification: undo each member's class shift and average the logits
+# (float32), as `classification_logits()`.
+# @keywords internal
+.causilo_mean_logits <- function(rec, out) {
+  K <- length(rec$target$classes)
+  aligned <- lapply(seq_len(rec$plan$count), function(m) {
+    idx <- (seq_len(K) - 1L - rec$plan$shifts[[m]]) %% K + 1L
+    out[m, , ]$index_select(-1L, torch::torch_tensor(idx, dtype = torch::torch_long()))
+  })
+  torch::torch_stack(aligned)$mean(dim = 1L)
+}
+
+# Regression, `regression_predictions()` / `trimmed_regression_predictions()`.
+# @param out `[M, q, 999]` raw head outputs.
+# @return Numeric vector (mean, median) or matrix (quantiles, grid), in
+#   target units.
+# @keywords internal
+.causilo_regression <- function(rec, out, type, levels = NULL) {
+  signs <- rec$plan$target_signs
+  trim <- rec$plan$trim
+  sc <- rec$target
+  M <- length(signs)
+  q <- out$size(2L)
+  sorted <- out$sort(dim = -1L)[[1]]
+  neg <- which(signs < 0)
+  member <- function(m) sorted[m, , ]
+  inverse <- function(x) x * sc$scale + sc$mean
+  if (trim == 0L) {
+    per <- lapply(seq_len(M), function(m) {
+      s <- member(m)
+      v <- switch(type,
+        mean = s$mean(dim = -1L)$unsqueeze(-1L),
+        median = .causilo_interp_quantiles(s, 0.5),
+        quantiles = {
+          lv <- c(levels, if (length(neg)) 1 - levels)
+          r <- .causilo_interp_quantiles(s, lv)
+          k <- length(levels)
+          if (signs[[m]] < 0) -r$narrow(-1L, k + 1L, k) else r$narrow(-1L, 1L, k)
+        },
+        grid = if (signs[[m]] < 0) -s$flip(-1L) else s)
+      if (type %in% c("mean", "median") && signs[[m]] < 0) v <- -v
+      as.matrix(v$to(dtype = torch::torch_float64()))
+    })
+    combined <- Reduce(`+`, per) / M
+    res <- inverse(combined)
+    return(if (type %in% c("mean", "median")) as.numeric(res) else res)
+  }
+  # Four or more members: per row and level, sort the members' values,
+  # drop `trim` from each end and average in float64.
+  if (type == "grid") {
+    fwd <- seq_len(sorted$size(-1L)); rev_ <- rev(fwd)
+    vals <- sorted
+  } else {
+    lv <- switch(type, mean = CAUSILO_MEAN_LEVELS, median = 0.5, quantiles = levels)
+    pos <- as.numeric(torch::torch_tensor(lv, dtype = torch::torch_float32()))
+    negl <- as.numeric(torch::torch_tensor(1 - lv, dtype = torch::torch_float32()))
+    if (identical(pos, rev(negl))) {
+      member_levels <- pos; fwd <- seq_along(pos); rev_ <- rev(fwd)
+    } else {
+      member_levels <- sort(unique(c(pos, negl)))
+      fwd <- match(pos, member_levels); rev_ <- match(negl, member_levels)
+    }
+    vals <- .causilo_interp_quantiles(sorted, member_levels)
+  }
+  aligned <- lapply(seq_len(M), function(m) {
+    idx <- torch::torch_tensor(if (signs[[m]] < 0) rev_ else fwd, dtype = torch::torch_long())
+    v <- vals[m, , ]$index_select(-1L, idx)
+    if (signs[[m]] < 0) -v else v
+  })
+  a <- torch::torch_stack(aligned)$sort(dim = 1L)[[1]]$narrow(1L, trim + 1L, M - 2L * trim)
+  combined <- as.array(a$to(dtype = torch::torch_float64()))
+  d <- dim(combined)
+  combined <- matrix(colMeans(matrix(combined, nrow = d[[1]])), nrow = q)
+  quant <- inverse(combined)
+  switch(type,
+    median = quant[, 1L],
+    mean = {
+      lower <- pmin(quant[, 1L], sc$limits[[1]])
+      upper <- pmax(quant[, ncol(quant)], sc$limits[[2]])
+      as.numeric(quant %*% CAUSILO_MEAN_WEIGHTS) +
+        lower * (CAUSILO_MEAN_MASS[[1]] * 0.5) +
+        upper * (CAUSILO_MEAN_MASS[[length(CAUSILO_MEAN_MASS)]] * 0.5)
+    },
+    quant)
+}
+
+# The trapezoid rule the trimmed mean integrates over
+# (`execution/outputs.py`).
+CAUSILO_MEAN_LEVELS <- c(0.0001, seq_len(999) / 1000, 0.9999)
+CAUSILO_MEAN_MASS <- local({
+  m <- diff(c(0, CAUSILO_MEAN_LEVELS, 1)); m / sum(m)
+})
+CAUSILO_MEAN_WEIGHTS <- (CAUSILO_MEAN_MASS[-length(CAUSILO_MEAN_MASS)] +
+                           CAUSILO_MEAN_MASS[-1]) * 0.5
+
+#' Build the Causilo 1.5 classifier predictor
+#'
+#' Reproduces `CausiloClassifier` (`causilo` 1.5.0) on the CPU path: the
+#' recipe of [causilo_recipe_fit()] fits up to `n_estimators` members
+#' (fewer when the table has too few distinct columns to tell them apart);
+#' each sees its own feature view, column signs and cyclic class shift;
+#' the shifts are undone, the logits averaged and passed through a softmax.
+#' Light ("Causilo 1.5 (Light)" on the leaderboards) is the same weights
+#' with one member: `n_estimators = 1` or `light = TRUE`.
+#'
+#' Classes are coded in label order (numeric, else code point), as the
+#' reference's `LabelEncoder` codes them; classes absent from the training
+#' rows cannot be predicted and come back with probability zero.
+#' Categorical columns are those declared; their observed values, sorted,
+#' become the category codes. [tabfound()] declares a frame's factor
+#' columns and sorts their levels by code point first, so the codes are
+#' the ones the reference gives the same labels.
+#'
+#' The model is large (275M parameters, a 24-layer prediction stack over
+#' every row): eight members cost about eight times one, so on a CPU and
+#' a larger table `n_estimators = 1` is the practical setting.
+#'
+#' @param ctx Loaded-model context from [load_backend_model()].
+#' @param n_estimators Ensemble members; `NULL` is 8 (the reference's
+#'   default).
+#' @param light `TRUE` for Light, one member (the reference's `mode =
+#'   "light"`). Give this or `n_estimators`, not both.
+#' @param seed Seed of the ensemble plan (CPython's `random.Random`, so the
+#'   reference's plan for the same seed); `NULL` for an unseeded plan.
+#' @param predict_chunk_size Query rows per forward pass. Query rows read
+#'   only context-derived state, so chunking changes nothing but float32
+#'   rounding; the context is re-encoded with every chunk.
+#' @param member_batch_size Members per forward pass (the reference runs
+#'   at most 8 together).
+#' @param categorical_features 1-based indices of categorical columns.
+#' @keywords internal
+causilo_classifier <- function(ctx, n_estimators = NULL, light = FALSE, seed = 42L,
+                               predict_chunk_size = 1024L, member_batch_size = 8L,
+                               categorical_features = NULL) {
+  n_est <- .causilo_n_estimators(n_estimators, light)
+  seed <- .causilo_check_seed(seed)
+  batch <- max(1L, as.integer(member_batch_size))
+
+  fit_fn <- function(X, y) {
+    X <- .causilo_check_matrix(X)
+    if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
+    if (anyNA(y)) cli::cli_abort("{.arg y} has missing values.")
+    levels_ <- if (is.factor(y)) levels(y) else .causilo_class_order(unique(as.character(y)))
+    categorical <- .kumo_categorical(categorical_features, ncol(X))
+    rec <- causilo_recipe_fit(X, if (is.factor(y)) as.character(y) else y, TRUE,
+                              categorical, n_est, seed)
+    list(recipe = rec, class_levels = levels_, n_train = nrow(X),
+         categorical = categorical)
+  }
+
+  .logits <- function(state, X) {
+    rec <- state$recipe
+    K <- length(rec$target$classes)
+    qv <- causilo_recipe_apply(rec, X)
+    out <- .causilo_member_outputs(ctx, rec, qv, batch, predict_chunk_size, K)
+    logits <- as.matrix(.causilo_mean_logits(rec, out))
+    full <- matrix(-Inf, nrow(X), length(state$class_levels))
+    full[, match(rec$target$classes, as.character(state$class_levels))] <- logits
+    colnames(full) <- as.character(state$class_levels)
+    full
+  }
+
+  predict_fn <- function(state, newdata, type = "class", ...) {
+    X <- .causilo_check_matrix(newdata, state$recipe$encoder$width)
+    lg <- .logits(state, X)
+    if (type == "logits") return(lg)
+    # Softmax in float32, as the reference.
+    probs <- as.matrix(torch::nnf_softmax(torch::torch_tensor(lg, dtype = torch::torch_float32()),
+                                          dim = -1L))
+    colnames(probs) <- colnames(lg)
+    if (type == "prob") return(probs)
+    state$class_levels[max.col(probs, ties.method = "first")]
+  }
+
+  list(fit = fit_fn, predict = predict_fn)
+}
+
+#' Build the Causilo 1.5 regressor predictor
+#'
+#' Reproduces `CausiloRegressor` on the CPU path. Each member predicts 999
+#' quantiles of the scaled target (levels `k / 1000`); members whose target
+#' sign is negative are read at `1 - p` and negated. With fewer than four
+#' members the members are averaged and the mean is each member's mean of
+#' its 999 quantiles; with four or more, every requested level is a
+#' trimmed mean across members (`count %/% 4` dropped at each end) and the
+#' mean integrates the combined quantile function, its end pieces reaching
+#' the training range. Light and default therefore define the mean
+#' differently, as the reference does.
+#'
+#' `type = "grid"` returns the combined 999 quantiles, which is what
+#' [tabfound_impute()] draws from.
+#'
+#' @inheritParams causilo_classifier
+#' @keywords internal
+causilo_regressor <- function(ctx, n_estimators = NULL, light = FALSE, seed = 42L,
+                              predict_chunk_size = 1024L, member_batch_size = 8L,
+                              categorical_features = NULL) {
+  n_est <- .causilo_n_estimators(n_estimators, light)
+  seed <- .causilo_check_seed(seed)
+  batch <- max(1L, as.integer(member_batch_size))
+  levels_ <- seq_len(CAUSILO_NUM_QUANTILES) / (CAUSILO_NUM_QUANTILES + 1)
+
+  fit_fn <- function(X, y) {
+    X <- .causilo_check_matrix(X)
+    if (length(y) != nrow(X)) cli::cli_abort("length(y) must equal nrow(X).")
+    y <- as.numeric(y)
+    if (anyNA(y) || any(!is.finite(y))) cli::cli_abort("{.arg y} must be finite.")
+    categorical <- .kumo_categorical(categorical_features, ncol(X))
+    rec <- causilo_recipe_fit(X, y, FALSE, categorical, n_est, seed)
+    list(recipe = rec, n_train = nrow(X), categorical = categorical)
+  }
+
+  predict_fn <- function(state, newdata, type = "mean",
+                         quantiles = c(0.1, 0.5, 0.9), ...) {
+    if (identical(type, "raw_quantiles")) type <- "grid"
+    rec <- state$recipe
+    X <- .causilo_check_matrix(newdata, rec$encoder$width)
+    qv <- causilo_recipe_apply(rec, X)
+    out <- .causilo_member_outputs(ctx, rec, qv, batch, predict_chunk_size,
+                                   CAUSILO_NUM_QUANTILES)
+    res <- .causilo_regression(rec, out, type, if (type == "quantiles") quantiles)
+    if (type == "quantiles") colnames(res) <- .quantile_colnames(quantiles)
+    res
+  }
+
+  list(fit = fit_fn, predict = predict_fn,
+       types = c("mean", "median", "quantiles", "grid"),
+       quantile_levels = levels_)
+}
+
+
+# ---------------------------------------------------------------------------
 # Architecture description
 # ---------------------------------------------------------------------------
 
@@ -580,8 +916,8 @@ register_causilo_backend <- function() {
     build         = causilo_build,
     detect        = causilo_detect,
     task_of       = causilo_task_of,
-    classifier    = NULL,
-    regressor     = NULL,
+    classifier    = causilo_classifier,
+    regressor     = causilo_regressor,
     describe      = causilo_describe,
     peak_terms    = causilo_peak_terms,
     # The network embeds missing cells itself: a learned vector, with the

@@ -218,3 +218,44 @@ test_that("the backend is registered with the capabilities it has", {
   expect_identical(bk$parity, "causilo 1.5.0 (PyPI)")
   expect_identical(detect_backend(mem_config_causilo("regression"))$name, "causilo")
 })
+
+test_that("the predictors run on a tiny net and chunking moves only rounding", {
+  ctx <- list(net = tiny_causilo("classification"), device = "cpu")
+  X <- as.matrix(iris[, 1:4]); X[3, 2] <- NA
+  y <- factor(as.character(iris$Species), levels = c("virginica", "setosa", "versicolor", "absent"))
+  spec <- causilo_classifier(ctx, n_estimators = 5L, predict_chunk_size = 7L)
+  st <- spec$fit(X[1:120, ], y[1:120])
+  p <- spec$predict(st, X[121:150, ], type = "prob")
+  expect_identical(colnames(p), levels(y))
+  expect_equal(unname(rowSums(p)), rep(1, 30), tolerance = 1e-6)
+  expect_true(all(p[, "absent"] == 0))
+  one <- causilo_classifier(ctx, n_estimators = 5L, member_batch_size = 2L)
+  p1 <- one$predict(one$fit(X[1:120, ], y[1:120]), X[121:150, ], type = "prob")
+  expect_lt(max(abs(p - p1)), 1e-5)
+  expect_error(causilo_classifier(ctx, light = TRUE, n_estimators = 2L), "not both")
+  expect_error(spec$predict(st, X[1:2, 1:3]), "4 feature columns")
+
+  rctx <- list(net = tiny_causilo("regression"), device = "cpu")
+  for (n in c(1L, 2L, 4L)) {
+    reg <- causilo_regressor(rctx, n_estimators = n)
+    rs <- reg$fit(X[1:100, -1], iris$Sepal.Length[1:100])
+    mu <- reg$predict(rs, X[101:110, -1])
+    q <- reg$predict(rs, X[101:110, -1], type = "quantiles", quantiles = c(0.1, 0.5, 0.9))
+    g <- reg$predict(rs, X[101:110, -1], type = "grid")
+    expect_length(mu, 10L)
+    expect_identical(dim(q), c(10L, 3L))
+    expect_identical(dim(g), c(10L, 999L))
+    expect_true(all(diff(t(q)) >= -1e-9))
+    expect_equal(unname(q[, 2]), reg$predict(rs, X[101:110, -1], type = "median"),
+                 tolerance = 1e-6)
+  }
+})
+
+test_that("quantile interpolation is linear inside and log-linear outside", {
+  q <- torch::torch_tensor(matrix(seq_len(999) / 1000, 1L))   # q(p) = p
+  got <- as.numeric(.causilo_interp_quantiles(q, c(0.0015, 0.5, 0.9985)))
+  expect_equal(got, c(0.0015, 0.5, 0.9985), tolerance = 1e-6)
+  tails <- as.numeric(.causilo_interp_quantiles(q, c(0.0001, 0.9999)))
+  expect_lt(tails[1], 0.001)
+  expect_gt(tails[2], 0.999)
+})
