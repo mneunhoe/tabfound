@@ -38,7 +38,7 @@ the thing that makes a tabular foundation model a tabular foundation
 model, and which a language model has no equivalent of: **an attention
 layer has an axis**. It can run down a column, across a row's features,
 or over the rows of the table. Each attention block carries that axis as
-a tag, and it is the single most useful thing to compare across the eight.
+a tag, and it is the single most useful thing to compare across the nine.
 
 ```{r}
 #| label: backends
@@ -61,8 +61,8 @@ extension picks the format — `.svg`, `.png` or `.pdf`.
 ### How these particular figures were made
 
 The vignette ships the SVGs rather than building them, because
-instantiating all eight networks at their published widths allocates
-about 2 billion parameters and takes a couple of minutes — too much
+instantiating all nine networks at their published widths allocates
+about 2.3 billion parameters and takes a couple of minutes — too much
 to pay on every `R CMD build`. The script that made them is
 [`inst/gallery/make-gallery.R`](https://github.com/mneunhoe/tabfound/blob/main/inst/gallery/make-gallery.R):
 
@@ -79,7 +79,9 @@ initialised network reports exactly what the trained one does. It is
 also why the script needs no gigabytes on disk — for TabFM and Mitra it
 fetches a few hundred bytes of JSON and nothing else, and for Kumo
 Tabular, whose publisher ships bare state dicts, it reads the config the
-package's converter derived and keeps in its architecture table.
+package's converter derived and keeps in its architecture table. Causilo
+1.5 publishes its `config.json` beside the weights, and the architecture
+table carries it as well.
 
 
 ## The three TabPFN generations
@@ -153,7 +155,7 @@ the TabFM classifier"}
 
 ### Mitra
 
-The flattest of the eight. No column stage, no row stage, no in-context
+The flattest of the nine. No column stage, no row stage, no in-context
 stage — one stack of twelve identical layers, each attending across
 rows and then across features, with an MLP after each. The target is
 feature column 1, and the input transform is a fixed quantile-rank
@@ -188,6 +190,26 @@ only two of the eight key/value heads. Large drops the projection again
 
 ![Kumo Tabular medium classifier](figures/kumo-medium.svg){fig-alt="Stacked
 block diagram of the Kumo Tabular medium classifier"}
+
+### Causilo 1.5
+
+Nums AI's model, one architecture with a classifier and a regressor
+checkpoint (275M parameters each). Like Kumo it treats every cell as its
+own token and alternates a column layer with a row layer, eight times, but
+the pieces differ. A cell is embedded from its value and from its mid-rank
+among the column's context values (Fourier waves of both), with a learned
+vector for a missing cell. A column layer does not attend over rows
+directly: 256 learned latents read the column's context rows, and every
+row then reads those latents back. A row layer carries four latent tokens
+per row, which gather the row's cells and are broadcast back to them; the
+last row layer updates only the latents, and those four, flattened, are
+the row's representation. A 24-layer prediction stack at width 1024 then
+lets every row attend to the context rows. Queries and keys are scaled to
+unit root-mean-square, and a learned gain from the number of keys and the
+query itself replaces a fixed softmax temperature.
+
+![Causilo 1.5 classifier](figures/causilo.svg){fig-alt="Stacked block
+diagram of the Causilo 1.5 classifier"}
 
 
 ## Opening a block up

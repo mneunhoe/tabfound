@@ -111,7 +111,10 @@ causilo_query_scale <- torch::nn_module(
 causilo_feedforward <- torch::nn_module(
   "CausiloFeedForward",
 
-  initialize = function(width, expansion = CAUSILO_EXPANSION) {
+  # Defaults here are literals: torch evaluates `initialize()`'s defaults
+  # outside the package namespace, so a package constant is not found
+  # there in an installed package (load_all() hides that).
+  initialize = function(width, expansion = 2L) {
     self$value <- torch::nn_linear(width, width * expansion)
     self$gate <- torch::nn_linear(width, width * expansion)
     self$output <- torch::nn_linear(width * expansion, width)
@@ -261,8 +264,7 @@ causilo_attention_layer <- torch::nn_module(
 causilo_column_layer <- torch::nn_module(
   "CausiloColumnLayer",
 
-  initialize = function(width, heads = CAUSILO_COLUMN_HEADS,
-                        latents = CAUSILO_COLUMN_LATENTS) {
+  initialize = function(width, heads = 4L, latents = 256L) {
     self$gather <- causilo_attention_layer(width, heads, scale_query = TRUE)
     self$broadcast <- causilo_attention_layer(width, heads, scale_query = FALSE)
     self$latents <- torch::nn_parameter(torch::torch_zeros(latents, width))
@@ -288,6 +290,7 @@ causilo_column_layer <- torch::nn_module(
   # @param return_kv Also return the broadcast K/V (the cache entry).
   forward = function(rows, context_rows, return_kv = FALSE) {
     latents <- self$gather_context(rows$narrow(-2L, 1L, context_rows))
+    .causilo_collect(rows)
     self$broadcast(rows, latents, return_kv = return_kv)
   }
 )
@@ -307,7 +310,7 @@ causilo_column_layer <- torch::nn_module(
 causilo_row_layer <- torch::nn_module(
   "CausiloRowLayer",
 
-  initialize = function(width, heads = CAUSILO_ROW_HEADS, final = FALSE) {
+  initialize = function(width, heads = 8L, final = FALSE) {
     self$final <- isTRUE(final)
     self$gather <- causilo_attention(width, heads, scale_query = TRUE)
     self$broadcast <- causilo_attention(width, heads, scale_query = TRUE)

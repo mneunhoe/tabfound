@@ -4,7 +4,7 @@
 #
 # Produces one diagram per backend for `vignettes/architecture-gallery.qmd`.
 # The vignette ships the results rather than building them, because
-# instantiating all eight networks at their published widths costs a few
+# instantiating all nine networks at their published widths costs a few
 # hundred million parameters and a couple of minutes -- too much to pay
 # on every `R CMD build`. Run this when a description changes.
 #
@@ -104,7 +104,12 @@ GALLERY <- list(
   # Large only in the matrix: the vignette describes it in words.
   list(key = "kumo-large",  backend = "kumo", task = "classification",
        id = "kumo-tabular-large-classifier",  env = "TABFOUND_GALLERY_KUMO_LARGE",
-       matrix_only = TRUE)
+       matrix_only = TRUE),
+  # Causilo 1.5 publishes its config beside the weights, and the
+  # architecture table carries it too.
+  list(key = "causilo", backend = "causilo", task = "classification",
+       id = "causilo-1.5-classifier", env = "TABFOUND_GALLERY_CAUSILO",
+       repo = "nums-ai/causilo-1.5", path = "classifier/config.json")
 )
 
 MATRIX_STYLES  <- c("cards", "tufte", "glyphs", "icicle", "schematic")

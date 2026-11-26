@@ -1327,6 +1327,20 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
     # Kumo's row chunking is off by default. On, the context is encoded
     # by itself a chunk of rows at a time and the query rows stream
     # against its cache.
+    # Causilo runs its members eight to a pass by default, so one member
+    # (Light) or a smaller group divides the peak before anything else.
+    if (identical(backend, "causilo")) {
+      n_est <- as.numeric(opts$n_estimators %||% 8)
+      if (!isTRUE(opts$light) && n_est > 1) {
+        s <- c(s, "Use {.code light = TRUE} (one member, \"Causilo 1.5 \\
+                    (Light)\") or a smaller {.arg member_batch_size}: a pass \\
+                    holds up to eight members at once.")
+      }
+      if (is.null(opts$row_chunk_size)) {
+        s <- c(s, "Set {.arg row_chunk_size} (try {.val 1024}): the row and \
+                    prediction layers then work on one chunk of rows at a time.")
+      }
+    }
     if (identical(backend, "kumo") && is.null(opts$row_chunk_size)) {
       s <- c(s, "Set {.arg row_chunk_size} (try {.val 1024}): the context \
                   is then encoded on its own and each block works on one \
@@ -1602,7 +1616,7 @@ suggest_chunk_sizes <- function(model, n_context, n_query = 1000, n_features,
   # `NA` is "the checkpoint's own", which is where the search starts.
   top <- est(NA_integer_)
   if (!isTRUE(top$backend %in% c("tabpfn3", "tabpfn35", "tabicl", "tabfm",
-                                       "kumo"))) {
+                                       "kumo", "causilo"))) {
     return(list(row_chunk_size = NA_integer_, col_chunk_size = NA_integer_,
                 peak_bytes = top$total_peak_bytes, verdict = top$verdict,
                 feasible = top$verdict %in% accept,

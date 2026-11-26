@@ -315,11 +315,16 @@ causilo_model <- torch::nn_module(
       dump_if_enabled(sprintf("causilo_col%d", i - 1L), rows)
       features <- rows$transpose(2L, 3L)
       rm(rows)
+      # R frees a layer's intermediates only when it collects; without this
+      # they pile up across layers (see [.causilo_collect()]).
+      .causilo_collect(features)
       rl <- self$row$layers[[i]]
       r <- .causilo_split_apply2(latents, features, 2L, self$chunks$row,
                                  function(l, f) rl(l, f))
       latents <- r$latents$contiguous()
       features <- r$features
+      rm(r)
+      .causilo_collect(features)
       dump_if_enabled(sprintf("causilo_row%d", i - 1L),
                       if (rl$final) latents
                       else torch::torch_cat(list(latents, features), dim = -2L))
@@ -360,6 +365,7 @@ causilo_model <- torch::nn_module(
         if (isTRUE(record)) kv[[j]] <- k
         x <- self$.advance(layer, x, k)
       }
+      .causilo_collect(x)
       dump_if_enabled(sprintf("causilo_pred%d", j - 1L), x)
     }
     if (isTRUE(record)) kv[[L]] <- layers[[L]]$prepare(x$narrow(2L, 1L, n))
@@ -397,10 +403,34 @@ causilo_model <- torch::nn_module(
     }
     x <- self$encode_rows(table, NULL, ecdf = cache$ecdf, column_kv = cache$column)
     layers <- self$prediction$layers
-    for (j in seq_along(layers)) x <- self$.advance(layers[[j]], x, cache$prediction[[j]])
+    for (j in seq_along(layers)) {
+      x <- self$.advance(layers[[j]], x, cache$prediction[[j]])
+      .causilo_collect(x)
+    }
     self$prediction$head(x)
   }
 )
+
+# [collect_between_layers()] with Causilo's ratio. That helper sizes the
+# collection by the tensor a loop carries, and here the carried tensor is
+# small beside what one layer allocates and drops: a column layer's
+# SwiGLU and projections hold about sixteen times the cell grid it passes
+# on (one layer on 6,900 x 8 cells: a 56 MB grid, 1.5 GB transient), and
+# a level-0 collection frees none of it once it has been promoted. Measured
+# at 6,400 + 500 rows x 8 columns, one member: 9.9 GB peak without full
+# collections, 6.6 GB with. Honours `tabfound.collect_between_layers`.
+# @keywords internal
+.causilo_collect <- function(x, ratio = 16) {
+  mode <- getOption("tabfound.collect_between_layers", "auto")
+  if (isFALSE(mode)) return(invisible(FALSE))
+  bytes <- prod(as.numeric(x$size())) * as.numeric(x$element_size())
+  if (!isTRUE(mode) && bytes * ratio < getOption("tabfound.collect_min_bytes",
+                                                 COLLECT_MIN_BYTES) * 16) {
+    return(invisible(FALSE))
+  }
+  gc(full = TRUE)
+  invisible(TRUE)
+}
 
 # Apply `f(part, idx)` to slices of `x` along `axis` (`size` at a time, or
 # all at once when `size` is NULL or not smaller than the axis), where `f`
@@ -1080,14 +1110,20 @@ causilo_describe <- function(config, task) {
 #' them unchanged:
 #'
 #' * column embedding: every cell at width `W`, plus each column's 256
-#'   latents (`C x 256 x W`);
+#'   latents (`C x 256 x W`); `col_chunk_size` bounds the columns a pass
+#'   holds;
 #' * row interaction: a row's `4 + C` tokens at width `W`;
 #' * in-context learning: every row at the prediction width `4W`.
 #'
-#' One forward pass holds `opts$member_batch_size` members (default one).
-#' A KV cache holds, per member, every prediction layer's keys and values
-#' of the context rows and every column layer's broadcast keys and values
-#' of the 256 latents.
+#' `row_chunk_size` bounds the rows of the last two; chunked, the cell grid,
+#' the row tokens and the pooled rows of the whole pass stay resident
+#' (`res`). One pass holds `member_batch_size` members (default 8, capped
+#' at the members run) and the context plus one chunk of query rows; with
+#' a cache, the larger of the two. A cache holds, per member, every
+#' prediction layer's keys and values of the context rows, every column
+#' layer's broadcast keys and values of the 256 latents and the sorted
+#' context values: one group's for `kv_cache = TRUE`, every member's when
+#' kept by [tabfound_cache()].
 #'
 #' @inheritParams tabicl_peak_terms
 #' @keywords internal
@@ -1095,23 +1131,41 @@ causilo_peak_terms <- function(n_context, n_query, n_features, opts, config) {
   m <- .causilo_model_config(config)
   W <- as.numeric(m$width)
   P <- CAUSILO_ROW_LATENTS * W
+  K <- CAUSILO_ROW_LATENTS
   C <- as.numeric(n_features)
+  n_ctx <- as.numeric(n_context)
   n_est <- max(1, as.numeric(opts$n_estimators %||% 8))
-  G <- max(1, min(n_est, as.numeric(opts$member_batch_size %||% 1)))
-  n <- as.numeric(n_context) + as.numeric(n_query)
+  if (isTRUE(opts$light)) n_est <- 1
+  G <- max(1, min(n_est, as.numeric(opts$member_batch_size %||% 8)))
+  # One pass holds the context and one chunk of query rows; a cached pass
+  # holds whichever is larger, the context (while the cache is built) or
+  # one chunk.
+  q <- as.numeric(n_query)
+  cached <- isTRUE(opts$kv_cache) || isTRUE(opts$kv_cache_kept)
+  n <- if (cached) max(n_ctx, q) else n_ctx + q
+  rc <- as.numeric(opts$row_chunk_size %||% Inf)
+  cc <- as.numeric(opts$col_chunk_size %||% Inf)
+  r_on <- is.finite(rc) && rc < n
+  c_on <- is.finite(cc) && cc < C
+  rows <- if (r_on) rc else n
+  cols <- if (c_on) cc else C
+  # What outlives a chunked stage: the cell grid `[n, C, W]` (both
+  # chunkings), the row tokens `[n, K, W]` and the pooled rows `[n, P]`.
+  res_col <- if (c_on || r_on) G * n * (C + K) * W else 0
   stages <- list(
     list(name = "column summaries", act = 0, res = 0, att = 0, prepass = 0),
     list(name = "column embedding",
-         act = G * (n * C * W + C * CAUSILO_COLUMN_LATENTS * W), res = 0, att = 0),
+         act = G * (n * cols * W + cols * CAUSILO_COLUMN_LATENTS * W),
+         res = res_col, att = 0),
     list(name = "row interaction",
-         act = G * n * (CAUSILO_ROW_LATENTS + C) * W, res = 0, att = 0),
-    list(name = "in-context learning", act = G * n * P, res = 0,
-         copies = "icl", att = 0)
+         act = G * rows * (K + C) * W, res = res_col, att = 0),
+    list(name = "in-context learning", act = G * rows * P,
+         res = if (r_on) G * n * P else 0, copies = "icl", att = 0)
   )
-  cache <- 2 * (m$prediction_depth * as.numeric(n_context) * P +
-                  m$column_depth * C * CAUSILO_COLUMN_LATENTS * W)
+  cache <- 2 * (m$prediction_depth * n_ctx * P +
+                  m$column_depth * C * CAUSILO_COLUMN_LATENTS * W) + n_ctx * C
   persistent <- if (isTRUE(opts$kv_cache_kept)) n_est * cache
-                else if (isTRUE(opts$kv_cache)) cache else 0
+                else if (isTRUE(opts$kv_cache)) G * cache else 0
   list(stages = stages, persistent = persistent, n_estimators = n_est,
        n_passes = ceiling(n_est / G))
 }

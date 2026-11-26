@@ -874,3 +874,43 @@ test_that("the shipped architecture table covers what it can", {
                     logical(1))
   expect_setequal(ids[!covered], c("tabfm-1.0.0-regressor", "mitra-regressor"))
 })
+
+
+# ---------------------------------------------------------------------------
+# Causilo 1.5
+# ---------------------------------------------------------------------------
+
+causilo_terms <- function(n_context = 5000, n_query = 500, n_features = 40, ...) {
+  opts <- utils::modifyList(list(n_estimators = NULL, light = FALSE,
+                                 member_batch_size = 8L), list(...))
+  for (nm in names(list(...))) if (is.null(list(...)[[nm]])) opts[nm] <- list(NULL)
+  st <- causilo_peak_terms(n_context, n_query, n_features, opts, mem_config_causilo())
+  st$by <- stats::setNames(st$stages, vapply(st$stages, `[[`, "", "name"))
+  st
+}
+
+test_that("Causilo's terms scale with members per pass and with the chunks", {
+  eight <- causilo_terms()
+  light <- causilo_terms(light = TRUE)
+  expect_identical(eight$n_estimators, 8)
+  expect_identical(light$n_estimators, 1)
+  expect_equal(eight$by[["row interaction"]]$act, 8 * light$by[["row interaction"]]$act)
+  two <- causilo_terms(member_batch_size = 2L)
+  expect_identical(two$n_passes, 4)
+  # Row chunks bound the row and prediction stages, and keep the whole
+  # cell grid and pooled rows resident.
+  rc <- causilo_terms(row_chunk_size = 1000L)
+  expect_lt(rc$by[["row interaction"]]$act, eight$by[["row interaction"]]$act)
+  expect_lt(rc$by[["in-context learning"]]$act, eight$by[["in-context learning"]]$act)
+  expect_gt(rc$by[["in-context learning"]]$res, 0)
+  cc <- causilo_terms(col_chunk_size = 4L)
+  expect_lt(cc$by[["column embedding"]]$act, eight$by[["column embedding"]]$act)
+  # A chunk longer than its axis changes nothing.
+  expect_identical(causilo_terms(row_chunk_size = 1e6L, col_chunk_size = 1e3L)$stages,
+                   eight$stages)
+  # A per-call cache holds one group's; a kept one every member's.
+  kv <- causilo_terms(kv_cache = TRUE, member_batch_size = 2L)
+  kept <- causilo_terms(kv_cache_kept = TRUE)
+  expect_equal(kept$persistent, 4 * kv$persistent)
+  expect_gt(kv$persistent, 2 * 2 * 24 * 5000 * 1024)
+})
