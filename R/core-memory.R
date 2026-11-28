@@ -923,6 +923,26 @@
   if (!length(out)) NA_integer_ else out
 }
 
+# A stored calibration point's chunk sizes, as the `extra` argument of
+# `.resolve_memory_opts()`. The grids store an unset size as NA, and NA
+# there means the run was unchunked: so was every backend's default when
+# those grids ran. Kumo's row chunking has been on by default (2048 rows)
+# since, so for Kumo an NA goes on as an explicit `NULL` -- the
+# predictors' "off" -- or the terms would be the chunked run's.
+# @keywords internal
+.measured_chunk_opts <- function(backend, row_chunk_size, col_chunk_size) {
+  extra <- list(n_estimators = 1L)
+  rc <- .chunk_field(row_chunk_size)
+  cc <- .chunk_field(col_chunk_size)
+  if (!all(is.na(rc))) {
+    extra$row_chunk_size <- rc
+  } else if (identical(backend, "kumo")) {
+    extra["row_chunk_size"] <- list(NULL)
+  }
+  if (!all(is.na(cc))) extra$col_chunk_size <- cc
+  extra
+}
+
 
 # float32 throughout; the coef files carry a dtype key for when that
 # stops being true.
@@ -1324,9 +1344,6 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                     decides how the peak grows.")
       }
     }
-    # Kumo's row chunking is off by default. On, the context is encoded
-    # by itself a chunk of rows at a time and the query rows stream
-    # against its cache.
     # Causilo runs its members eight to a pass by default, so one member
     # (Light) or a smaller group divides the peak before anything else.
     if (identical(backend, "causilo")) {
@@ -1341,10 +1358,19 @@ estimate_peak_memory <- function(model, n_context, n_query = 0L, n_features,
                     prediction layers then work on one chunk of rows at a time.")
       }
     }
-    if (identical(backend, "kumo") && is.null(opts$row_chunk_size)) {
-      s <- c(s, "Set {.arg row_chunk_size} (try {.val 1024}): the context \
-                  is then encoded on its own and each block works on one \
-                  chunk of rows at a time.")
+    # Kumo's row chunking is on by default (2048 rows): the context is
+    # encoded by itself a chunk of rows at a time and the query rows
+    # stream against its cache. `NULL` turns it off.
+    if (identical(backend, "kumo")) {
+      rc <- suppressWarnings(as.numeric(opts$row_chunk_size %||% NA))
+      if (is.null(opts$row_chunk_size)) {
+        s <- c(s, "Leave {.arg row_chunk_size} at its default instead of \
+                    {.code NULL}: the context is then encoded on its own \
+                    and each block works on one chunk of rows at a time.")
+      } else if (isTRUE(rc > 256)) {
+        s <- c(s, "Lower {.arg row_chunk_size} (now {rc}): each block \
+                    works on one chunk of rows at a time.")
+      }
     }
     if (backend %in% c("tabpfn26", "tabpfn3", "tabpfn35", "kumo") &&
         is.null(opts$save_peak_memory_factor)) {

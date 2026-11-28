@@ -514,6 +514,13 @@ calibrate_backend <- function(backend, grid = "small", opts = list(),
   # a dumped config directory rather than a count -- so only what the
   # predictor actually declares is passed on.
   opts <- utils::modifyList(list(n_estimators = 1L), opts)
+  # An unchunked grid records no chunk size, and a stored NA is read as
+  # unchunked (`.measured_chunk_opts()`). Kumo chunks rows by default, so
+  # its unchunked grid has to ask for "off" -- which the worker passes on
+  # as `NULL` -- or it would measure the chunked run and file it as not.
+  if (identical(backend, "kumo") && is.null(opts$row_chunk_size)) {
+    opts$row_chunk_size <- "off"
+  }
   accepted <- names(formals(get_backend(backend)$classifier))
   cat("  options: ",
       paste(names(opts), unlist(opts), sep = "=", collapse = " "), "\n",
@@ -539,8 +546,8 @@ calibrate_backend <- function(backend, grid = "small", opts = list(),
     # Recorded with the point, because a refit has to re-derive the terms
     # in the configuration the peak was measured under and cannot know it
     # otherwise.
-    got$row_chunk_size <- opts$row_chunk_size %||% NA_integer_
-    got$col_chunk_size <- opts$col_chunk_size %||% NA_integer_
+    got$row_chunk_size <- chunk_field(opts$row_chunk_size)
+    got$col_chunk_size <- chunk_field(opts$col_chunk_size)
     got$weights_bytes <- weights
     got$persistent_bytes <- point$n_context * point$n_features * 8 * 2 +
       4 * (tm$persistent %||% 0)
@@ -992,12 +999,11 @@ chunk_field <- function(v) tabfound:::.chunk_field(v)
 # backend's own defaults, which is what every grid predating the chunked
 # one was run with.
 point_opts <- function(backend, r) {
-  extra <- list(n_estimators = 1L)
-  rc <- chunk_field(r$row_chunk_size)
-  cc <- chunk_field(r$col_chunk_size)
-  if (!all(is.na(rc))) extra$row_chunk_size <- rc
-  if (!all(is.na(cc))) extra$col_chunk_size <- cc
-  .resolve_opts(backend, extra)
+  tabfound:::.resolve_memory_opts(
+    get_backend(backend), "classification", list(),
+    tabfound:::.measured_chunk_opts(backend, r$row_chunk_size,
+                                    r$col_chunk_size)
+  )
 }
 
 read_measurements <- function(backend) {

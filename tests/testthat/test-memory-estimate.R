@@ -673,8 +673,13 @@ test_that("Kumo's advice names a smaller size, then its own knobs", {
   ctx_at <- grep("Reduce .*n_context", big$suggestions)
   expect_length(size_at, 1L)
   expect_true(size_at < ctx_at)
-  expect_true(any(grepl("Set .*row_chunk_size", big$suggestions)))
+  # Row chunking is on by default (2048 rows), so the advice is a smaller
+  # chunk; with it turned off, the advice is to turn it back on.
+  expect_true(any(grepl("Lower .*row_chunk_size", big$suggestions)))
   expect_true(any(grepl("save_peak_memory_factor", big$suggestions)))
+  off <- peak(mem_config_kumo("large"), 50000, 1000, 100, available = 8e9,
+              row_chunk_size = NULL)
+  expect_true(any(grepl("Leave .*row_chunk_size", off$suggestions)))
 
   med <- peak(mem_config_kumo("medium"), 50000, 1000, 100, available = 8e9)
   expect_true(any(grepl("Kumo Tabular small", med$suggestions)))
@@ -683,7 +688,18 @@ test_that("Kumo's advice names a smaller size, then its own knobs", {
   sm <- peak(mem_config_kumo("small"), 50000, 1000, 100, available = 8e9,
              row_chunk_size = 1024L)
   expect_false(any(grepl("Kumo Tabular", sm$suggestions)))
-  expect_false(any(grepl("Set .*row_chunk_size", sm$suggestions)))
+  expect_false(any(grepl("Leave .*row_chunk_size", sm$suggestions)))
+})
+
+test_that("Kumo's row chunking is on by default, at 2048 rows", {
+  cfg <- mem_config_kumo("small")
+  dflt <- peak(cfg, 20000, 500, 50)
+  expect_equal(dflt$total_peak_bytes,
+               peak(cfg, 20000, 500, 50, row_chunk_size = 2048L)$total_peak_bytes)
+  expect_lt(dflt$total_peak_bytes,
+            peak(cfg, 20000, 500, 50, row_chunk_size = NULL)$total_peak_bytes)
+  expect_identical(formals(kumo_regressor)$row_chunk_size, 2048L)
+  expect_identical(formals(kumo_classifier)$row_chunk_size, 2048L)
 })
 
 test_that("suggest_chunk_sizes searches Kumo's chunks", {
@@ -691,7 +707,8 @@ test_that("suggest_chunk_sizes searches Kumo's chunks", {
   # not fit unchunked gets a chunk size that does.
   # 20 GB rather than 40: since Kumo's layer loops collect (#99) the
   # unchunked estimate at this size is about 27 GB.
-  plain <- peak(mem_config_kumo("small"), 6000, 1000, 50, available = 20e9)
+  plain <- peak(mem_config_kumo("small"), 6000, 1000, 50, available = 20e9,
+                row_chunk_size = NULL)
   expect_false(plain$verdict %in% c("ok", "tight"))
   got <- suggest_chunk_sizes(mem_config_kumo("small"), n_context = 6000,
                              n_features = 50, available = 20e9,

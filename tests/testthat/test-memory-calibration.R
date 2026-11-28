@@ -317,16 +317,13 @@ test_that("peak_terms() still produces the shapes the constants assume", {
       # default: a grid run with `row_chunk_size` set is a different
       # shape, and asking for the default one here would compare it
       # against terms it was never fitted to.
-      extra <- list(n_estimators = 1L)
       # Through the one reader the harness uses: older files store an unset
       # chunk as the string "NA", which a bare `as.integer()` both warns on
       # and misreads as "the checkpoint's default" rather than "off".
-      rc <- tabfound:::.chunk_field(p$row_chunk_size)
-      cc <- tabfound:::.chunk_field(p$col_chunk_size)
-      if (!all(is.na(rc))) extra$row_chunk_size <- rc
-      if (!all(is.na(cc))) extra$col_chunk_size <- cc
       opts <- tabfound:::.resolve_memory_opts(
-        get_backend(backend), "classification", extra, list()
+        get_backend(backend), "classification", list(),
+        tabfound:::.measured_chunk_opts(backend, p$row_chunk_size,
+                                        p$col_chunk_size)
       )
       tm <- tabfound:::.peak_terms_for(get_backend(backend), p$n_context,
                                        p$n_query, p$n_features, opts, config)
