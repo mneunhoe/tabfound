@@ -1,5 +1,18 @@
 # tabfound (development version)
 
+* Kumo Tabular now chunks rows by default (`row_chunk_size = 2048`, the
+  size TabPFN v3 uses): above 2,048 rows a pass holds one chunk of rows' column-
+  and row-block work rather than all of it. That work, not the in-context
+  attention, is what sets Kumo's peak. With one member, 20 columns and 512 query
+  rows on the small regressor, peak resident memory on the CPU falls from
+  11.4 to 6.8 GB at 16,384 context rows and from 18.9 to 7.8 GB at 32,768,
+  for 20 to 30 percent more time; on `"mps"` the call is about twice as fast
+  at 16,384 rows. Predictions move by float32 rounding only (at most 5e-6
+  of sd(y) there); tables of up to 2,048 rows are unchanged, and
+  `row_chunk_size = NULL` restores the one-pass run bit for bit. The memory
+  preflight follows the new default, and its advice for Kumo now mirrors
+  TabPFN v3's.
+
 * New backend: Causilo 1.5 (Nums AI), classifier and regressor
   (`"causilo"`, `"causilo-1.5"`; catalogue ids `causilo-1.5-classifier` /
   `-regressor`, 1.1 GB each). `download_model()` fetches the publisher's own

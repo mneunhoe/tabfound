@@ -42,6 +42,9 @@ y <- factor(sample(c("a", "b"), n_ctx, replace = TRUE))
 X_new <- matrix(stats::rnorm(n_qry * n_ftr), n_qry, n_ftr)
 
 opts <- as.list(spec$opts %||% list())
+# "off" is how a spec asks for a chunking turned off (`NULL`), which JSON
+# cannot carry; see `calibrate.R`.
+opts[vapply(opts, identical, logical(1), "off")] <- list(NULL)
 is_reg <- identical(spec$task, "regression")
 ctor <- if (is_reg) tabular_regressor else tabular_classifier
 if (is_reg) y <- as.numeric(y)

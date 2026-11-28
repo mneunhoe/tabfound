@@ -723,7 +723,19 @@ print.kumo_kv_cache <- function(x, ...) {
 #'   the ICL stack) into this many chunks of rows.
 #' @param row_chunk_size Rows in flight per pass: the context is encoded
 #'   on its own with its row-independent steps a chunk at a time, then the
-#'   query rows stream through against it.
+#'   query rows stream through against it. `2048` by default, the size
+#'   TabPFN v3 uses for its own stage chunking, so a table of up to 2,048
+#'   rows (context plus one chunk of query rows) still takes the one-pass
+#'   path, unchanged. Above that, a pass holds one chunk of rows' block
+#'   work rather than all of it, which is what bounds Kumo's peak: the
+#'   column and row blocks' temporaries, not the in-context attention.
+#'   With one member, 20 columns and 512 query rows on the small
+#'   regressor, the CPU's peak resident memory falls from 11.4 to 6.8 GB
+#'   at 16,384 context rows and from 18.9 to 7.8 GB at 32,768, for 20 to
+#'   30 percent more time; on Apple's GPU (`"mps"`) the call is about
+#'   twice as fast at 16,384 rows. The output moves by float32 rounding
+#'   only (at most 5e-6 of sd(y) there). `NULL` runs every row in one
+#'   pass, the default before.
 #' @param col_chunk_size Columns per pass through each column block.
 #' @param categorical_features 1-based indices of categorical columns.
 #' @param member_weights Optional non-negative weight per member, in the
@@ -758,7 +770,7 @@ kumo_classifier <- function(ctx, n_estimators = 8L, seed = 42L,
                             predict_chunk_size = 1024L, kv_cache = FALSE,
                             chunk_cache = TRUE,
                             save_peak_memory_factor = NULL,
-                            row_chunk_size = NULL, col_chunk_size = NULL,
+                            row_chunk_size = 2048L, col_chunk_size = NULL,
                             categorical_features = NULL,
                             member_weights = NULL,
                             member_batch_size = NULL) {
@@ -1103,7 +1115,7 @@ kumo_regressor <- function(ctx, n_estimators = 8L, seed = 42L,
                            predict_chunk_size = 1024L, kv_cache = FALSE,
                            chunk_cache = TRUE,
                            save_peak_memory_factor = NULL,
-                           row_chunk_size = NULL, col_chunk_size = NULL,
+                           row_chunk_size = 2048L, col_chunk_size = NULL,
                            categorical_features = NULL,
                            member_weights = NULL,
                            member_batch_size = NULL) {
